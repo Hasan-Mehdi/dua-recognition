@@ -1,0 +1,26 @@
+{
+  "dua_id": "hadith_e_kisa",
+  "dua_name_en": "Hadith e Kisa",
+  "dua_name_ar": "حديث الكساء",
+  "note": "Minimal illustrative excerpt for development. Replace with a verified full text (al-islam.org / duas.org) before any real use.",
+  "segments": [
+    {
+      "segment_id": 1,
+      "arabic": "بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ",
+      "transliteration": "Bismillahir-Rahmanir-Rahim",
+      "translation_en": "In the name of Allah, the Most Gracious, the Most Merciful"
+    },
+    {
+      "segment_id": 2,
+      "arabic": "عَنْ فَاطِمَةَ الزَّهْرَاءِ عَلَيْهَا السَّلَامُ بِنْتِ رَسُولِ اللَّهِ صَلَّى اللَّهُ عَلَيْهِ وَآلِهِ",
+      "transliteration": "",
+      "translation_en": ""
+    },
+    {
+      "segment_id": 3,
+      "arabic": "قَالَتْ دَخَلَ عَلَيَّ أَبِي رَسُولُ اللَّهِ صَلَّى اللَّهُ عَلَيْهِ وَآلِهِ فِي بَعْضِ الْأَيَّامِ",
+      "transliteration": "",
+      "translation_en": ""
+    }
+  ]
+}

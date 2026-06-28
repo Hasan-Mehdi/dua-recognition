@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# corpus + models are never committed
+data/raw/
+data/processed/
+data/aligned/
+data/manifest.csv
+models/
+*.wav
+*.mp3
+*.m4a
