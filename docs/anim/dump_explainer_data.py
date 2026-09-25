@@ -58,8 +58,19 @@ def main() -> None:
         m = np.bincount(ix.word_dua, weights=cold.post, minlength=len(ix.duas))
         ident.append([[duas[ix.dua_ids[i]].name_en, float(m[i])] for i in np.argsort(-m)[:4]])
 
+    # Per-line views (bar charts): belief mass per line, best evidence per line.
+    segs = np.unique(seg)
+    per_line = {name: np.array([v[lo:hi][seg == s].sum() for s in segs]) for name, v in
+                (("pred_line", pred), ("post_line", post), ("before_line", before))}
+    per_line["lik_line"] = np.array([lik[lo:hi][seg == s].max() for s in segs])
+    # The audio itself isn't redistributed: only a coarse loudness envelope (50 ms bins).
+    from faster_whisper.audio import decode_audio
+    t_end = rows[STEP][0]
+    y = decode_audio(str(rec.path), sampling_rate=16000)[int((t_end - 16) * 16000) : int(t_end * 16000)]
+    env = np.abs(y[: len(y) // 800 * 800]).reshape(-1, 800).max(axis=1)
+
     np.savez(HERE / "explainer_data.npz", before=before[lo:hi], pred=pred[lo:hi], lik=lik[lo:hi],
-             post=post[lo:hi], seg=seg, seq=np.array(seq))
+             post=post[lo:hi], seg=seg, seq=np.array(seq), segs=segs, env=env / env.max(), **per_line)
     meta = {
         "text": rows[STEP][1],
         "truth_seg": int(rec.segment_at(rows[STEP][0])),
@@ -67,6 +78,8 @@ def main() -> None:
         "kappa": kappa,
         "refrain_segs": sorted(int(s) for s in ev.refrain_ids(duas["dua-tawassul"])),
         "ident": ident,
+        "lines": {int(x.id): x.arabic for x in duas["dua-tawassul"].segments if 31 <= x.id <= 38},
+        "t_end": t_end,
     }
     (HERE / "explainer_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"line {meta['argmax_seg']} (human label {meta['truth_seg']})")
