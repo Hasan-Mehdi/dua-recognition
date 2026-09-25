@@ -10,45 +10,48 @@
    "refrain_acc": 0.06642291285801341,
    "lag_median_s": 3.2449999999999974,
    "lines_missed": 0.14732865623313546,
-   "hours": 3.776388888888889
+   "hours": 3.776388888888889,
+   "jumps_per_min": 5.552041191614564
   },
   "tracker": {
-   "line_acc": 0.80993012136815,
-   "line_acc_pm1": 0.9632217727105553,
-   "dua_acc": 0.9644722324383964,
-   "wrong_dua_shown": 0.012357484369253402,
-   "refrain_acc": 0.870201096892139,
-   "lag_median_s": 0.6900000000000546,
-   "lines_missed": 0.013491635186184566,
-   "hours": 3.776388888888889
+   "line_acc": 0.8567120264803236,
+   "line_acc_pm1": 0.9638102243471864,
+   "dua_acc": 0.9643251195292387,
+   "wrong_dua_shown": 0.010739242368517837,
+   "refrain_acc": 0.8884826325411335,
+   "lag_median_s": 1.219999999999997,
+   "lines_missed": 0.0124123043712898,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.05296064729680029
   },
   "oracle": {
-   "line_acc": 0.8190511217359323,
-   "line_acc_pm1": 0.9876425156307466,
+   "line_acc": 0.8733357852151526,
+   "line_acc_pm1": 0.9892607576314821,
    "dua_acc": 1.0,
    "wrong_dua_shown": 0.0,
-   "refrain_acc": 0.8720292504570384,
-   "lag_median_s": 0.6829999999999927,
-   "lines_missed": 0.007555315704263357,
-   "hours": 3.776388888888889
+   "refrain_acc": 0.8915295551492992,
+   "lag_median_s": 1.1960000000000264,
+   "lines_missed": 0.0032379924446842958,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.17212210371460096
   }
  },
  "identification": {
   "3": {
    "classifier": 0.828125,
-   "tracker": 0.871875
+   "tracker": 0.875
   },
   "5": {
    "classifier": 0.821875,
-   "tracker": 0.921875
+   "tracker": 0.925
   },
   "10": {
    "classifier": 0.93125,
-   "tracker": 0.94375
+   "tracker": 0.95
   },
   "20": {
    "classifier": 0.965625,
-   "tracker": 0.975
+   "tracker": 0.978125
   },
   "30": {
    "classifier": 0.9875,

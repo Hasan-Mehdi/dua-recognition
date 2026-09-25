@@ -4,6 +4,8 @@ Listen to someone recite a du'a, work out **which du'a it is**, and follow along
 **line by line and word by word** in real time, with the Arabic, transliteration and
 translation scrolling in sync.
 
+![A phone following Dua Tawassul by a reciter the system never trained on, and a projector following along in majlis mode](docs/demo.gif)
+
 On reciters it was never trained or tuned on, it shows **the right line 85% of the time**
 (96% within one line), gets **89% of refrain lines** right (a line that recurs word for word, so text alone can't place it), and shows the wrong du'a
 under 1% of the time. From a cold start mid-recitation it names the du'a within
@@ -30,6 +32,12 @@ number of phones or a projector through a QR code.
   actually have.
 
 ## How it works
+
+![Animated explainer: evidence from one window matches all 14 repetitions of a refrain; multiplying by the tracker's prediction leaves only the right one](docs/explainer.gif)
+
+*Every curve above is the real tracker at one second of a held-out recording
+([mp4](docs/explainer.mp4), [source](docs/anim/explainer.py), made with
+[Manim](https://www.manim.community/)).*
 
 ```
 mic ─▶ 6 s window every 1 s ─▶ Whisper ─▶ align against every du'a ─▶ HMM follower ─▶ du'a · line · word
