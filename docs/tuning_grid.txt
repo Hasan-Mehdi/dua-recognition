@@ -1,0 +1,193 @@
+18 recordings, train split, ASR = large-v3-turbo, update every 1 s
+
+{'kappa': 0.15, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.741  ±1 0.927  dua 0.973  wrong 0.003  lag 1.2
+{'kappa': 0.15, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.743  ±1 0.929  dua 0.974  wrong 0.002  lag 1.2
+{'kappa': 0.15, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.744  ±1 0.930  dua 0.974  wrong 0.002  lag 1.2
+{'kappa': 0.15, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.740  ±1 0.926  dua 0.973  wrong 0.003  lag 1.3
+{'kappa': 0.15, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.741  ±1 0.928  dua 0.974  wrong 0.002  lag 1.3
+{'kappa': 0.15, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.743  ±1 0.930  dua 0.974  wrong 0.001  lag 1.3
+{'kappa': 0.15, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.737  ±1 0.925  dua 0.973  wrong 0.002  lag 1.3
+{'kappa': 0.15, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.738  ±1 0.928  dua 0.974  wrong 0.001  lag 1.3
+{'kappa': 0.15, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.740  ±1 0.929  dua 0.974  wrong 0.001  lag 1.3
+{'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.765  ±1 0.936  dua 0.973  wrong 0.004  lag 0.8
+{'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.765  ±1 0.937  dua 0.974  wrong 0.003  lag 0.8
+{'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.766  ±1 0.938  dua 0.974  wrong 0.002  lag 0.8
+{'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.771  ±1 0.940  dua 0.973  wrong 0.003  lag 0.8
+{'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.772  ±1 0.941  dua 0.974  wrong 0.003  lag 0.8
+{'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.772  ±1 0.941  dua 0.974  wrong 0.002  lag 0.8
+{'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.777  ±1 0.943  dua 0.973  wrong 0.003  lag 0.8
+{'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.777  ±1 0.943  dua 0.974  wrong 0.002  lag 0.8
+{'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.778  ±1 0.944  dua 0.974  wrong 0.002  lag 0.8
+{'kappa': 0.15, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.728  ±1 0.913  dua 0.973  wrong 0.004  lag 0.7
+{'kappa': 0.15, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.729  ±1 0.914  dua 0.973  wrong 0.003  lag 0.7
+{'kappa': 0.15, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.729  ±1 0.914  dua 0.974  wrong 0.003  lag 0.7
+{'kappa': 0.15, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.741  ±1 0.925  dua 0.973  wrong 0.004  lag 0.7
+{'kappa': 0.15, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.742  ±1 0.926  dua 0.974  wrong 0.003  lag 0.7
+{'kappa': 0.15, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.742  ±1 0.926  dua 0.974  wrong 0.003  lag 0.7
+{'kappa': 0.15, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.755  ±1 0.935  dua 0.973  wrong 0.004  lag 0.7
+{'kappa': 0.15, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.756  ±1 0.936  dua 0.974  wrong 0.003  lag 0.7
+{'kappa': 0.15, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.756  ±1 0.936  dua 0.974  wrong 0.003  lag 0.7
+{'kappa': 0.25, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.745  ±1 0.939  dua 0.976  wrong 0.002  lag 1.4
+{'kappa': 0.25, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.746  ±1 0.941  dua 0.976  wrong 0.002  lag 1.4
+{'kappa': 0.25, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.747  ±1 0.943  dua 0.976  wrong 0.002  lag 1.4
+{'kappa': 0.25, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.744  ±1 0.939  dua 0.976  wrong 0.002  lag 1.4
+{'kappa': 0.25, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.745  ±1 0.941  dua 0.976  wrong 0.002  lag 1.4
+{'kappa': 0.25, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.746  ±1 0.943  dua 0.977  wrong 0.001  lag 1.4
+{'kappa': 0.25, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.741  ±1 0.938  dua 0.976  wrong 0.001  lag 1.4
+{'kappa': 0.25, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.743  ±1 0.940  dua 0.977  wrong 0.001  lag 1.4
+{'kappa': 0.25, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.744  ±1 0.942  dua 0.977  wrong 0.001  lag 1.4
+{'kappa': 0.25, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.769  ±1 0.947  dua 0.976  wrong 0.002  lag 1.2
+{'kappa': 0.25, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.769  ±1 0.947  dua 0.976  wrong 0.002  lag 1.2
+{'kappa': 0.25, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.769  ±1 0.947  dua 0.977  wrong 0.002  lag 1.2
+{'kappa': 0.25, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.770  ±1 0.947  dua 0.976  wrong 0.002  lag 1.2
+{'kappa': 0.25, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.770  ±1 0.947  dua 0.976  wrong 0.002  lag 1.2
+{'kappa': 0.25, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.771  ±1 0.948  dua 0.977  wrong 0.002  lag 1.2
+{'kappa': 0.25, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.770  ±1 0.948  dua 0.976  wrong 0.002  lag 1.2
+{'kappa': 0.25, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.770  ±1 0.948  dua 0.976  wrong 0.002  lag 1.2
+{'kappa': 0.25, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.770  ±1 0.948  dua 0.976  wrong 0.002  lag 1.2
+{'kappa': 0.25, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.763  ±1 0.942  dua 0.976  wrong 0.003  lag 1.0
+{'kappa': 0.25, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.763  ±1 0.942  dua 0.977  wrong 0.003  lag 1.0
+{'kappa': 0.25, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.763  ±1 0.943  dua 0.977  wrong 0.002  lag 1.0
+{'kappa': 0.25, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.766  ±1 0.944  dua 0.976  wrong 0.002  lag 1.0
+{'kappa': 0.25, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.767  ±1 0.944  dua 0.976  wrong 0.002  lag 1.0
+{'kappa': 0.25, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.767  ±1 0.945  dua 0.977  wrong 0.002  lag 1.0
+{'kappa': 0.25, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.768  ±1 0.946  dua 0.976  wrong 0.002  lag 1.1
+{'kappa': 0.25, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.768  ±1 0.946  dua 0.976  wrong 0.002  lag 1.1
+{'kappa': 0.25, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.768  ±1 0.947  dua 0.977  wrong 0.002  lag 1.1
+{'kappa': 0.35, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.746  ±1 0.947  dua 0.979  wrong 0.002  lag 1.5
+{'kappa': 0.35, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.747  ±1 0.947  dua 0.979  wrong 0.002  lag 1.5
+{'kappa': 0.35, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.746  ±1 0.946  dua 0.979  wrong 0.002  lag 1.5
+{'kappa': 0.35, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.746  ±1 0.947  dua 0.979  wrong 0.001  lag 1.5
+{'kappa': 0.35, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.746  ±1 0.947  dua 0.979  wrong 0.001  lag 1.5
+{'kappa': 0.35, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.745  ±1 0.946  dua 0.979  wrong 0.001  lag 1.5
+{'kappa': 0.35, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.745  ±1 0.947  dua 0.979  wrong 0.001  lag 1.5
+{'kappa': 0.35, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.746  ±1 0.948  dua 0.979  wrong 0.001  lag 1.5
+{'kappa': 0.35, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.745  ±1 0.946  dua 0.979  wrong 0.001  lag 1.5
+{'kappa': 0.35, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.759  ±1 0.950  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.759  ±1 0.949  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.757  ±1 0.947  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.760  ±1 0.950  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.759  ±1 0.949  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.758  ±1 0.947  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.761  ±1 0.950  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.761  ±1 0.949  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.759  ±1 0.947  dua 0.977  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.756  ±1 0.948  dua 0.978  wrong 0.003  lag 1.4
+{'kappa': 0.35, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.756  ±1 0.948  dua 0.978  wrong 0.003  lag 1.4
+{'kappa': 0.35, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.754  ±1 0.946  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.758  ±1 0.948  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.757  ±1 0.948  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.756  ±1 0.946  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.758  ±1 0.949  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.758  ±1 0.948  dua 0.978  wrong 0.002  lag 1.4
+{'kappa': 0.35, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.756  ±1 0.946  dua 0.977  wrong 0.002  lag 1.4
+{'kappa': 0.5, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.742  ±1 0.947  dua 0.980  wrong 0.002  lag 1.6
+{'kappa': 0.5, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.742  ±1 0.947  dua 0.980  wrong 0.002  lag 1.6
+{'kappa': 0.5, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.743  ±1 0.947  dua 0.980  wrong 0.002  lag 1.6
+{'kappa': 0.5, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.741  ±1 0.947  dua 0.980  wrong 0.003  lag 1.6
+{'kappa': 0.5, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.742  ±1 0.947  dua 0.980  wrong 0.003  lag 1.6
+{'kappa': 0.5, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.743  ±1 0.947  dua 0.980  wrong 0.002  lag 1.6
+{'kappa': 0.5, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.741  ±1 0.947  dua 0.980  wrong 0.003  lag 1.6
+{'kappa': 0.5, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.742  ±1 0.947  dua 0.980  wrong 0.003  lag 1.6
+{'kappa': 0.5, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.743  ±1 0.947  dua 0.980  wrong 0.002  lag 1.6
+{'kappa': 0.5, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.751  ±1 0.949  dua 0.980  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.751  ±1 0.949  dua 0.980  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.751  ±1 0.948  dua 0.980  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.751  ±1 0.949  dua 0.980  wrong 0.002  lag 1.5
+{'kappa': 0.5, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.751  ±1 0.949  dua 0.980  wrong 0.002  lag 1.5
+{'kappa': 0.5, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.750  ±1 0.948  dua 0.980  wrong 0.002  lag 1.5
+{'kappa': 0.5, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.752  ±1 0.950  dua 0.980  wrong 0.002  lag 1.5
+{'kappa': 0.5, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.752  ±1 0.950  dua 0.980  wrong 0.002  lag 1.5
+{'kappa': 0.5, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.751  ±1 0.949  dua 0.980  wrong 0.002  lag 1.5
+{'kappa': 0.5, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.749  ±1 0.948  dua 0.979  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.749  ±1 0.947  dua 0.979  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.749  ±1 0.947  dua 0.979  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.749  ±1 0.948  dua 0.980  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.749  ±1 0.947  dua 0.980  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.749  ±1 0.947  dua 0.980  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.750  ±1 0.948  dua 0.980  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.749  ±1 0.948  dua 0.980  wrong 0.003  lag 1.5
+{'kappa': 0.5, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.749  ±1 0.948  dua 0.980  wrong 0.003  lag 1.5
+{'kappa': 0.8, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.740  ±1 0.947  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.740  ±1 0.948  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 1.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.741  ±1 0.947  dua 0.980  wrong 0.003  lag 1.6
+{'kappa': 0.8, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.740  ±1 0.947  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.740  ±1 0.948  dua 0.981  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 1.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.741  ±1 0.947  dua 0.981  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.740  ±1 0.947  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.740  ±1 0.948  dua 0.981  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 1.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.741  ±1 0.947  dua 0.981  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.746  ±1 0.949  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.745  ±1 0.949  dua 0.980  wrong 0.003  lag 1.6
+{'kappa': 0.8, 'max_speed': 2.5, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.745  ±1 0.949  dua 0.980  wrong 0.003  lag 1.6
+{'kappa': 0.8, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.746  ±1 0.949  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.746  ±1 0.949  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 2.5, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.746  ±1 0.949  dua 0.980  wrong 0.003  lag 1.6
+{'kappa': 0.8, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.746  ±1 0.950  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.746  ±1 0.950  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 2.5, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.746  ±1 0.949  dua 0.980  wrong 0.003  lag 1.6
+{'kappa': 0.8, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 1e-05}  line 0.744  ±1 0.948  dua 0.980  wrong 0.005  lag 1.6
+{'kappa': 0.8, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.0001}  line 0.744  ±1 0.947  dua 0.980  wrong 0.005  lag 1.6
+{'kappa': 0.8, 'max_speed': 4.0, 'p_back': 0.005, 'p_teleport': 0.001}  line 0.744  ±1 0.947  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 1e-05}  line 0.745  ±1 0.949  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.0001}  line 0.745  ±1 0.949  dua 0.981  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 4.0, 'p_back': 0.02, 'p_teleport': 0.001}  line 0.745  ±1 0.948  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 1e-05}  line 0.746  ±1 0.949  dua 0.980  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.0001}  line 0.745  ±1 0.949  dua 0.981  wrong 0.004  lag 1.6
+{'kappa': 0.8, 'max_speed': 4.0, 'p_back': 0.05, 'p_teleport': 0.001}  line 0.745  ±1 0.948  dua 0.980  wrong 0.004  lag 1.6
+
+best: {'kappa': 0.15, 'max_speed': 2.5, 'p_back': 0.05, 'back_words': 8, 'p_teleport': 0.001, 'start_weight': 0.5, 'start_words': 12, 'min_dua_confidence': 0.5} {'line_acc': 0.7779034466337282, 'line_acc_pm1': 0.9436275968807667, 'dua_acc': 0.9742246562295375, 'wrong_dua_shown': 0.0017262932317399845, 'refrain_acc': 0.716304347826087, 'lag_median_s': 0.8324999999999818, 'lines_missed': 0.04806934594168637, 'hours': 4.666388888888889}
+18 recordings, train split, ASR = large-v3-turbo, update every 1 s
+
+{'kappa_search': 0.15, 'lock_confidence': 0.8, 'p_teleport': 0.001, 'start_weight': 0.3}  line 0.803  ±1 0.968  wrong 0.002  id@5s 0.17  id@10s 0.62  lag 0.9  obj 0.902
+{'kappa_search': 0.15, 'lock_confidence': 0.8, 'p_teleport': 0.001, 'start_weight': 0.5}  line 0.803  ±1 0.968  wrong 0.001  id@5s 0.14  id@10s 0.60  lag 0.9  obj 0.895
+{'kappa_search': 0.15, 'lock_confidence': 0.8, 'p_teleport': 0.01, 'start_weight': 0.3}  line 0.804  ±1 0.969  wrong 0.002  id@5s 0.17  id@10s 0.62  lag 0.9  obj 0.903
+{'kappa_search': 0.15, 'lock_confidence': 0.8, 'p_teleport': 0.01, 'start_weight': 0.5}  line 0.803  ±1 0.969  wrong 0.001  id@5s 0.14  id@10s 0.60  lag 0.9  obj 0.895
+{'kappa_search': 0.15, 'lock_confidence': 0.95, 'p_teleport': 0.001, 'start_weight': 0.3}  line 0.803  ±1 0.968  wrong 0.002  id@5s 0.17  id@10s 0.62  lag 0.9  obj 0.902
+{'kappa_search': 0.15, 'lock_confidence': 0.95, 'p_teleport': 0.001, 'start_weight': 0.5}  line 0.803  ±1 0.968  wrong 0.001  id@5s 0.14  id@10s 0.60  lag 0.9  obj 0.895
+{'kappa_search': 0.15, 'lock_confidence': 0.95, 'p_teleport': 0.01, 'start_weight': 0.3}  line 0.804  ±1 0.969  wrong 0.002  id@5s 0.17  id@10s 0.62  lag 0.9  obj 0.903
+{'kappa_search': 0.15, 'lock_confidence': 0.95, 'p_teleport': 0.01, 'start_weight': 0.5}  line 0.803  ±1 0.969  wrong 0.001  id@5s 0.14  id@10s 0.60  lag 0.9  obj 0.895
+{'kappa_search': 0.4, 'lock_confidence': 0.8, 'p_teleport': 0.001, 'start_weight': 0.3}  line 0.806  ±1 0.973  wrong 0.002  id@5s 0.80  id@10s 0.93  lag 0.9  obj 1.022
+{'kappa_search': 0.4, 'lock_confidence': 0.8, 'p_teleport': 0.001, 'start_weight': 0.5}  line 0.806  ±1 0.973  wrong 0.002  id@5s 0.78  id@10s 0.93  lag 0.9  obj 1.021
+{'kappa_search': 0.4, 'lock_confidence': 0.8, 'p_teleport': 0.01, 'start_weight': 0.3}  line 0.805  ±1 0.972  wrong 0.002  id@5s 0.80  id@10s 0.93  lag 0.9  obj 1.021
+{'kappa_search': 0.4, 'lock_confidence': 0.8, 'p_teleport': 0.01, 'start_weight': 0.5}  line 0.805  ±1 0.972  wrong 0.002  id@5s 0.78  id@10s 0.93  lag 0.9  obj 1.020
+{'kappa_search': 0.4, 'lock_confidence': 0.95, 'p_teleport': 0.001, 'start_weight': 0.3}  line 0.806  ±1 0.973  wrong 0.002  id@5s 0.80  id@10s 0.93  lag 0.9  obj 1.023
+{'kappa_search': 0.4, 'lock_confidence': 0.95, 'p_teleport': 0.001, 'start_weight': 0.5}  line 0.807  ±1 0.973  wrong 0.001  id@5s 0.78  id@10s 0.93  lag 0.9  obj 1.021
+{'kappa_search': 0.4, 'lock_confidence': 0.95, 'p_teleport': 0.01, 'start_weight': 0.3}  line 0.809  ±1 0.973  wrong 0.002  id@5s 0.80  id@10s 0.93  lag 0.9  obj 1.025
+{'kappa_search': 0.4, 'lock_confidence': 0.95, 'p_teleport': 0.01, 'start_weight': 0.5}  line 0.809  ±1 0.972  wrong 0.001  id@5s 0.78  id@10s 0.93  lag 0.9  obj 1.023
+{'kappa_search': 0.8, 'lock_confidence': 0.8, 'p_teleport': 0.001, 'start_weight': 0.3}  line 0.807  ±1 0.974  wrong 0.004  id@5s 0.90  id@10s 0.95  lag 0.9  obj 1.038
+{'kappa_search': 0.8, 'lock_confidence': 0.8, 'p_teleport': 0.001, 'start_weight': 0.5}  line 0.807  ±1 0.974  wrong 0.003  id@5s 0.90  id@10s 0.95  lag 0.9  obj 1.038
+{'kappa_search': 0.8, 'lock_confidence': 0.8, 'p_teleport': 0.01, 'start_weight': 0.3}  line 0.807  ±1 0.974  wrong 0.004  id@5s 0.90  id@10s 0.95  lag 0.9  obj 1.038
+{'kappa_search': 0.8, 'lock_confidence': 0.8, 'p_teleport': 0.01, 'start_weight': 0.5}  line 0.807  ±1 0.974  wrong 0.002  id@5s 0.90  id@10s 0.96  lag 0.9  obj 1.039
+{'kappa_search': 0.8, 'lock_confidence': 0.95, 'p_teleport': 0.001, 'start_weight': 0.3}  line 0.807  ±1 0.974  wrong 0.004  id@5s 0.90  id@10s 0.96  lag 0.9  obj 1.038
+{'kappa_search': 0.8, 'lock_confidence': 0.95, 'p_teleport': 0.001, 'start_weight': 0.5}  line 0.807  ±1 0.974  wrong 0.003  id@5s 0.90  id@10s 0.96  lag 0.9  obj 1.038
+{'kappa_search': 0.8, 'lock_confidence': 0.95, 'p_teleport': 0.01, 'start_weight': 0.3}  line 0.813  ±1 0.976  wrong 0.003  id@5s 0.90  id@10s 0.96  lag 0.9  obj 1.044
+{'kappa_search': 0.8, 'lock_confidence': 0.95, 'p_teleport': 0.01, 'start_weight': 0.5}  line 0.812  ±1 0.976  wrong 0.003  id@5s 0.90  id@10s 0.96  lag 0.9  obj 1.044
+
+best: {'kappa': 0.15, 'kappa_search': 0.8, 'lock_confidence': 0.95, 'max_speed': 2.5, 'p_back': 0.1, 'back_words': 8, 'p_teleport': 0.01, 'start_weight': 0.3, 'start_words': 12, 'min_dua_confidence': 0.5} {'line_acc': 0.8126510129483923, 'line_acc_pm1': 0.9762716064680007, 'dua_acc': 0.9809801127563348, 'wrong_dua_shown': 0.003345517625921566, 'refrain_acc': 0.7622377622377622, 'lag_median_s': 0.8720000000000141, 'lines_missed': 0.010668855149774312, 'hours': 4.483611111111111, 'id5': 0.8958333333333334, 'id10': 0.9583333333333334, 'objective': 1.0444218462817256}
+  (no cache for dua-ramadan-1 / Ali Raza Rizvi; skipped)
+  (no cache for dua-wahda / Usama Al Attar; skipped)
+  (no cache for dua-ya-aliyu-ya-azeem / Mahdi Rasouli; skipped)
+20 recordings, train split, ASR = large-v3-turbo, update every 1 s
+
+{'kappa_search': 0.8, 'lock_confidence': 0.95, 'min_dua_confidence': 0.5}  line 0.802  ±1 0.965  wrong 0.005  id@5s 0.89  id@10s 0.96  lag 0.9  obj 1.034
+{'kappa_search': 0.8, 'lock_confidence': 0.95, 'min_dua_confidence': 0.7}  line 0.802  ±1 0.964  wrong 0.004  id@5s 0.88  id@10s 0.96  lag 0.9  obj 1.032
+{'kappa_search': 0.8, 'lock_confidence': 0.95, 'min_dua_confidence': 0.85}  line 0.801  ±1 0.963  wrong 0.002  id@5s 0.88  id@10s 0.95  lag 0.9  obj 1.029
+{'kappa_search': 0.8, 'lock_confidence': 0.99, 'min_dua_confidence': 0.5}  line 0.791  ±1 0.970  wrong 0.007  id@5s 0.89  id@10s 0.96  lag 1.2  obj 1.023
+{'kappa_search': 0.8, 'lock_confidence': 0.99, 'min_dua_confidence': 0.7}  line 0.791  ±1 0.969  wrong 0.004  id@5s 0.88  id@10s 0.96  lag 1.2  obj 1.020
+{'kappa_search': 0.8, 'lock_confidence': 0.99, 'min_dua_confidence': 0.85}  line 0.790  ±1 0.968  wrong 0.003  id@5s 0.88  id@10s 0.95  lag 1.2  obj 1.018
+{'kappa_search': 1.2, 'lock_confidence': 0.95, 'min_dua_confidence': 0.5}  line 0.803  ±1 0.965  wrong 0.006  id@5s 0.93  id@10s 0.97  lag 0.9  obj 1.041
+{'kappa_search': 1.2, 'lock_confidence': 0.95, 'min_dua_confidence': 0.7}  line 0.802  ±1 0.964  wrong 0.004  id@5s 0.93  id@10s 0.97  lag 0.9  obj 1.040
+{'kappa_search': 1.2, 'lock_confidence': 0.95, 'min_dua_confidence': 0.85}  line 0.801  ±1 0.963  wrong 0.003  id@5s 0.92  id@10s 0.97  lag 0.9  obj 1.037
+{'kappa_search': 1.2, 'lock_confidence': 0.99, 'min_dua_confidence': 0.5}  line 0.788  ±1 0.967  wrong 0.008  id@5s 0.93  id@10s 0.97  lag 1.2  obj 1.025
+{'kappa_search': 1.2, 'lock_confidence': 0.99, 'min_dua_confidence': 0.7}  line 0.787  ±1 0.966  wrong 0.006  id@5s 0.93  id@10s 0.96  lag 1.2  obj 1.023
+{'kappa_search': 1.2, 'lock_confidence': 0.99, 'min_dua_confidence': 0.85}  line 0.786  ±1 0.965  wrong 0.004  id@5s 0.91  id@10s 0.96  lag 1.2  obj 1.020
+{'kappa_search': 1.8, 'lock_confidence': 0.95, 'min_dua_confidence': 0.5}  line 0.801  ±1 0.963  wrong 0.008  id@5s 0.94  id@10s 0.98  lag 0.9  obj 1.041
+{'kappa_search': 1.8, 'lock_confidence': 0.95, 'min_dua_confidence': 0.7}  line 0.801  ±1 0.963  wrong 0.005  id@5s 0.94  id@10s 0.98  lag 0.9  obj 1.041
+{'kappa_search': 1.8, 'lock_confidence': 0.95, 'min_dua_confidence': 0.85}  line 0.801  ±1 0.962  wrong 0.004  id@5s 0.94  id@10s 0.97  lag 0.9  obj 1.040
+{'kappa_search': 1.8, 'lock_confidence': 0.99, 'min_dua_confidence': 0.5}  line 0.784  ±1 0.963  wrong 0.009  id@5s 0.94  id@10s 0.97  lag 1.2  obj 1.023
+{'kappa_search': 1.8, 'lock_confidence': 0.99, 'min_dua_confidence': 0.7}  line 0.783  ±1 0.963  wrong 0.007  id@5s 0.94  id@10s 0.97  lag 1.2  obj 1.022
+{'kappa_search': 1.8, 'lock_confidence': 0.99, 'min_dua_confidence': 0.85}  line 0.782  ±1 0.961  wrong 0.005  id@5s 0.93  id@10s 0.97  lag 1.2  obj 1.020
+
+best: {'kappa': 0.15, 'kappa_search': 1.2, 'lock_confidence': 0.95, 'max_speed': 2.5, 'p_back': 0.1, 'back_words': 8, 'p_teleport': 0.01, 'start_weight': 0.3, 'start_words': 12, 'min_dua_confidence': 0.7} {'line_acc': 0.8021191155837244, 'line_acc_pm1': 0.9637137742512942, 'dua_acc': 0.977550921670134, 'wrong_dua_shown': 0.004402728724176303, 'refrain_acc': 0.7056567593480345, 'lag_median_s': 0.8605000000000018, 'lines_missed': 0.013094857872884063, 'hours': 5.741388888888889, 'id5': 0.93125, 'id10': 0.96875, 'objective': 1.0396191155837244}
+## display hysteresis (train, 91 texts): back_switch_mass 0/0.5/0.7/0.9 -> line 0.799/0.797/0.797/0.796 — no gain, removed

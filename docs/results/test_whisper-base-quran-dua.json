@@ -1,0 +1,61 @@
+{
+ "asr": "whisper-base-quran-dua",
+ "split": "test",
+ "summary": {
+  "matcher": {
+   "line_acc": 0.47429201912467817,
+   "line_acc_pm1": 0.7263699889665318,
+   "dua_acc": 0.8745126884884149,
+   "wrong_dua_shown": 0.12298639205590291,
+   "refrain_acc": 0.06398537477148081,
+   "lag_median_s": 3.2490000000000236,
+   "lines_missed": 0.1397733405288721,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 4.872379551305627
+  },
+  "tracker": {
+   "line_acc": 0.8537697682971681,
+   "line_acc_pm1": 0.9643251195292387,
+   "dua_acc": 0.964766458256712,
+   "wrong_dua_shown": 0.009562339095255609,
+   "refrain_acc": 0.8897014015843998,
+   "lag_median_s": 1.2490000000000236,
+   "lines_missed": 0.011332973556395036,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.05296064729680029
+  },
+  "oracle": {
+   "line_acc": 0.8700257447591027,
+   "line_acc_pm1": 0.9888194189040088,
+   "dua_acc": 1.0,
+   "wrong_dua_shown": 0.0,
+   "refrain_acc": 0.8921389396709324,
+   "lag_median_s": 1.2294999999999945,
+   "lines_missed": 0.0037776578521316784,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.1677087164398676
+  }
+ },
+ "identification": {
+  "3": {
+   "classifier": 0.828125,
+   "tracker": 0.89375
+  },
+  "5": {
+   "classifier": 0.8125,
+   "tracker": 0.925
+  },
+  "10": {
+   "classifier": 0.93125,
+   "tracker": 0.95
+  },
+  "20": {
+   "classifier": 0.96875,
+   "tracker": 0.978125
+  },
+  "30": {
+   "classifier": 0.9875,
+   "tracker": 0.984375
+  }
+ }
+}

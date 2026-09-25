@@ -1,0 +1,44 @@
+{
+ "dua_id": "dua-hujjat",
+ "dua_name_en": "Dua Hujjah (Faraj)",
+ "dua_name_ar": "دعاء حجة",
+ "source": "https://www.duaplayer.org/en/dua/hujjat",
+ "segments": [
+  {
+   "segment_id": 1,
+   "arabic": "بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ"
+  },
+  {
+   "segment_id": 2,
+   "arabic": "اللّهُمّ كُنْ لِوَلِيّكَ الحُجّةِ ابْنِ الحَسَنِ"
+  },
+  {
+   "segment_id": 3,
+   "arabic": "صَلَوَاتُكَ عَلَيْهِ وَعَلَى آبَائِهِ"
+  },
+  {
+   "segment_id": 4,
+   "arabic": "فِي هذِهِ السَّاعَةِ وَفي كُلّ سَاعَةٍ"
+  },
+  {
+   "segment_id": 5,
+   "arabic": "وَلِيّاً وَحَافِظاً"
+  },
+  {
+   "segment_id": 6,
+   "arabic": "وَقَائِداً وَنَاصِراً"
+  },
+  {
+   "segment_id": 7,
+   "arabic": "وَدَلِيلاً وَعَيْناً"
+  },
+  {
+   "segment_id": 8,
+   "arabic": "حَتَّى تُسْكِنَهُ أَرْضَكَ طَوْعاً"
+  },
+  {
+   "segment_id": 9,
+   "arabic": "وَتُمَتّعَهُ فِيهَا طَوِيلاً."
+  }
+ ]
+}

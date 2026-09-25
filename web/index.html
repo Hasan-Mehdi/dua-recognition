@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f5efe3" media="(prefers-color-scheme: light)">
+  <title>Du'a Companion</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <!-- Static hosts (GitHub Pages) can't send COOP/COEP headers; this vendored
+       MIT shim (gzuidhof/coi-serviceworker) adds them, which lets ONNX Runtime
+       Web use threads: ~2.4 s -> ~1 s per window on a desktop CPU. -->
+  <script src="coi-serviceworker.js"></script>
+</head>
+<body data-state="idle">
+  <header class="top">
+    <div class="title">
+      <span id="dua-ar" class="title-ar"></span>
+      <span id="dua-en" class="title-en"></span>
+    </div>
+    <div class="actions">
+      <button id="menu-btn" class="icon" aria-label="Display options" title="Display options">Aa</button>
+      <button id="stop" class="icon" aria-label="Stop" title="Stop">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="progress"><i id="progress"></i></div>
+  </header>
+
+  <section id="home" class="home">
+    <svg class="ornament" viewBox="0 0 120 24" aria-hidden="true">
+      <path d="M0 12h44M76 12h44"/><path d="M60 3l6 9-6 9-6-9z"/><circle cx="50" cy="12" r="1.6"/><circle cx="70" cy="12" r="1.6"/>
+    </svg>
+    <h1 class="brand-ar" lang="ar">رفيق الدعاء</h1>
+    <p class="brand-en">Du'a Companion</p>
+    <p class="tagline">Recite, and the words follow you.</p>
+
+    <button id="start" class="orb" aria-label="Start listening">
+      <span class="ring"></span><span class="ring r2"></span>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+      </svg>
+    </button>
+    <p id="hint" class="hint">Tap to begin</p>
+    <div id="load" class="load" hidden><i id="load-bar"></i></div>
+
+    <div class="links">
+      <button id="choose" class="link">choose a du'a</button>
+      <span class="dot">·</span>
+      <button id="play" class="link">play a recording</button>
+    </div>
+    <input id="file" type="file" accept="audio/*" hidden>
+    <ul id="samples" class="samples" hidden></ul>
+    <p id="footnote" class="footnote"></p>
+  </section>
+
+  <main id="stage" class="stage" aria-live="polite">
+    <p id="prev" class="line faint" dir="rtl" lang="ar"></p>
+    <article class="current">
+      <p id="now-ar" class="now-ar" dir="rtl" lang="ar"></p>
+      <p id="now-tl" class="now-tl"></p>
+      <p id="now-en" class="now-en"></p>
+    </article>
+    <p id="next" class="line faint" dir="rtl" lang="ar"></p>
+    <div id="guesses" class="guesses" hidden>
+      <span class="guess-label">Is it…</span>
+      <div id="guess-chips" class="chips"></div>
+    </div>
+  </main>
+
+  <div id="picker" class="picker" hidden>
+    <div class="picker-card">
+      <input id="search" type="search" placeholder="Search du'as and ziyarat" autocomplete="off">
+      <ul id="picker-list"></ul>
+    </div>
+  </div>
+
+  <section id="full" class="full" hidden></section>
+
+  <div id="menu" class="menu" hidden>
+    <label><input type="checkbox" id="opt-en" checked> Translation</label>
+    <label><input type="checkbox" id="opt-tl" checked> Transliteration</label>
+    <label><input type="checkbox" id="opt-full"> Whole text</label>
+    <button id="share" class="link share-btn" hidden>Show on other screens</button>
+  </div>
+
+  <div id="share-card" class="picker" hidden>
+    <div class="picker-card share-card">
+      <p class="share-title">Follow along on another screen</p>
+      <p class="share-sub">Scan, or open the link, on any phone, tablet or projector in the room.</p>
+      <div id="qr" class="qr" aria-hidden="true"></div>
+      <p class="share-code" id="share-code"></p>
+      <button id="share-copy" class="chip"></button>
+      <p id="share-viewers" class="share-sub"></p>
+    </div>
+  </div>
+
+  <audio id="player" hidden></audio>
+  <footer id="debug" class="debug" hidden><span id="heard" dir="rtl" lang="ar"></span><span id="latency"></span></footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

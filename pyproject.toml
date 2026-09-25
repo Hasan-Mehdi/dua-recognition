@@ -1,20 +1,21 @@
 [project]
 name = "dua-recognition"
-version = "0.1.0"
-description = "Recognize which du'a is being recited and where in it, in real time."
+version = "0.2.0"
+description = "Identify which du'a is being recited and follow it line by line, in real time."
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
     "faster-whisper>=1.0",
-    "rapidfuzz>=3.0",
     "numpy>=1.24",
-    "sounddevice>=0.4",
-    "soundfile>=0.12",
+    "rapidfuzz>=3.0",
 ]
 
 [project.optional-dependencies]
-data = ["yt-dlp", "librosa"]
-train = ["transformers>=4.40", "peft>=0.10", "datasets", "accelerate"]
-demo = ["streamlit"]
+mic = ["sounddevice>=0.4"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+eval = ["jiwer>=3.0"]
+train = ["torch>=2.2", "transformers>=4.46", "accelerate", "jiwer>=3.0"]
 dev = ["pytest"]
 
 [build-system]
@@ -23,3 +24,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

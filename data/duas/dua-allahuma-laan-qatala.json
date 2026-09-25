@@ -1,0 +1,20 @@
+{
+ "dua_id": "dua-allahuma-laan-qatala",
+ "dua_name_en": "Allahumma al'an qatala",
+ "dua_name_ar": "اللّهُمّ الْعَنْ قَتَلَةَ",
+ "source": "https://www.duaplayer.org/en/dua/allahuma-laan-qatala",
+ "segments": [
+  {
+   "segment_id": 1,
+   "arabic": "بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ"
+  },
+  {
+   "segment_id": 2,
+   "arabic": "اَللّهُمَّ صَلِّ عَلى مُحَمَّد وَآلِ مُحَمَّد"
+  },
+  {
+   "segment_id": 3,
+   "arabic": "اللّهُمّ الْعَنْ قَتَلَةَ أَمِيرِ الْمُؤْمِنِينَ"
+  }
+ ]
+}

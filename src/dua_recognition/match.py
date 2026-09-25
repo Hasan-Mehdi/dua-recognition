@@ -1,4 +1,9 @@
-"""Locate which segment of a du'a a transcript fragment belongs to."""
+"""v0.1's passage matcher, kept as the baseline in scripts/evaluate.py.
+
+Each window is matched against every line independently, so a refrain that
+recurs 14 times in a du'a can land on any of its repetitions. tracker.py
+replaces it.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

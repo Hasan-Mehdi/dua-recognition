@@ -1,0 +1,61 @@
+{
+ "asr": "whisper-small-dua-v2",
+ "split": "test",
+ "summary": {
+  "matcher": {
+   "line_acc": 0.4756895917616771,
+   "line_acc_pm1": 0.729532916513424,
+   "dua_acc": 0.8748069143067304,
+   "wrong_dua_shown": 0.12247149687385069,
+   "refrain_acc": 0.06398537477148081,
+   "lag_median_s": 3.250499999999988,
+   "lines_missed": 0.1397733405288721,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 4.285399043766091
+  },
+  "tracker": {
+   "line_acc": 0.8465612357484369,
+   "line_acc_pm1": 0.9648400147112909,
+   "dua_acc": 0.9652813534387642,
+   "wrong_dua_shown": 0.009121000367782272,
+   "refrain_acc": 0.8829981718464351,
+   "lag_median_s": 1.259999999999991,
+   "lines_missed": 0.011332973556395036,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.04854726002206694
+  },
+  "oracle": {
+   "line_acc": 0.8607576314821626,
+   "line_acc_pm1": 0.9884516366311143,
+   "dua_acc": 1.0,
+   "wrong_dua_shown": 0.0,
+   "refrain_acc": 0.8848263254113345,
+   "lag_median_s": 1.2589999999999861,
+   "lines_missed": 0.005396654074473826,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.1588819418904009
+  }
+ },
+ "identification": {
+  "3": {
+   "classifier": 0.840625,
+   "tracker": 0.88125
+  },
+  "5": {
+   "classifier": 0.8,
+   "tracker": 0.921875
+  },
+  "10": {
+   "classifier": 0.928125,
+   "tracker": 0.95
+  },
+  "20": {
+   "classifier": 0.96875,
+   "tracker": 0.978125
+  },
+  "30": {
+   "classifier": 0.9875,
+   "tracker": 0.9875
+  }
+ }
+}

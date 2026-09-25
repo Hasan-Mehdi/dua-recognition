@@ -1,0 +1,61 @@
+{
+ "asr": "large-v3-turbo+prompt",
+ "split": "test",
+ "summary": {
+  "matcher": {
+   "line_acc": 0.4667157043030526,
+   "line_acc_pm1": 0.7043030525928651,
+   "dua_acc": 0.850459727841118,
+   "wrong_dua_shown": 0.1457153365207797,
+   "refrain_acc": 0.06703229737964655,
+   "lag_median_s": 3.2579999999999814,
+   "lines_missed": 0.15164597949271452,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 4.982714233173961
+  },
+  "tracker": {
+   "line_acc": 0.8484737035674881,
+   "line_acc_pm1": 0.9637366678926076,
+   "dua_acc": 0.9643251195292387,
+   "wrong_dua_shown": 0.007429201912467819,
+   "refrain_acc": 0.8799512492382694,
+   "lag_median_s": 1.2490000000000236,
+   "lines_missed": 0.011872638963842417,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.06620080912100038
+  },
+  "oracle": {
+   "line_acc": 0.8656859139389481,
+   "line_acc_pm1": 0.9907318867230599,
+   "dua_acc": 1.0,
+   "wrong_dua_shown": 0.0,
+   "refrain_acc": 0.8842169408897014,
+   "lag_median_s": 1.2309999999999945,
+   "lines_missed": 0.0037776578521316784,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.17212210371460096
+  }
+ },
+ "identification": {
+  "3": {
+   "classifier": 0.828125,
+   "tracker": 0.871875
+  },
+  "5": {
+   "classifier": 0.771875,
+   "tracker": 0.921875
+  },
+  "10": {
+   "classifier": 0.9125,
+   "tracker": 0.95
+  },
+  "20": {
+   "classifier": 0.959375,
+   "tracker": 0.98125
+  },
+  "30": {
+   "classifier": 0.975,
+   "tracker": 0.984375
+  }
+ }
+}

@@ -14,3 +14,12 @@ models/
 *.wav
 *.mp3
 *.m4a
+
+# DuaPlayer cache: translations, timings, audio (not ours to redistribute)
+data/duaplayer/
+data/cache/
+models/
+data/youtube/
+web/corpus.json
+.venv-export/
+web/models/

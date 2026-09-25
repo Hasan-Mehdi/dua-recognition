@@ -1,9 +1,8 @@
-"""Decide which du'a a clip belongs to.
+"""v0.1's du'a classifier, kept as the baseline in scripts/evaluate.py.
 
-Each du'a opens with a distinctive text (and melody), so this is the easier half
-of the problem. The baseline below is text-only: transcribe, then pick the du'a
-whose reference text the transcript matches best. An audio classifier (a small
-spectrogram model) would be faster and melody-aware — that's the TODO.
+Transcribe, then pick the du'a whose full reference text the transcript
+matches best. It looks at each window on its own; the tracker (tracker.py)
+identifies the du'a as a by-product of following it instead.
 """
 from __future__ import annotations
 
@@ -26,16 +25,3 @@ class TextClassifier:
 
     def predict(self, audio) -> str:
         return self.predict_text(transcribe(audio))
-
-
-class AudioClassifier:
-    """Spectrogram-based du'a classifier.
-
-    TODO: train an AST / wav2vec2 head on 5-second mel windows so we can identify
-    the du'a without a full transcription pass. See scripts/train_classifier.py.
-    """
-
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError(
-            "audio classifier isn't trained yet — use TextClassifier for now"
-        )
