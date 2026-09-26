@@ -8,6 +8,13 @@ using the clips annotators marked as correct (Quran verses, plus some du'as and
 adhkar) against the text each was reciting. CER on normalized letters.
 
     python scripts/voice_eval.py models/whisper-base-quran-dua-ct2 large-v3-turbo
+    python scripts/voice_eval.py --set quranlab ...   # Quran-Lab benchmark (below)
+
+--set quranlab: huggingface.co/datasets/Quran-Lab/quranic-asr-benchmark, 600
+clips in three groups: real phone recordings from Tarteel users (tlog_holdout),
+a held-out professional set (everyayah_heldout) and qul_alnufais. Gated (accept
+the terms on the HF account; evaluation use only), cached in data/cache/quranlab.
+Scores are reported per group; the phone group is the ordinary-voice number.
 """
 from __future__ import annotations
 
@@ -48,6 +55,38 @@ def load_clips(labels=("correct",), limit: int | None = None):
     return clips
 
 
+QURANLAB = ROOT / "data" / "cache" / "quranlab"
+
+
+def load_quranlab(limit: int | None = None):
+    """Quran-Lab clips as {"y", "ref", "reciter", "gender"}; "gender" holds the group name."""
+    import json
+
+    import soundfile as sf
+    from huggingface_hub import snapshot_download
+
+    snapshot_download("Quran-Lab/quranic-asr-benchmark", repo_type="dataset", local_dir=QURANLAB)
+    clips = []
+    for meta in sorted(QURANLAB.glob("audio/*/metadata.jsonl")):
+        for line in meta.read_text(encoding="utf-8").splitlines():
+            r = json.loads(line)
+            ref = next((r[k] for k in ("text", "transcription", "sentence", "aya", "verse_text", "uthmani") if r.get(k)), None)
+            f = meta.parent / r.get("file_name", "")
+            if not ref or not f.is_file():
+                continue
+            y, sr = sf.read(f, dtype="float32", always_2d=True)
+            y = y.mean(axis=1)
+            if sr != 16000:
+                from scipy.signal import resample_poly
+                y = resample_poly(y, 16000, sr).astype(np.float32)
+            clips.append({"y": y, "ref": ref, "reciter": r.get("reciter_id") or f.stem, "gender": meta.parent.name})
+            if limit and len(clips) >= limit:
+                return clips
+    if not clips:
+        raise SystemExit(f"no clips with text under {QURANLAB}/audio (metadata fields changed?)")
+    return clips
+
+
 def cer(ref: str, hyp: str) -> tuple[int, int]:
     import jiwer
 
@@ -63,15 +102,23 @@ def main() -> None:
     ap.add_argument("models", nargs="+")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--set", choices=["retasy", "quranlab"], default="retasy")
     args = ap.parse_args()
     from faster_whisper import WhisperModel
 
-    clips = load_clips(limit=args.limit)
-    print(f"{len(clips)} clips, {len({c['reciter'] for c in clips})} reciters, "
-          f"{sum(c['gender'] == 'female' for c in clips)} by women, {sum(len(c['y']) for c in clips) / 16000 / 60:.0f} min")
+    if args.set == "quranlab":
+        clips = load_quranlab(limit=args.limit)
+        groups = sorted({c["gender"] for c in clips})
+        print(f"{len(clips)} clips ({', '.join(f'{g} {sum(c['gender'] == g for c in clips)}' for g in groups)}), "
+              f"{sum(len(c['y']) for c in clips) / 16000 / 60:.0f} min")
+    else:
+        clips = load_clips(limit=args.limit)
+        groups = ["male", "female"]
+        print(f"{len(clips)} clips, {len({c['reciter'] for c in clips})} reciters, "
+              f"{sum(c['gender'] == 'female' for c in clips)} by women, {sum(len(c['y']) for c in clips) / 16000 / 60:.0f} min")
     for name in args.models:
         m = WhisperModel(name, device=args.device, compute_type="int8" if args.device == "cpu" else "float16")
-        tot = {"all": [0, 0], "male": [0, 0], "female": [0, 0]}
+        tot = {"all": [0, 0], **{g: [0, 0] for g in groups}}
         for c in clips:
             segs, _ = m.transcribe(c["y"], language="ar", beam_size=1, condition_on_previous_text=False,
                                    without_timestamps=True)
@@ -81,7 +128,9 @@ def main() -> None:
                     tot[k][0] += e
                     tot[k][1] += n
         f = {k: v[0] / max(v[1], 1) for k, v in tot.items()}
-        print(f"{name:45s} CER {f['all']:.1%}   men {f['male']:.1%}   women {f['female']:.1%}", flush=True)
+        label = {"male": "men", "female": "women"}
+        print(f"{name:45s} CER {f['all']:.1%}   " + "   ".join(f"{label.get(g, g)} {f[g]:.1%}" for g in groups),
+              flush=True)
 
 
 if __name__ == "__main__":

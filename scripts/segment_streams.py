@@ -14,6 +14,15 @@ reaches training.
 
     python scripts/segment_streams.py            # -> data/fatemah/spans/<dua>/*.{mp3,json,labels.json}
     python scripts/segment_streams.py --report   # -> data/fatemah/report.md
+
+Test mode cuts held-out majlis recordings instead (scripts/fetch_testset.py
+streams from venues no training harvester touches): every span becomes a
+DuaPlayer-shape test recording with auto labels ("auto": true, silver), at
+most --venue-hours per venue and --per-dua recordings per (venue, du'a), plus
+a report.md of timestamped links to spot-check. No voice routing: it's all test.
+
+    python scripts/segment_streams.py --all-test --streams data/testsets/majlis/streams \\
+        --out data/testsets/majlis --tag whisper-turbo-dua --hop 1
 """
 from __future__ import annotations
 
@@ -35,6 +44,7 @@ from align_offline import placed_mask, starts_from  # noqa: E402
 
 from dua_recognition.align import CorpusIndex  # noqa: E402
 from dua_recognition.asr import _looks_hallucinated  # noqa: E402
+from dua_recognition.labels import set_starts, to_srt  # noqa: E402
 from dua_recognition.offline import align_recording  # noqa: E402
 from dua_recognition.splits import is_test  # noqa: E402
 from dua_recognition.tracker import Tracker  # noqa: E402
@@ -152,6 +162,90 @@ def segment(args) -> None:
                   f"lines {lines:5.1%}  {'ok' if usable else 'UNUSABLE'}  voice {split} ({who} {vs:.2f})", flush=True)
 
 
+def label_span(dua, rows, a: float, b: float, hop: float) -> tuple[list[tuple[float, int]], float, float, float]:
+    """(line starts on the span's clock, placed share, lines found, end of labels) from the stream's windows."""
+    sub = [(round(t - a, 2), x) for t, x in rows if a + 6.0 <= t <= b]
+    dix = CorpusIndex({dua.id: dua})
+    costs = [dix.word_costs(x) if x else None for _, x in sub]
+    segs = align_recording(dix, costs, hop)
+    placed = placed_mask(dix, sub, costs)
+    starts = starts_from([t for t, _ in sub], segs, placed)
+    voiced = [p for (_, x), p in zip(sub, placed) if x]
+    coverage = sum(voiced) / max(1, len(voiced))
+    return starts, coverage, len({s for _, s in starts}) / len(dua.segments), sub[-1][0] if sub else 0.0
+
+
+def segment_test(args) -> None:
+    """Held-out majlis recordings from test-venue streams, capped per venue and per (venue, du'a)."""
+    duas = ev.load_all()
+    ix = CorpusIndex(duas)
+    prefix = args.streams.parent.name[:2]  # transcribe_windows --stream-dir names the windows this way
+    found = []
+    for meta_path in sorted(args.streams.glob("*.json")):
+        vid = meta_path.stem
+        audio = [p for p in args.streams.glob(f"{vid}.*") if p.suffix not in (".json", ".part")]
+        rows = load_stream_rows(args.tag, f"{prefix}-{vid}", args.hop)
+        if not audio or not rows:
+            print(f"  {vid}: no audio or no windows yet; skipped", flush=True)
+            continue
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        for dua_id, a, b, conf in locked_spans(ix, rows, args.hop, args.conf, args.min_minutes * 60, args.gap):
+            a, b = max(0.0, a - args.pad), min(rows[-1][0], b + args.pad)
+            starts, coverage, lines, end = label_span(duas[dua_id], rows, a, b, args.hop)
+            usable = coverage >= 0.5 and lines >= 0.5
+            found.append({"vid": vid, "meta": meta, "audio": audio[0], "dua": dua_id, "a": a, "b": b, "conf": conf,
+                          "starts": starts, "placed": coverage, "lines": lines, "end": end, "usable": usable})
+            print(f"  {meta.get('venue', '?')[:20]:20s} {vid} {dua_id:28s} {a / 60:6.1f}-{b / 60:6.1f} min  "
+                  f"conf {conf:.2f}  placed {coverage:5.1%}  lines {lines:5.1%}  {'ok' if usable else 'UNUSABLE'}",
+                  flush=True)
+    # Caps: best-labelled spans first; one venue can't dominate the set.
+    hours, per_dua, kept = defaultdict(float), defaultdict(int), []
+    for s in sorted((s for s in found if s["usable"]), key=lambda s: -(s["placed"] * s["lines"])):
+        venue = s["meta"].get("venue", "")
+        h = (s["b"] - s["a"]) / 3600
+        if hours[venue] + h > args.venue_hours or per_dua[(venue, s["dua"])] >= args.per_dua:
+            continue
+        hours[venue] += h
+        per_dua[(venue, s["dua"])] += 1
+        kept.append(s)
+    for s in kept:
+        m, dua = s["meta"], duas[s["dua"]]
+        aid = f"mj-{s['vid']}-{int(s['a'])}"
+        d = args.out / s["dua"]
+        d.mkdir(parents=True, exist_ok=True)
+        s["id"] = aid
+        if (d / f"{aid}.json").exists():
+            continue
+        cut(s["audio"], d / f"{aid}.mp3", s["a"], s["b"])
+        rec_meta = {"audio_id": aid, "dua_id": s["dua"], "reciter": f"majlis:{m.get('venue', '')}",
+                    "duration_ms": int((s["b"] - s["a"]) * 1000), "auto": True, "condition": "majlis",
+                    "venue": m.get("venue", ""), "channel_id": m.get("channel_id", ""), "stream": s["vid"],
+                    "stream_start_s": round(s["a"], 2), "title": m.get("title", ""),
+                    "source_url": f"https://www.youtube.com/watch?v={s['vid']}&t={int(s['a'])}s",
+                    "teacher": args.tag, "tracker_confidence": round(s["conf"], 3),
+                    "placed_fraction": round(s["placed"], 3), "lines_found": round(s["lines"], 3)}
+        rec_meta = set_starts({**rec_meta, "slide_start_ms": {}}, s["starts"], s["end"], len(dua.segments))
+        (d / f"{aid}.json").write_text(json.dumps(rec_meta, ensure_ascii=False, indent=1), encoding="utf-8")
+        (d / f"{aid}.srt").write_text(to_srt(s["starts"], s["end"], {g.id: g.arabic for g in dua.segments}),
+                                      encoding="utf-8")
+    lines = ["# Majlis test set: spans found", "",
+             f"{len(found)} spans in {len({s['vid'] for s in found})} streams; {sum(s['usable'] for s in found)} usable; "
+             f"{len(kept)} kept after the caps ({args.venue_hours:g} h per venue, {args.per_dua} per venue and du'a), "
+             f"{sum(s['b'] - s['a'] for s in kept) / 3600:.1f} h.", "",
+             "| venue | kept | hours | du'as |", "|---|---:|---:|---|"]
+    for venue in sorted(hours):
+        ks = [s for s in kept if s["meta"].get("venue", "") == venue]
+        lines.append(f"| {venue} | {len(ks)} | {hours[venue]:.2f} | {', '.join(sorted({s['dua'] for s in ks}))} |")
+    lines += ["", "## Spot-check", "", "Each link opens the stream where the span starts: is it the du'a named, "
+              "led from the room (not a studio track played over the PA)?", ""]
+    for s in sorted(kept, key=lambda s: (s["meta"].get("venue", ""), s["dua"])):
+        name = duas[s["dua"]].name_en
+        lines.append(f"- {s['meta'].get('venue', '')}: {name}: https://www.youtube.com/watch?v={s['vid']}&t={int(s['a'])}s "
+                     f"({(s['b'] - s['a']) / 60:.0f} min, placed {s['placed']:.0%}, lines {s['lines']:.0%}) `{s['id']}`")
+    (args.out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines))
+
+
 def report(args) -> None:
     idx = {json.loads(x)["id"]: json.loads(x) for x in (SRC / "index.jsonl").read_text(encoding="utf-8").splitlines() if x}
     got = [json.loads(p.read_text(encoding="utf-8")) for p in AUDIO.glob("*.json")]
@@ -211,8 +305,18 @@ def main() -> None:
     ap.add_argument("--gap", type=float, default=20.0, help="seconds of lapse a span survives")
     ap.add_argument("--pad", type=float, default=5.0)
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--all-test", action="store_true", help="cut held-out test recordings (needs --streams, --out)")
+    ap.add_argument("--streams", type=Path, help="--all-test: the stream folder (fetch_testset.py majlis)")
+    ap.add_argument("--out", type=Path, help="--all-test: the test-set dir (corpus.TESTSETS)")
+    ap.add_argument("--venue-hours", type=float, default=2.0, help="--all-test: at most this much per venue")
+    ap.add_argument("--per-dua", type=int, default=3, help="--all-test: at most this many per (venue, du'a)")
     args = ap.parse_args()
-    report(args) if args.report else segment(args)
+    if args.all_test:
+        if not (args.streams and args.out):
+            ap.error("--all-test needs --streams and --out")
+        segment_test(args)
+    else:
+        report(args) if args.report else segment(args)
 
 
 if __name__ == "__main__":
