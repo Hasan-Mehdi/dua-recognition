@@ -122,7 +122,7 @@ export const DEFAULTS = {
   kappa: 0.15, kappaSearch: 1.2, lockConfidence: 0.95, maxSpeed: 4.0,
   // Speed prior and tempo adaptation: see TrackerConfig.speeds / tempo_memory in tracker.py.
   speeds: [0.59, 0.99, 1.15, 1.3, 1.44, 1.55, 1.67, 1.84, 2.05, 2.39], tempoMemory: 0.98,
-  pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, startWeight: 0.3, startWords: 12, minDuaConfidence: 0.7,
+  pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, startWeight: 0.3, startWords: 12, minDuaConfidence: 0.7, sameTextWords: 12, sameTextAhead: 3,
   displayLead: 0.5, // seconds shown ahead of the measured delay (see tracker.py)
   enterLineAtStart: true, // moving on to the next line starts at its first word
   // Pauses (TrackerConfig.still_after ... retreat_after in tracker.py): `quiet` is how
@@ -172,6 +172,8 @@ export class Tracker {
     this.lastWord = null;
     this.shown = null;
     this.null = this.cfg.nullRate > 0 ? 0.5 : 0; // P(not in the corpus)
+    this.reported = null; // the du'a last reported (index)
+    this.foundAlone = false; // ...and it was told apart from every other text
     const k = Math.max(1, this.cfg.speeds.length);
     this.tempo = new Float64Array(k).fill(1 / k);
     this.fwdBySpeed = null;
@@ -341,14 +343,63 @@ export class Tracker {
     return p;
   }
 
+  _likeliest(d) {
+    const [lo, hi] = this.ix.duaWordSpan[d];
+    let w = lo;
+    for (let i = lo; i < hi; i++) if (this.post[i] > this.post[w]) w = i;
+    return w;
+  }
+
+  // Du'as a and b are both, most likely, inside one identical passage (tracker.py).
+  _samePassage(a, b) {
+    const { sameTextWords: n, sameTextAhead: ahead } = this.cfg;
+    const [loA, hiA] = this.ix.duaWordSpan[a];
+    const [loB, hiB] = this.ix.duaWordSpan[b];
+    const wa = this._likeliest(a);
+    const wb = this._likeliest(b);
+    const t = (i) => this.ix.words[i].text;
+    let fwd = 0;
+    while (fwd < n && wa + fwd < hiA && wb + fwd < hiB && t(wa + fwd) === t(wb + fwd)) fwd++;
+    let back = 0;
+    while (back < n && wa - back - 1 >= loA && wb - back - 1 >= loB && t(wa - back - 1) === t(wb - back - 1)) back++;
+    const atEnd = wa + fwd === hiA || wb + fwd === hiB; // one of them finishes here
+    return (fwd >= ahead || atEnd) && fwd + back >= n;
+  }
+
+  // The top du'a, and any of the next likeliest in the same passage as it: a
+  // shared passage counts as one du'a for the threshold (tracker.py, same_text_words).
+  _sameText(mass, order) {
+    const group = [order[0]];
+    if (!(this.cfg.sameTextWords > 0)) return group;
+    for (const o of order.slice(1, 8)) {
+      if (mass[o] < 0.01) break;
+      if (this._samePassage(group[0], o)) group.push(o);
+    }
+    return group;
+  }
+
   position() {
     const { ix, post } = this;
     const mass = this._duaMass();
     const order = Array.from(mass.keys()).sort((a, b) => mass[b] - mass[a]);
-    const d = order[0];
-    const conf = mass[d];
     const candidates = order.slice(0, 3).map((i) => [ix.duaIds[i], mass[i]]);
+    const group = this._sameText(mass, order);
+    const conf = group.reduce((n, g) => n + mass[g], 0);
     if (conf < this.cfg.minDuaConfidence) return { dua: null, duaConfidence: conf, candidates };
+    // Shown: the du'a on screen if it was found before the shared passage began,
+    // else the one the passage sits nearest the start of (tracker.py).
+    let d;
+    if (group.length === 1) {
+      d = group[0];
+      this.foundAlone = true;
+    } else if (group.includes(this.reported) && this.foundAlone) {
+      d = this.reported;
+    } else {
+      const offset = (g) => this._likeliest(g) - ix.duaWordSpan[g][0];
+      d = group.reduce((a, b) => (offset(b) < offset(a) ? b : a));
+      this.foundAlone = false;
+    }
+    this.reported = d;
     const [lo, hi] = ix.duaWordSpan[d];
     const segMass = new Map();
     for (let w = lo; w < hi; w++) segMass.set(ix.wordSegment[w], (segMass.get(ix.wordSegment[w]) ?? 0) + (1 - this.null) * post[w]);
@@ -368,8 +419,9 @@ export class Tracker {
     }
     const atLineEnd = word + 1 >= hi || ix.wordSegment[word + 1] !== ix.wordSegment[word];
     return {
-      dua: ix.duaIds[d], duaConfidence: conf, segment: seg, segmentConfidence: best / conf,
+      dua: ix.duaIds[d], duaConfidence: conf, segment: seg, segmentConfidence: best / mass[d],
       word, token: ix.words[word].token, atLineEnd, candidates,
+      sameAs: group.filter((g) => g !== d).map((g) => ix.duaIds[g]),
     };
   }
 

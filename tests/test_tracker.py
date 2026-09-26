@@ -1,6 +1,6 @@
 from dua_recognition.align import CorpusIndex
 from dua_recognition.corpus import Dua, Segment
-from dua_recognition.tracker import Tracker
+from dua_recognition.tracker import Tracker, TrackerConfig
 
 OPENING = "بسم الله الرحمن الرحيم"
 REFRAIN = "يا وجيها عند الله اشفع لنا عند الله"
@@ -96,3 +96,48 @@ def test_reciter_mode_keeps_running_on_through_a_breath():
 
     shown = _stop_after_first_name(TrackerConfig(**RECITER))
     assert all(p.segment == shown[0].segment for p in shown)  # no stepping back
+
+
+KURSI = ["الله لا اله الا هو الحي القيوم", "لا تاخذه سنه ولا نوم", "له ما في السماوات وما في الارض",
+         "من ذا الذي يشفع عنده الا باذنه"]
+
+
+def _shared_corpus():
+    # "kursi" is wholly inside "sahifa" (as Ayat al-Kursi is inside Sahifa 54), and a
+    # third text opens the same way as neither.
+    return {
+        "kursi": Dua("kursi", "K", "", [Segment(i + 1, t) for i, t in enumerate(KURSI)]),
+        "sahifa": Dua("sahifa", "S", "", [Segment(1, "اعصمني وطهرني واذهب ببليتي")]
+                      + [Segment(i + 2, t) for i, t in enumerate(KURSI)]
+                      + [Segment(len(KURSI) + 2, "قل هو الله احد الله الصمد")]),
+        "other": Dua("other", "O", "", [Segment(1, OPENING), Segment(2, "الحمد لله رب العالمين")]),
+    }
+
+
+def test_a_shared_passage_is_shown_rather_than_withheld():
+    corpus = _shared_corpus()
+    off = Tracker(CorpusIndex(corpus), TrackerConfig(same_text_words=0))
+    on = Tracker(CorpusIndex(corpus))
+    # Someone reciting Sahifa, from its first line into the shared passage.
+    shown_off, shown_on = [], []
+    for _, pos in _recite(off, corpus["sahifa"]):
+        shown_off.append(pos.dua)
+    for _, pos in _recite(on, corpus["sahifa"]):
+        shown_on.append(pos.dua)
+    # With the rule, the shared passage never makes the du'a vanish once it was shown,
+    # and it never flips to the other text that shares it.
+    first = shown_on.index("sahifa")
+    assert all(d == "sahifa" for d in shown_on[first:])
+    assert shown_on.count(None) <= shown_off.count(None)
+
+
+def test_the_passage_on_its_own_is_shown_as_itself():
+    # Reciting the short text: every text it's in reads the same, so without the
+    # rule nothing is ever shown; with it, the text the passage opens is shown.
+    corpus = _shared_corpus()
+    off = Tracker(CorpusIndex(corpus), TrackerConfig(same_text_words=0))
+    assert all(pos.dua is None for _, pos in _recite(off, corpus["kursi"]))
+    trace = _recite(Tracker(CorpusIndex(corpus)), corpus["kursi"])
+    shown = [pos for _, pos in trace if pos.dua]
+    assert len(shown) >= len(trace) - 2
+    assert all(pos.dua == "kursi" and pos.same_as == ["sahifa"] for pos in shown)

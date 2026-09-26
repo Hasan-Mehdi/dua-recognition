@@ -141,6 +141,8 @@ def _message(update, step_ms: float, index: CorpusIndex, speed: float, unknown: 
         "candidates": [
             {"id": d, "name": DUAS[d].name_en, "p": round(prob, 3)} for d, prob in p.candidates
         ],
+        # Other texts reading the same words here (tracker.same_text_words): "also in ...".
+        "same_as": p.same_as,
         "step_ms": round(step_ms),
     }
 

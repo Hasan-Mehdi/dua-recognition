@@ -76,6 +76,19 @@ class TrackerConfig:
     null_leave: float = 0.05  # per update: ...and back to something known
     # Reported only once the winning du'a holds this much posterior mass.
     min_dua_confidence: float = 0.7
+    # Texts that share a passage (Ayat al-Kursi inside Sahifa 54, the Ramadan
+    # night du'as, stock salawat): while the reciter is inside it the evidence
+    # can't tell them apart, and the mass splits between them, often leaving
+    # none above min_dua_confidence. So du'as whose most likely positions sit in
+    # the same run of at least `same_text_words` identical words, with a few
+    # still to come, count as one for that threshold. Shown: the du'a already on
+    # screen if it was found before the passage began (someone reciting Sahifa 54
+    # from its start), else the one the passage sits nearest the start of
+    # (someone reciting Ayat al-Kursi). Long enough that a shared opening salawat
+    # or bismillah doesn't count: those still wait for the text to become
+    # distinctive. 0 = off.
+    same_text_words: int = 12
+    same_text_ahead: int = 3
     # The belief is about the end of the audio window, but it reaches the
     # screen later (ASR time), and the transcript's tail lags the voice. So
     # the live display shows the belief predicted forward by the measured
@@ -133,6 +146,8 @@ class Position:
     # means the next line is coming; the UI previews it without jumping).
     at_line_end: bool = False
     candidates: list[tuple[str, float]] = field(default_factory=list)  # top du'as
+    # Other du'as reading the same words here (TrackerConfig.same_text_words).
+    same_as: list[str] = field(default_factory=list)
 
 
 class Tracker:
@@ -166,6 +181,7 @@ class Tracker:
         self._next_line = starts[np.searchsorted(starts, self._idx, side="right")]
         self._spans = np.array(ix.dua_word_span).reshape(-1, 2)
         self._edge_cache: dict[int, np.ndarray] = {}
+        self._text = [w.text for w in ix.words]
         self.reset()
 
     def reset(self) -> None:
@@ -177,6 +193,8 @@ class Tracker:
         self._last_word: int | None = None
         self._shown: Position | None = None
         self.null = 0.5 if self.cfg.null_rate > 0 else 0.0  # P(not in the corpus)
+        self._reported: int | None = None  # the du'a last reported (index)
+        self._found_alone = False  # ...and it was told apart from every other text
 
     # -- predict ---------------------------------------------------------
     def _locked(self) -> bool:
@@ -358,14 +376,54 @@ class Tracker:
         self._last_word = pos.word
         return pos
 
+    def _likeliest(self, d: int) -> int:
+        lo, hi = self.ix.dua_word_span[d]
+        return lo + int(self.post[lo:hi].argmax())
+
+    def _same_passage(self, a: int, b: int) -> bool:
+        """Du'as a and b are both, most likely, inside one identical passage."""
+        n, ahead = self.cfg.same_text_words, self.cfg.same_text_ahead
+        (lo_a, hi_a), (lo_b, hi_b) = self.ix.dua_word_span[a], self.ix.dua_word_span[b]
+        wa, wb = self._likeliest(a), self._likeliest(b)
+        t = self._text
+        fwd = 0
+        while fwd < n and wa + fwd < hi_a and wb + fwd < hi_b and t[wa + fwd] == t[wb + fwd]:
+            fwd += 1
+        back = 0
+        while back < n and wa - back - 1 >= lo_a and wb - back - 1 >= lo_b and t[wa - back - 1] == t[wb - back - 1]:
+            back += 1
+        at_end = wa + fwd == hi_a or wb + fwd == hi_b  # one of them finishes here
+        return (fwd >= ahead or at_end) and fwd + back >= n
+
+    def _same_text(self, dua_mass: np.ndarray, order: np.ndarray) -> list[int]:
+        """The top du'a, and any of the next likeliest in the same passage as it."""
+        group = [int(order[0])]
+        if self.cfg.same_text_words <= 0:
+            return group
+        for o in order[1:8]:
+            if dua_mass[o] < 0.01:
+                break
+            if self._same_passage(group[0], int(o)):
+                group.append(int(o))
+        return group
+
     def position(self) -> Position:
         ix = self.ix
         dua_mass = self._dua_mass()
-        d = int(dua_mass.argmax())
-        conf = float(dua_mass[d])
-        top = [(ix.dua_ids[i], float(dua_mass[i])) for i in np.argsort(-dua_mass)[:3]]
+        order = np.argsort(-dua_mass)
+        top = [(ix.dua_ids[i], float(dua_mass[i])) for i in order[:3]]
+        group = self._same_text(dua_mass, order)
+        conf = float(dua_mass[group].sum())
         if conf < self.cfg.min_dua_confidence:
             return Position(None, conf, None, 0.0, None, candidates=top)
+        if len(group) == 1:
+            d, self._found_alone = group[0], True
+        elif self._reported in group and self._found_alone:
+            d = self._reported
+        else:
+            d = min(group, key=lambda g: self._likeliest(g) - ix.dua_word_span[g][0])
+            self._found_alone = False
+        self._reported = d
         lo, hi = ix.dua_word_span[d]
         seg_ids = ix.word_segment[lo:hi]
         seg_mass = (1 - self.null) * np.bincount(seg_ids, weights=self.post[lo:hi])
@@ -377,7 +435,8 @@ class Tracker:
         cum = np.cumsum(self.post[in_seg])
         word = int(in_seg[min(int(np.searchsorted(cum, cum[-1] / 2)), len(in_seg) - 1)])
         at_end = word + 1 >= hi or ix.word_segment[word + 1] != ix.word_segment[word]
-        return Position(ix.dua_ids[d], conf, s, float(seg_mass[s] / conf), word, at_end, top)
+        same = [ix.dua_ids[g] for g in group if g != d]
+        return Position(ix.dua_ids[d], conf, s, float(seg_mass[s] / dua_mass[d]), word, at_end, top, same)
 
     def prompt(self, n_words: int = 12) -> str | None:
         """Reference text just before the current position, for ASR biasing."""
