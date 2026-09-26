@@ -45,6 +45,15 @@ class FollowerConfig:
     # 3 letter frames held mid-word through long vowels (oracle-anchored,
     # 6 train recordings: exact 43% with 3 frames, 72% with 1).
     tail_s: float = 0.5
+    # Line onset (round 2, docs/results/follower.md): on the last word of a line, letters in
+    # the latest `onset_window` s after at least `onset_gap` s of blanks move straight to the
+    # next line's first word, without scoring (0 = off). With `onset_confirm`, only if the
+    # tracker's lead position (page mode's line) is already past the current line.
+    onset_gap: float = 0.0
+    onset_window: float = 0.3
+    onset_confirm: bool = False
+    # A move back, or more than one word forward, must win this many steps in a row.
+    confirm_steps: int = 1
 
 
 class LocalFollower:
@@ -61,6 +70,27 @@ class LocalFollower:
     def reset(self) -> None:
         self.word: int | None = None
         self._disagree_since: float | None = None
+        self._pending: int | None = None  # a big move waiting for confirm_steps
+        self._pending_n = 0
+
+    def _onset(self, lp: np.ndarray, lead_word: int | None) -> bool:
+        """On the last word of a line: has the next line started (letters after a blank run)?"""
+        ix, cfg, w = self.ix, self.cfg, self.word
+        if cfg.onset_gap <= 0 or w + 1 >= ix.dua_word_span[ix.word_dua[w]][1] or \
+                self._line_no[w + 1] == self._line_no[w]:
+            return False
+        if cfg.onset_confirm and (lead_word is None or ix.word_dua[lead_word] != ix.word_dua[w]
+                                  or self._line_no[lead_word] <= self._line_no[w]):
+            return False
+        letter = lp[:, 1:].max(axis=1) > lp[:, 0]
+        tail = max(1, int(round(cfg.onset_window / FRAME_S)))
+        hits = np.flatnonzero(letter[-tail:])
+        if not hits.size:
+            return False
+        k = lp.shape[0] - tail + int(hits[0])  # first letter frame in the tail
+        before = np.flatnonzero(letter[:k])
+        run = k - (int(before[-1]) + 1 if before.size else 0)  # blank frames just before it
+        return run * FRAME_S >= cfg.onset_gap - 1e-9
 
     def _reference(self, anchor: int) -> tuple[np.ndarray, np.ndarray]:
         """Letters of words [anchor - back, anchor + ahead) in the anchor's du'a, and each letter's word."""
@@ -69,9 +99,10 @@ class LocalFollower:
         la, lb = self._word_letter[a], self._word_letter[b]
         return self.ix.letters[la:lb], self.ix.letter_word[la:lb]
 
-    def step(self, lp: np.ndarray, t: float, hmm_word: int | None) -> int | None:
+    def step(self, lp: np.ndarray, t: float, hmm_word: int | None, lead_word: int | None = None) -> int | None:
         """One CTC window (frames x columns, trimmed to its real length) ending at
-        time t; `hmm_word` is the tracker's current word (None: not locked).
+        time t; `hmm_word` is the tracker's current word (None: not locked), and
+        `lead_word` its lead (display) word, used only by onset_confirm.
         Returns the word to show, or None to leave the display to the tracker."""
         ix, cfg = self.ix, self.cfg
         if hmm_word is None:
@@ -89,6 +120,9 @@ class LocalFollower:
         lp = lp[-max(1, int(round(cfg.window_s / FRAME_S))) :]
         if not lp.size or (cfg.tail_s > 0 and not has_speech(lp[-max(1, int(round(cfg.tail_s / FRAME_S))) :], 1)):
             return self.word  # silence: stay put
+        if self._onset(lp, lead_word):
+            self.word, self._pending, self._pending_n = self.word + 1, None, 0
+            return self.word
         letters, owner = self._reference(self.word)
         if not letters.size:
             return self.word
@@ -101,5 +135,11 @@ class LocalFollower:
         cur = self.word
         best -= cfg.beta_back * np.maximum(0, cur - words)
         best[words > cur + cfg.max_jump] = -np.inf
-        self.word = int(words[int(np.argmax(best))])
+        new = int(words[int(np.argmax(best))])
+        if cfg.confirm_steps > 1 and (new < cur or new > cur + 1):
+            self._pending_n = self._pending_n + 1 if new == self._pending else 1
+            self._pending = new
+            if self._pending_n < cfg.confirm_steps:
+                return self.word
+        self.word, self._pending, self._pending_n = new, None, 0
         return self.word

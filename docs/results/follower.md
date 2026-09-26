@@ -118,3 +118,132 @@ Against the criteria:
   much smaller CTC model (a separate decision).
 - Code: `src/dua_recognition/follower.py`, `scripts/follow_eval.py`, `tests/test_follower.py`,
   `scripts/pause_eval.py build --ctc-model`, `scripts/dump_ctc.py --window 3 --hop 0.2`.
+
+# Round 2 (2026-09-26): fix the late line entry?
+
+Hasan's call after round 1: find where the lag comes from (train only), try to fix it, give
+the fix one fresh test look with criteria set beforehand, and, whatever the verdict, put
+the follower in the server behind `?words=ctc` so he can try it on his own recitation.
+
+## Where the lag comes from (train)
+
+`scripts/follow_eval.py --split train --diag` (log `data/cache/follow2_diag_log.txt`), the
+round-1 follower. **Entry lag** per truth word: the first 0.1 s tick, from 1 s before the
+word's forced-aligned start, that shows that word or a later one, minus the start (capped
+at +3 s). Line-first words are split by the silence before them.
+
+| train flowing (22 rec.) | word exact | line entry (human) | other words, median / p75 | line-first, gap < 0.3 s | 0.3-1 s | > 1 s |
+|---|---:|---:|---:|---:|---:|---:|
+| page mode | 35.4% | +0.12 s | +0.57 / +1.17 | +0.31 | −0.10 | −0.43 |
+| follower (round 1) | 58.2% | +0.97 s | +0.46 / +0.57 | +0.52 | +0.62 | +0.65 |
+| A1: 0.2 s right context | 68.5% | +0.79 s | +0.32 / +0.40 | +0.38 | +0.44 | +0.48 |
+| A1: 0.4 s right context | 70.9% | +0.70 s | +0.30 / +0.37 | +0.33 | +0.35 | +0.39 |
+| A1: 0.6 s right context | 71.7% | +0.68 s | +0.30 / +0.36 | +0.33 | +0.33 | +0.36 |
+| A2: true word as anchor | 58.2% | +0.97 s | +0.46 / +0.56 | +0.52 | +0.62 | +0.65 |
+| A4: no compute delay | 65.0% | +0.87 s | +0.36 / +0.47 | +0.42 | +0.52 | +0.55 |
+
+(line-first columns: medians; n = 95 / 1677 / 1132. The pause set gives the same picture:
++0.94 s round 1, +0.66 s with 0.6 s right context, A2 unchanged, A4 +0.84 s.)
+
+- **Human line starts come 0.30 s before the aligned first word** (median; p25 0.16, p75
+  0.48; both sets). DuaPlayer's annotators mark the breath/onset, not the first letter.
+  About a third of the lag is this offset, and nothing that waits for letters can remove it.
+- **The decision rule is not late (A3).** For line-first words, the step where the
+  follower moves is the step where the word's first letter first beats blank in a frame
+  after its aligned start: median 0.00 s, p25 and p75 also 0.00 (n = 2,988). So a softer
+  score (logsumexp instead of max) had nothing to win and wasn't built.
+- **The tracker is not the cause (A2).** Anchoring on the true word changes nothing.
+- **wav2vec2 is late at the window edge (A1): ~0.3 s.** With right context the letters
+  arrive earlier; the gain saturates at ~0.3 s of lag (and +13 pts word exact). Getting it
+  means waiting that long, so live it's a trade, not a fix.
+- **The compute delay costs its own length (A4):** 0.1 s → +0.1 s.
+- **Line starts are only ~0.15 s worse than any other word** (+0.62 vs +0.46 s), and the
+  length of the pause before them hardly matters. The follower isn't bad at lines; it is
+  evenly ~0.5 s behind every word, and at line starts that adds to the 0.3 s annotation offset.
+
+Budget for a line entry, flowing: 0.30 (human mark → first letter) + ~0.3 (model edge) +
+0.1 (compute) + ~0.1 (0.2 s step) + ~0.15 (line-first extra) ≈ the measured +0.97 s.
+Page mode is on time only because it guesses ahead (its lead), which is also why 30% of
+its line changes come more than 0.3 s early.
+
+## What was tried (train)
+
+All new options are `FollowerConfig` fields that default to round-1 behaviour:
+
+- **Faster scoring**: `ctc_align.end_scores` is numba-compiled (numpy fallback kept; parity
+  test on 500 random cases, max relative difference 4e-7). A 40 x 110 scoring call went from
+  0.30 ms to 0.004 ms. The round-1 train rows reproduce exactly (58.2% / 0.78 / +0.97 s).
+- **Line onset** (`onset_gap`, `onset_window` 0.3 s, `onset_confirm`): on the last word of a
+  line, letters in the latest 0.3 s after at least `onset_gap` s of blank move straight to the
+  next line's first word. `onset_confirm` also requires the tracker's lead position to be past
+  the current line.
+- **Hysteresis** (`confirm_steps`): a move back, or more than one word forward, must win this
+  many steps in a row. Aimed at the stock model's jerks.
+- `soft` (logsumexp scoring) was not added: the plan made it conditional on A3 ≥ 0.2 s, and A3 was 0.
+
+Grid: `onset_gap` {0, 0.15, 0.25, 0.4} x `onset_confirm` {0, 1} x `confirm_steps` {1, 2}
+(14 distinct settings) on four train sets: flowing and pauses, each with the fine-tuned and
+the stock CTC dumps (`dump_ctc.py --tag w2v-quran-stock --train-only`, `pause_eval.py build
+--split train --ctc-model rabah2026/...`). Log: `data/cache/follow2_tune_log.txt`.
+
+| train, fine-tuned CTC | exact (flow / pause) | jerks/min | line entry | > 0.3 s early | next line in pause |
+|---|---:|---:|---:|---:|---:|
+| page mode | 35.4 / 37.7% | 0.86 / 1.59 | +0.12 / +0.20 s | 30.6 / 29.7% | 39.4% |
+| round 1 (onset off, confirm 1) | 58.2 / 62.6% | 0.78 / 0.74 | +0.97 / +0.94 s | 1.1 / 2.5% | 2.2% |
+| confirm_steps 2 | 57.3 / 62.0% | 0.57 / 0.53 | +0.99 / +0.96 s | 0.7 / 1.9% | 1.5% |
+| onset 0.15 s | 55.0 / 59.0% | 10.35 / 9.18 | −0.54 / −0.32 s | 58.4 / 50.6% | 8.2% |
+| onset 0.25 s | 56.8 / 60.6% | 5.43 / 4.86 | +0.43 / +0.55 s | 28.0 / 26.4% | 7.7% |
+| onset 0.4 s | 57.5 / 61.3% | 3.41 / 3.08 | +0.77 / +0.76 s | 12.6 / 13.7% | 7.1% |
+| onset 0.4 s + confirm (lead) | 58.0 / 62.0% | 1.70 / 1.50 | +0.90 / +0.88 s | 3.3 / 5.0% | 5.5% |
+| onset 0.4 s + confirm + confirm_steps 2 | 57.5 / 60.9% | 0.84 / 0.76 | +0.92 / +0.90 s | 2.9 / 4.5% | 11.4% |
+
+| train, stock CTC | exact (flow / pause) | jerks/min | line entry | > 0.3 s early | next line in pause |
+|---|---:|---:|---:|---:|---:|
+| page mode | 35.4 / 37.7% | 0.86 / 1.59 | +0.12 / +0.20 s | 30.6 / 29.7% | 39.4% |
+| round 1 | 55.2 / 58.1% | 1.68 / 2.05 | +1.00 / +0.97 s | 4.1 / 10.6% | 11.7% |
+| confirm_steps 2 | 54.1 / 58.0% | 1.05 / 1.15 | +1.03 / +1.00 s | 2.9 / 7.7% | 8.3% |
+
+What each did:
+
+- **The onset rule fires inside words.** Line-final words are often drawn out, and CTC puts
+  blanks of 0.15-0.4 s inside them. "Letters after a gap" then fires before the reciter has
+  finished the line; ordinary scoring pulls the follower back, and it fires again. Hence the
+  early entries and 3-10 jerks/min. A 0.4 s gap cuts the line lag to +0.77 s, but still at
+  3.4 jerks/min.
+- **Gated on the tracker's lead** (`onset_confirm`), it is safe but gains only 0.05-0.09 s:
+  by the time page mode's lead is on the next line, the letters have usually arrived anyway.
+- **`confirm_steps` 2 does what it is for.** Jerks drop by about a quarter (fine-tuned) to a
+  third (stock). It adds ~0.02 s of lag. But combined with the onset rule it holds the
+  onset's own corrections back, and next-line-in-pause rises to 11-20%.
+
+## The go/no-go gate (set before the grid)
+
+Selection rule: qualify on both fine-tuned train sets with jerks ≤ page mode, next line in
+pause ≤ 10%, early entries ≤ page mode; then the lowest line-entry median. Only the two
+onset-off settings qualify. Every onset setting fails on jerks, except onset 0.4 s + confirm +
+confirm_steps 2, which fails next line in pause (11.4%). **Pick: the round-1 config**
+(+0.97 / +0.94 s, lower than confirm_steps 2's +0.99 / +0.96).
+
+| gate (train) | needed | pick |
+|---|---|---|
+| line entry median | ≤ +0.32 s flowing, ≤ +0.40 s pauses | **fail**: +0.97 / +0.94 s |
+| word exact | ≥ page mode + 5 pts | pass: +22.8 / +24.9 pts |
+| stock model vs page mode: exact, jerks, next line in pause, early | not worse on any | **fail** on jerks: 1.68 / 2.05 vs 0.86 / 1.59 |
+
+**Verdict: gate failed, no test look.** Test was not touched in round 2, so it keeps its one
+look for a future design. `FollowerConfig` defaults are unchanged (round 1).
+
+## Why this can't be tuned away
+
+The diagnosis says it plainly. The follower moves as soon as the letters are there (A3 = 0).
+The letters come ~0.6 s after the human line start: 0.3 s of annotation offset, plus ~0.3 s
+of model-edge latency. To enter a line on time, a display has to move *before* the letters
+come. That means guessing, as page mode does, and page mode pays for it with 30% early
+entries and 39% next-line-in-pause. Any evidence-driven rule fast enough to fire earlier
+reads blanks inside a drawn-out last word as a line break (the onset rows).
+
+That leaves a product choice, not a tuning one: for a reader, is a line change 0.6 s after
+the voice worse than one that is 0.3 s early a third of the time and jumps ahead in pauses?
+The ±0.3 s criterion treats late as the only failure. `?words=ctc` lets Hasan judge that by
+ear and eye.
+

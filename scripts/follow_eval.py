@@ -26,6 +26,7 @@ import argparse
 import bisect
 import itertools
 import json
+import pickle
 import sys
 import time
 from dataclasses import replace
@@ -45,10 +46,24 @@ from dua_recognition.follower import FollowerConfig, LocalFollower  # noqa: E402
 from dua_recognition.tracker import TrackerConfig  # noqa: E402
 
 CTC = ROOT / "data" / "cache" / "ctc"
+ITEMS = ROOT / "data" / "cache" / "follow_items"
 SMOOTH = {"ease": 1.0, "speed_scale": 1.2}  # page mode (web/app.js defaults)
 
 
-def load_set(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool, cfg, delay) -> list[dict]:
+def load_set(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool, cfg, delay,
+             cache: bool = True) -> list[dict]:
+    """load_set_uncached, pickled under data/cache/follow_items (the HMM replay takes minutes)."""
+    ctc = ctc_dir if pauses else ctc_tag
+    f = ITEMS / f"{asr}_{split}_{ctc}_{'pauses' if pauses else 'flowing'}_{delay:g}.pkl"
+    if cache and f.exists():
+        return pickle.loads(f.read_bytes())
+    items = load_set_uncached(ix, asr, split, ctc_tag, ctc_dir, pauses, cfg, delay)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(pickle.dumps(items))
+    return items
+
+
+def load_set_uncached(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool, cfg, delay) -> list[dict]:
     """Recordings with everything both lanes need; the HMM lane is replayed here, once."""
     items = []
     if not pauses:
@@ -93,18 +108,38 @@ def load_set(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool,
     return items
 
 
-def follow_updates(ix, it: dict, fcfg: FollowerConfig, hmm_delay: float, f_delay: float) -> list[tuple]:
-    """The follow lane's screen updates for one recording."""
+def follow_updates(ix, it: dict, fcfg: FollowerConfig, hmm_delay: float, f_delay: float, *, rc: int = 0,
+                   oracle_anchor: bool = False, steps: list | None = None) -> list[tuple]:
+    """The follow lane's screen updates for one recording.
+
+    Diagnostics (--diag): `rc` = n gives each step n hops of right context (window
+    k+n minus its last n*10 frames: the same audio, no frame later than t);
+    `oracle_anchor` anchors on the true word at t instead of the tracker; `steps`
+    (a list) collects (t, word) per step, before the compute delay."""
     z = np.load(it["ctc"])
     lp, nf, ts = z["lp"], z["n_frames"], z["t"]
     fol = LocalFollower(ix, fcfg)
     anchors = it["anchors"]
     at = [a[0] + hmm_delay for a in anchors]  # when each tracker result is available
+    lead_at = [u[0] for u in it["ups"]]  # page mode's (lead) position, as it reaches the screen
+    starts = [w[1] for w in it["good"]]
+    hop_frames = int(round((ts[1] - ts[0]) / 0.02)) if len(ts) > 1 else 10
     ups = []
     for k, t in enumerate(ts):
         j = bisect.bisect_right(at, t) - 1
         hmm_word = anchors[j][1] if j >= 0 else None
-        w = fol.step(lp[k, : nf[k]], float(t), hmm_word)
+        if oracle_anchor:
+            i = bisect.bisect_right(starts, t) - 1
+            hmm_word = it["good"][i][0] if i >= 0 else None
+        j = bisect.bisect_right(lead_at, t) - 1
+        lead_word = it["ups"][j][3] if j >= 0 else None
+        if rc and k + rc < len(ts):
+            x = lp[k + rc, : max(0, nf[k + rc] - rc * hop_frames)]
+        else:
+            x = lp[k, : nf[k]]
+        w = fol.step(x, float(t), hmm_word, lead_word=lead_word)
+        if steps is not None:
+            steps.append((float(t), w))
         if w is None:
             ups.append((t + f_delay, None, None, None, None, 0.0))
         else:
@@ -168,12 +203,113 @@ def score(ix, items, lane: str, fcfg=None, hmm_delay=0.5, f_delay=0.1) -> dict:
             "pause_next": float(np.mean(nxt)) if nxt else float("nan")}
 
 
+def _line_first(ix, w: int) -> bool:
+    return w == ix.dua_word_span[ix.word_dua[w]][0] or ix.word_segment[w] != ix.word_segment[w - 1]
+
+
+def word_entries(ix, it: dict, shown: list) -> list[tuple]:
+    """Per truth word: (first of its line?, gap before it in s, entry lag in s). Entry = the
+    first tick from start - 1 s showing that word or a later one (capped at +3 s)."""
+    ticks, good = it["ticks"], it["good"]
+    out = []
+    for i, (w, a, _, _) in enumerate(good):
+        gap = a - good[i - 1][2] if i else np.inf
+        lo, hi = np.searchsorted(ticks, [a - 1.0, a + 3.0])
+        lag = 3.0
+        for k in range(lo, min(hi, len(ticks))):
+            if shown[k] is not None and shown[k] >= w:
+                lag = float(ticks[k] - a)
+                break
+        out.append((_line_first(ix, w), float(gap), lag))
+    return out
+
+
+def evidence_gaps(ix, it: dict, steps: list) -> list[float]:
+    """A3. Per line-first truth word: the step where the follower reaches it, minus the first
+    step whose window has the word's first letter beating blank in a frame at or after the
+    word's aligned start. Both in step time (before the compute delay)."""
+    z = np.load(it["ctc"])
+    lp, nf, ts = z["lp"], z["n_frames"], z["t"]
+    first_letter = LocalFollower(ix, FollowerConfig())._word_letter
+    out = []
+    for w, a, _, _ in it["good"]:
+        if not _line_first(ix, w):
+            continue
+        c = int(ix.letters[first_letter[w]])
+        ev_t = mv_t = None
+        for k in range(int(np.searchsorted(ts, a)), len(ts)):
+            if ts[k] > a + 3.0:
+                break
+            f = lp[k, : nf[k]].astype(np.float32)
+            ft = ts[k] - 0.02 * (nf[k] - np.arange(nf[k]))  # frame start times
+            sel = ft >= a - 0.02
+            if (f[sel, c] > f[sel, 0]).any():
+                ev_t = float(ts[k])
+                break
+        for t, sw in steps:
+            if t >= a - 1.0 and sw is not None and sw >= w:
+                mv_t = t
+                break
+        if ev_t is not None and mv_t is not None and mv_t <= a + 3.0:
+            out.append(mv_t - ev_t)
+    return out
+
+
+def diag(ix, sets: dict, hmm_delay: float, f_delay: float) -> None:
+    """Where does the line-entry lag come from? (--diag; FollowerConfig defaults)."""
+    def q(x, p):
+        return f"{np.percentile(x, p):+.2f}" if len(x) else "n/a"
+
+    bins = [("gap < 0.3 s", 0.0, 0.3), ("gap 0.3-1 s", 0.3, 1.0), ("gap > 1 s", 1.0, np.inf)]
+    variants = [("follower (round 1)", {}, f_delay), ("A1 right context 0.2 s", {"rc": 1}, f_delay),
+                ("A1 right context 0.4 s", {"rc": 2}, f_delay), ("A1 right context 0.6 s", {"rc": 3}, f_delay),
+                ("A2 oracle anchor", {"oracle_anchor": True}, f_delay), ("A4 follow delay 0", {}, 0.0)]
+    for name, items in sets.items():
+        off = []
+        for it in items:
+            for t, s in it["lines"]:
+                ws = [g for g in it["good"] if int(ix.word_segment[g[0]]) == s]
+                if ws and abs(ws[0][1] - t) < 3.0:
+                    off.append(ws[0][1] - t)
+        print(f"\n== {name}: {len(items)} recordings; human line start -> aligned first word: "
+              f"median {q(off, 50)} s, p25 {q(off, 25)}, p75 {q(off, 75)} (n={len(off)})")
+        print("variant | exact | line entry (human) | other words med / p75 | "
+              + " | ".join(f"line-first, {b}: med / p75 (n)" for b, _, _ in bins))
+        for vname, kw, fd in [("hmm (page mode)", None, None)] + variants:
+            offs, ents, wents = [], [], []
+            for it in items:
+                if kw is None:
+                    r = we.replay_ticks(ix, it["dua"], it["ups"], it["good"], it["ticks"], SMOOTH)
+                else:
+                    ups = follow_updates(ix, it, FollowerConfig(), hmm_delay, fd, **kw)
+                    r = we.replay_ticks(ix, it["dua"], ups, it["good"], it["ticks"], None)
+                offs += r["offs"]
+                ents += [x for x in line_entries(ix, it, r["shown"]) if x is not None]
+                wents += word_entries(ix, it, r["shown"])
+            other = [g for f, _, g in wents if not f]
+            cells = []
+            for _, lo, hi in bins:
+                x = [g for f, gap, g in wents if f and lo <= gap < hi]
+                cells.append(f"{q(x, 50)} / {q(x, 75)} ({len(x)})")
+            print(f"{vname} | {np.mean(np.array(offs) == 0):.1%} | {np.median(ents):+.2f} s | "
+                  f"{q(other, 50)} / {q(other, 75)} | " + " | ".join(cells), flush=True)
+        gaps = []
+        for it in items:
+            steps = []
+            follow_updates(ix, it, FollowerConfig(), hmm_delay, f_delay, steps=steps)
+            gaps += evidence_gaps(ix, it, steps)
+        print(f"A3 decision minus evidence (line-first words, step time): median {q(gaps, 50)} s, "
+              f"p25 {q(gaps, 25)}, p75 {q(gaps, 75)} (n={len(gaps)})", flush=True)
+
+
 def parse_fw(v: str) -> FollowerConfig:
     kind, _, kv = v.partition(" ")
     kw = {k: float(x) for k, x in (a.split("=") for a in kv.split(",") if a)}
-    for k in ("max_jump", "back_words", "ahead_words"):
+    for k in ("max_jump", "back_words", "ahead_words", "confirm_steps"):
         if k in kw:
             kw[k] = int(kw[k])
+    if "onset_confirm" in kw:
+        kw["onset_confirm"] = bool(kw["onset_confirm"])
     return replace(FollowerConfig(), **kw)
 
 
@@ -200,12 +336,22 @@ def main() -> None:
     ap.add_argument("--delay", type=float, default=0.5, help="tracker (Whisper) delay, s")
     ap.add_argument("--follow-delay", type=float, default=0.1, help="follower compute delay, s")
     ap.add_argument("--grid", action="store_true", help="also run the tuning grid")
+    ap.add_argument("--diag", action="store_true",
+                    help="where the line-entry lag comes from: flowing + pause sets of --split")
+    ap.add_argument("--no-cache", action="store_true", help="rebuild the pickled eval set")
     ap.add_argument("variants", nargs="*", help='follower settings: "fw k=v,..."')
     args = ap.parse_args()
     cfg = TrackerConfig()
     ix = ev.CorpusIndex(ev.load_all())
     t0 = time.time()
-    items = load_set(ix, args.asr, args.split, args.ctc, args.ctc_dir or args.ctc, args.pauses, cfg, args.delay)
+    if args.diag:
+        sets = {k: load_set(ix, args.asr, args.split, args.ctc, args.ctc_dir or args.ctc, p, cfg, args.delay,
+                            cache=not args.no_cache) for k, p in (("flowing", False), ("pauses", True))}
+        print(f"diag ({args.split}), loaded in {time.time() - t0:.0f} s")
+        diag(ix, sets, args.delay, args.follow_delay)
+        return
+    items = load_set(ix, args.asr, args.split, args.ctc, args.ctc_dir or args.ctc, args.pauses, cfg, args.delay,
+                     cache=not args.no_cache)
     print(f"{len(items)} recordings ({args.split}{', pauses' if args.pauses else ''}), tracker ASR {args.asr}, "
           f"CTC {args.ctc}, delays {args.delay:g} / {args.follow_delay:g} s  (loaded in {time.time() - t0:.0f} s)")
     print(HEADER, flush=True)

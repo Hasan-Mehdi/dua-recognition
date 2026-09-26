@@ -28,6 +28,13 @@ def end_scores(lp: np.ndarray, r: np.ndarray) -> np.ndarray:
     the letters differ, as in CTC: a doubled letter needs a blank between).
     Free start: at frame 0 any L[j] or B[j] may be the first state.
     """
+    if _end_scores_jit is not None and r.size:
+        return _end_scores_jit(np.ascontiguousarray(lp, dtype=np.float32), np.ascontiguousarray(r, dtype=np.int64))
+    return end_scores_numpy(lp, r)
+
+
+def end_scores_numpy(lp: np.ndarray, r: np.ndarray) -> np.ndarray:
+    """end_scores, vectorized over letters (the fallback without numba)."""
     lp = lp.astype(np.float32)
     emit = lp[:, r]  # T x J
     blank = lp[:, 0]
@@ -42,6 +49,39 @@ def end_scores(lp: np.ndarray, r: np.ndarray) -> np.ndarray:
         L = np.maximum(L, enter) + emit[t]
         B = newB
     return np.maximum(L, B)
+
+
+def _end_scores_loop(lp, r):
+    """end_scores as plain loops, for numba (same float64 sums as the numpy path)."""
+    J = r.size
+    L = np.empty(J)
+    B = np.empty(J)
+    for j in range(J):
+        L[j] = lp[0, r[j]]
+        B[j] = lp[0, 0]
+    for t in range(1, lp.shape[0]):
+        bl = float(lp[t, 0])
+        for j in range(J - 1, -1, -1):  # right to left: L[j-1], B[j-1] are still frame t-1's
+            enter = NEG
+            if j > 0:
+                enter = B[j - 1]
+                if r[j] != r[j - 1] and L[j - 1] > enter:
+                    enter = L[j - 1]
+            nb = max(B[j], L[j]) + bl
+            L[j] = max(L[j], enter) + float(lp[t, r[j]])
+            B[j] = nb
+    out = np.empty(J)
+    for j in range(J):
+        out[j] = max(L[j], B[j])
+    return out
+
+
+try:
+    from numba import njit
+
+    _end_scores_jit = njit(cache=True, nogil=True)(_end_scores_loop)
+except ImportError:  # numba is optional: end_scores_numpy gives the same answer, slower
+    _end_scores_jit = None
 
 
 def squeeze_blanks(lp: np.ndarray, p_blank: float = 0.95) -> np.ndarray:
