@@ -3,59 +3,59 @@
  "split": "test",
  "summary": {
   "matcher": {
-   "line_acc": 0.43251195292386907,
-   "line_acc_pm1": 0.721588819418904,
-   "dua_acc": 0.8751746965796249,
-   "wrong_dua_shown": 0.1210003677822729,
+   "line_acc": 0.4274365575579257,
+   "line_acc_pm1": 0.714233173961015,
+   "dua_acc": 0.8667157043030526,
+   "wrong_dua_shown": 0.12945936005884517,
    "refrain_acc": 0.0578915295551493,
-   "lag_median_s": 3.625,
-   "lines_missed": 0.1548839719373988,
+   "lag_median_s": 3.6310000000000286,
+   "lines_missed": 0.15812196438208312,
    "hours": 3.776388888888889,
-   "jumps_per_min": 4.316292754689224
+   "jumps_per_min": 4.08679661640309
   },
   "tracker": {
-   "line_acc": 0.8165502022802501,
-   "line_acc_pm1": 0.9639573372563442,
-   "dua_acc": 0.9645457888929754,
-   "wrong_dua_shown": 0.008238322912835602,
-   "refrain_acc": 0.8226691042047533,
-   "lag_median_s": 1.3824999999999932,
+   "line_acc": 0.8149319602795145,
+   "line_acc_pm1": 0.961456417800662,
+   "dua_acc": 0.9616770871643987,
+   "wrong_dua_shown": 0.004339830820154469,
+   "refrain_acc": 0.8263254113345521,
+   "lag_median_s": 1.3799999999999955,
    "lines_missed": 0.0124123043712898,
    "hours": 3.776388888888889,
-   "jumps_per_min": 0.035307098197866864
+   "jumps_per_min": 0.03972048547260022
   },
   "oracle": {
-   "line_acc": 0.8317763883780802,
-   "line_acc_pm1": 0.9908789996322177,
-   "dua_acc": 1.0,
+   "line_acc": 0.8256712026480324,
+   "line_acc_pm1": 0.9782272894446488,
+   "dua_acc": 0.9825671202648032,
    "wrong_dua_shown": 0.0,
    "refrain_acc": 0.8269347958561852,
-   "lag_median_s": 1.372000000000014,
-   "lines_missed": 0.004317323259579061,
+   "lag_median_s": 1.375,
+   "lines_missed": 0.0021586616297895305,
    "hours": 3.776388888888889,
-   "jumps_per_min": 0.1456417800662008
+   "jumps_per_min": 0.08826774549466716
   }
  },
  "identification": {
   "3": {
-   "classifier": 0.696875,
-   "tracker": 0.846875
+   "classifier": 0.65625,
+   "tracker": 0.621875
   },
   "5": {
-   "classifier": 0.69375,
-   "tracker": 0.915625
+   "classifier": 0.678125,
+   "tracker": 0.8125
   },
   "10": {
-   "classifier": 0.909375,
-   "tracker": 0.946875
+   "classifier": 0.884375,
+   "tracker": 0.90625
   },
   "20": {
-   "classifier": 0.94375,
-   "tracker": 0.98125
+   "classifier": 0.928125,
+   "tracker": 0.95625
   },
   "30": {
-   "classifier": 0.971875,
-   "tracker": 0.984375
+   "classifier": 0.94375,
+   "tracker": 0.965625
   }
  }
 }
