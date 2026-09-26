@@ -30,4 +30,8 @@ data/duasorg/
 data/duasorg_timed/
 data/untimed/
 # personal test recordings (voice) stay local
+data/sessions/
 /*.mp4
+data/fatemah/
+data/usertest/
+STATUS.md

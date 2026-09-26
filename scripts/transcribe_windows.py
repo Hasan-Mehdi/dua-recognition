@@ -70,11 +70,12 @@ def _youtube(dua) -> list[Recording]:
     return out
 
 
-def _untimed(dua) -> list[Recording]:
+def _untimed(dua, src: Path | None = None) -> list[Recording]:
     """Untimed recordings (scripts/fetch_duasorg.py untimed) that the voice check
     put on the train side; test and holdout voices are never labelled for training."""
     out = []
-    for meta_path in sorted((UNTIMED / dua.id).glob("*.json")) if (UNTIMED / dua.id).exists() else []:
+    src = src or UNTIMED
+    for meta_path in sorted((src / dua.id).glob("*.json")) if (src / dua.id).exists() else []:
         if meta_path.name.endswith(".labels.json"):
             continue
         m = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -87,6 +88,20 @@ def _untimed(dua) -> list[Recording]:
 
 
 UNTIMED = ROOT / "data" / "untimed" / "duasorg"
+
+
+def _streams(src: Path) -> list[Recording]:
+    """A flat folder of long unlabelled streams (<id>.<ext> + <id>.json with "duration"),
+    e.g. data/fatemah/audio from scripts/fetch_fatemah.py. Which du'a is unknown."""
+    out = []
+    for meta_path in sorted(src.glob("*.json")):
+        m = json.loads(meta_path.read_text(encoding="utf-8"))
+        audio = [p for p in src.glob(f"{meta_path.stem}.*") if p.suffix != ".json" and not p.name.endswith(".part")]
+        if not audio:
+            continue
+        dur = float(m.get("duration") or 0)
+        out.append(Recording(f"{src.parent.name[:2]}-{meta_path.stem}", "", "stream", audio[0], dur, [], dur))
+    return out
 
 
 def untimed_id(meta_path: Path) -> str:
@@ -111,6 +126,10 @@ def main() -> None:
                     help="transcribe data/youtube/* instead (teacher pass for align_offline.py)")
     ap.add_argument("--untimed", action="store_true",
                     help="transcribe data/untimed/duasorg/* (train voices) instead (teacher pass for align_offline.py)")
+    ap.add_argument("--source", choices=["duaplayer", "user"], default="duaplayer",
+                    help="user: the real-user recordings in data/usertest (scripts/user_label.py)")
+    ap.add_argument("--stream-dir", type=Path,
+                    help="transcribe every stream in this flat folder instead (e.g. data/fatemah/audio)")
     args = ap.parse_args()
     tag = args.tag or Path(args.model).name
     if args.constrain:
@@ -120,10 +139,14 @@ def main() -> None:
     load_model(args.model, args.device)
 
     duas = load_all()
-    for dua in duas.values():
-        if args.duas and dua.id not in args.duas:
+    groups = [(None, _streams(args.stream_dir))] if args.stream_dir else [(d, None) for d in duas.values()]
+    for dua, recs in groups:
+        if dua is not None and args.duas and dua.id not in args.duas:
             continue
-        recs = _youtube(dua) if args.youtube else _untimed(dua) if args.untimed else load_recordings(dua)
+        if recs is None:
+            recs = (_youtube(dua) if args.youtube else _untimed(dua) if args.untimed
+                    else load_recordings(dua, cache_dir=ROOT / "data" / "usertest", extra=False) if args.source == "user"
+                    else load_recordings(dua))
         if args.test_only:
             recs = [r for r in recs if is_test(r.reciter)]
         for rec in recs:
@@ -143,7 +166,7 @@ def main() -> None:
                 chunk = times[b : b + args.batch]
                 wins = [y[int(max(0.0, t - args.window) * SR) : int(t * SR)] for t in chunk]
                 texts += transcribe_batch(wins, model=args.model,
-                                          constrain_to=" ".join(dua.texts) if args.constrain else None)
+                                          constrain_to=" ".join(dua.texts) if args.constrain and dua else None)
             # Record whether the newest audio held speech, so evaluate.py --vad can
             # apply the live VAD gate to these texts after the fact.
             speech = [speech_in_tail(y[int(max(0.0, t - args.window) * SR) : int(t * SR)]) for t in times]
@@ -152,7 +175,7 @@ def main() -> None:
             tmp.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
             tmp.replace(out)
             took = time.time() - t0
-            print(f"{dua.id:28s} {rec.reciter[:20]:20s} {len(rows):5d} windows  "
+            print(f"{rec.dua_id or rec.audio_id:28s} {rec.reciter[:20]:20s} {len(rows):5d} windows  "
                   f"{took:6.1f}s  ({took / len(rows) * 1000:.0f} ms/window)", flush=True)
 
 
