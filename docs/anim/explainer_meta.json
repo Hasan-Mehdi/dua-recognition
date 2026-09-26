@@ -79,145 +79,145 @@
   [
    [
     "Dua Tawassul",
-    0.6631381467876009
+    0.30070994616299546
    ],
    [
-    "Ziyarat al-Khamis",
-    0.02039318211633063
+    "Ziyarat Imam Mahdi (atfs) (brief)",
+    0.012322857063492416
    ],
    [
-    "Ziyarat Ashura",
-    0.015674559467219976
+    "Dua - Ya Allahhu",
+    0.010645519675757682
    ],
    [
-    "Ziyarat Jummah",
-    0.014539385750191125
+    "Ziyarat of Imam Ali Ibne Musa Reza (a.s.)",
+    0.009978515601463423
    ]
   ],
   [
    [
     "Dua Tawassul",
-    0.9995792837332843
+    0.998345878016179
    ],
    [
     "Ziyarat Ashura",
-    5.7025991518535994e-05
+    5.687293691398537e-05
    ],
    [
-    "Ziyarat Waritha",
-    2.7233304440383336e-05
+    "Holy Prophet's Dua",
+    5.4959480969648996e-05
    ],
    [
-    "Ziyarat al-Khamis",
-    2.6423724430436873e-05
+    "Dua - Ya Allahhu",
+    5.029254262084614e-05
    ]
   ],
   [
    [
     "Dua Tawassul",
-    0.9930253283853374
+    0.9997003430148186
    ],
    [
-    "Ziyarat Ashura",
-    0.000124821388377673
-   ],
-   [
-    "Eid Tabkir",
-    0.00010121098728322573
+    "Ziyarat of Imam Ali(as)",
+    2.6575629372853884e-05
    ],
    [
     "Ziyarat al-Ahad",
-    9.665397795582381e-05
+    2.149598222263606e-05
+   ],
+   [
+    "Isteghasa (seeking aid) - Imam Mahdi (atfs)",
+    1.8011611757168995e-05
    ]
   ],
   [
    [
     "Dua Tawassul",
-    0.9880117848507398
+    0.9933339089207288
    ],
    [
-    "Ziyarat Ashura",
-    0.00017737880663849033
-   ],
-   [
-    "Eid Tabkir",
-    0.0001695164208915279
+    "Ziyarat of Imam Ali(as)",
+    3.660946739005583e-05
    ],
    [
     "Ziyarat al-Ahad",
-    0.00014929933991796247
+    3.338482760486461e-05
+   ],
+   [
+    "Isteghasa (seeking aid) - Imam Mahdi (atfs)",
+    2.9725190698243252e-05
    ]
   ],
   [
    [
     "Dua Tawassul",
-    0.9906654133699342
+    0.9935448013981926
    ],
    [
-    "Eid Tabkir",
-    0.0001603440797561988
+    "Ziyarat of Imam Ali(as)",
+    2.6281165061532423e-05
    ],
    [
     "Ziyarat Ashura",
-    0.0001360956360061957
+    2.2068419109172852e-05
    ],
    [
-    "Allahumma al'an qatala",
-    0.00011815250086971887
+    "Isteghasa (seeking aid) - Imam Mahdi (atfs)",
+    2.1785661117941027e-05
    ]
   ],
   [
    [
     "Dua Tawassul",
-    0.9896111901047954
+    0.9918779741480952
    ],
    [
     "Eid Tabkir",
-    0.0001663098207684665
+    2.2975792133315375e-05
    ],
    [
-    "Dua Allah'humma Adhkil Ala",
-    0.00015178720543394518
-   ],
-   [
-    "Allahumma al'an qatala",
-    0.00014785959721376073
-   ]
-  ],
-  [
-   [
-    "Dua Tawassul",
-    0.9879945959505776
-   ],
-   [
-    "Eid Tabkir",
-    0.00016925742153233106
-   ],
-   [
-    "Dua Allah'humma Adhkil Ala",
-    0.00015791447358400737
-   ],
-   [
-    "Allahumma al'an qatala",
-    0.00015368130226460212
-   ]
-  ],
-  [
-   [
-    "Dua Tawassul",
-    0.9913793958861115
-   ],
-   [
-    "Eid Tabkir",
-    0.00013616002433512858
-   ],
-   [
-    "Dua Allah'humma Adhkil Ala",
-    0.00011118256048581564
+    "Ziyarat of Imam Ali(as)",
+    2.2715506160403516e-05
    ],
    [
     "Ziyarat Ashura",
-    0.0001106797013633575
+    2.247792569767975e-05
+   ]
+  ],
+  [
+   [
+    "Dua Tawassul",
+    0.9898406488127904
+   ],
+   [
+    "Eid Tabkir",
+    2.4673118763506793e-05
+   ],
+   [
+    "Ziyarat Ashura",
+    2.4627584975006545e-05
+   ],
+   [
+    "Isteghasa (seeking aid) - Imam Mahdi (atfs)",
+    2.4072826966168503e-05
+   ]
+  ],
+  [
+   [
+    "Dua Tawassul",
+    0.992498742610809
+   ],
+   [
+    "Eid Tabkir",
+    2.078035777518223e-05
+   ],
+   [
+    "Tahlilaat (hymns of God's unity)",
+    1.859285117211966e-05
+   ],
+   [
+    "Dua 3 for 21st Ramadan",
+    1.8035031768681686e-05
    ]
   ]
  ],
@@ -231,5 +231,6 @@
   "37": "وَقَدَّمْنَاكَ بَيْنَ يَدَيْ حَاجَاتِنَا",
   "38": "يَا وَجِيهًا عِندَ اللَّهِ اشْفَعْ لَنَا عِندَ اللَّهِ"
  },
- "t_end": 296.0
+ "t_end": 296.0,
+ "n_texts": 506
 }

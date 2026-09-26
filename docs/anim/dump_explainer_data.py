@@ -80,9 +80,20 @@ def main() -> None:
         "ident": ident,
         "lines": {int(x.id): x.arabic for x in duas["dua-tawassul"].segments if 31 <= x.id <= 38},
         "t_end": t_end,
+        "n_texts": len(duas),
     }
     (HERE / "explainer_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"line {meta['argmax_seg']} (human label {meta['truth_seg']})")
+
+    # Real audio for a local, with-sound render (manim ... with DUA_EXPLAINER_AUDIO=1).
+    # It goes to the ignored cache: the recordings belong to DuaPlayer and its reciters.
+    import subprocess
+    media = ROOT / "data" / "cache" / "media"
+    media.mkdir(parents=True, exist_ok=True)
+    for name, secs in (("explainer_hook.wav", 11.5), ("explainer_window.wav", 6.0)):
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{t_end - secs:.2f}", "-t", f"{secs:.2f}",
+                        "-i", str(rec.path), "-af", f"afade=t=in:d=0.3,afade=t=out:st={secs - 0.8:.2f}:d=0.8",
+                        "-ac", "1", "-ar", "44100", str(media / name)], check=True)
 
 
 if __name__ == "__main__":
