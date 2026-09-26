@@ -2,7 +2,9 @@
 //   server engine: audio streams to app/server.py over a WebSocket
 //   device engine: Whisper runs in a Web Worker, tracker.js in the page;
 //                  nothing leaves the device (used when there's no server)
-import { CorpusIndex, Tracker } from "./tracker.js";
+import { CorpusIndex, DEFAULTS, RECITER, Tracker } from "./tracker.js";
+import { Highlight } from "./display.js";
+import { VoiceLevel, voiceBandDb } from "./voice.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -13,11 +15,14 @@ class ServerEngine {
   kind = "server";
   async prepare() {}
   async start(onUpdate) {
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    // ?lead=0 turns off showing the predicted current position (for comparing by feel).
+    const q = ["lead", "pauses"].filter((k) => params.get(k) === "0").map((k) => `${k}=0`)
+      .concat(`follow=${following()}`).join("&");
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws${q ? "?" + q : ""}`);
     ws.binaryType = "arraybuffer";
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
-      onUpdate({ dua: m.dua, segment: m.segment, token: m.token, pause: m.pause_at_line_end, heard: m.heard, ms: m.step_ms,
+      onUpdate({ dua: m.dua, segment: m.segment, token: m.token, speed: m.speed, unknown: m.unknown, pause: m.pause_at_line_end, heard: m.heard, ms: m.step_ms,
         candidates: (m.candidates || []).map((c) => ({ id: c.id, p: c.p })) });
     };
     await new Promise((ok, err) => ((ws.onopen = ok), (ws.onerror = err)));
@@ -28,6 +33,9 @@ class ServerEngine {
   }
   lock(duaId) {
     this.ws?.send(`lock:${duaId}`);
+  }
+  follow(mode) {
+    if (this.ws?.readyState === 1) this.ws.send(`follow:${mode}`);
   }
   stop() {
     this.ws?.close();
@@ -60,11 +68,11 @@ class DeviceEngine {
   }
   lock(duaId) {
     // Follow only this du'a: identification is skipped entirely.
-    this.tracker = new Tracker(new CorpusIndex(this.corpus.filter((d) => d.id === duaId)));
+    this.tracker = new Tracker(new CorpusIndex(this.corpus.filter((d) => d.id === duaId)), followConfig());
   }
   async start(onUpdate) {
     this.onUpdate = onUpdate;
-    this.tracker = new Tracker(new CorpusIndex(this.corpus));
+    this.tracker = new Tracker(new CorpusIndex(this.corpus), followConfig());
     Object.assign(this, { filled: 0, total: 0, lastSent: 0, lastUpdate: 0, busy: false, live: true });
   }
   push(chunk) {
@@ -91,10 +99,19 @@ class DeviceEngine {
     if (!this.live) return;
     const dt = (data.id - this.lastUpdate) / SR;
     this.lastUpdate = data.id;
-    const p = this.tracker.update(data.text, dt);
-    this.onUpdate({ dua: p.dua, segment: p.segment, token: p.token, pause: p.atLineEnd && !data.text, heard: data.text, ms: data.ms,
+    // Audio captured while Whisper ran is how far the reciter has moved on: show where they are now.
+    const delay = (this.total - data.id) / SR;
+    const lead = params.get("lead") === "0" ? 0 : delay + this.tracker.cfg.displayLead;
+    const quiet = params.get("pauses") === "0" ? 0 : data.quiet ?? 0; // seconds the reciter has been silent (asr-worker.js)
+    const p = this.tracker.update(data.text, dt, lead, quiet);
+    const still = quiet > this.tracker.cfg.stillAfter; // they've stopped: so does the gliding highlight
+    this.onUpdate({ dua: p.dua, segment: p.segment, token: p.token, speed: still ? 0 : this.tracker.speed, unknown: this.tracker.null, pause: p.atLineEnd && (!data.text || still), heard: data.text, ms: data.ms,
       candidates: p.candidates.map(([id, prob]) => ({ id, p: prob })) });
     this._maybeSend();
+  }
+  follow() {
+    const { leadCrossQuiet, retreatAfter } = DEFAULTS;
+    Object.assign(this.tracker.cfg, { leadCrossQuiet, retreatAfter }, followConfig());
   }
   stop() {
     this.live = false;
@@ -131,17 +148,84 @@ async function init() {
   $("menu-btn").onclick = () => ($("menu").hidden = !$("menu").hidden);
   $("opt-en").onchange = (e) => document.body.classList.toggle("no-en", !e.target.checked);
   $("opt-tl").onchange = (e) => document.body.classList.toggle("no-tl", !e.target.checked);
-  $("opt-full").onchange = (e) => {
-    document.body.classList.toggle("show-full", e.target.checked);
-    $("full").hidden = !e.target.checked;
-    scrollFull();
+  $("mode-page").onclick = () => setMajlis(false);
+  $("mode-majlis").onclick = () => setMajlis(true);
+  setMajlis(params.has("watch") || params.has("majlis") || stored("majlis") === "1", false);
+  // Majlis hides the top bar; bring it back briefly when someone moves or taps.
+  let chromeTimer;
+  const showChrome = () => {
+    document.body.classList.add("chrome");
+    clearTimeout(chromeTimer);
+    chromeTimer = setTimeout(() => $("menu").hidden && document.body.classList.remove("chrome"), 3000);
   };
+  addEventListener("pointermove", showChrome);
+  addEventListener("pointerdown", showChrome);
   if (params.has("debug")) $("debug").hidden = false;
   // Rooms are relayed by app/server.py, so sharing needs it (not a static host).
   $("share").hidden = mode?.mode !== "server";
   $("share").onclick = share;
   $("share-card").onclick = (e) => e.target === $("share-card") && ($("share-card").hidden = true);
   if (params.get("watch")) watch(params.get("watch"));
+}
+
+function stored(key, value) {
+  // Only a convenience: storage can be missing (private windows) or throw.
+  try {
+    if (value === undefined) return localStorage.getItem(key);
+    localStorage.setItem(key, value);
+  } catch {}
+  return null;
+}
+
+// Page mode: someone reading along, who stops now and then; the display waits
+// for them. Majlis mode: a reciter who flows through their breaths (tracker.js RECITER).
+function following() {
+  return document.body.classList.contains("majlis") ? "reciter" : "reading";
+}
+
+function followConfig() {
+  return following() === "reciter" ? RECITER : {};
+}
+
+function setMajlis(on, remember = true) {
+  document.body.classList.toggle("majlis", on);
+  state.engine?.follow?.(following());
+  $("mode-page").setAttribute("aria-checked", String(!on));
+  $("mode-majlis").setAttribute("aria-checked", String(on));
+  if (remember) stored("majlis", on ? "1" : "0");
+  // A projector wants the whole screen; ask, but carry on if refused.
+  if (on && remember && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+  if (!on && remember && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  scrollToNow();
+}
+
+// When and where each du'a is customarily recited, shown under its title.
+const NOTES = {
+  "dua-kumayl": "Thursday nights · taught by Imam Ali (a) to Kumayl ibn Ziyad",
+  "dua-iftitah": "Every night of Ramadan",
+  "dua-abu-hamza-thumali": "Pre-dawn in Ramadan · from Imam Zayn al-Abidin (a)",
+  "dua-baha": "Pre-dawn in Ramadan",
+  "dua-arafat": "The Day of Arafah · from Imam Husayn (a)",
+  "dua-nudbah": "Friday mornings and the two Eids",
+  "dua-aahad": "Each morning, for Imam al-Mahdi (a)",
+  "dua-jawshan-kabir": "The nights of Qadr",
+  "dua-mujeer": "The 13th, 14th and 15th nights of Ramadan",
+  "dua-makaramakhlaq": "Al-Sahifa al-Sajjadiyya, 20",
+  "dua-munajat-taibeen": "The Fifteen Whispered Prayers, 1 · Imam Zayn al-Abidin (a)",
+  "dua-simaat": "The last hour of Friday",
+  "dua-tasbih-suhoor": "Suhoor in Ramadan",
+  "ziyarat-ashura": "The Day of Ashura, and any day",
+};
+const WEEKDAYS = { saturday: "Saturday", sunday: "Sunday", monday: "Monday", tuesday: "Tuesday",
+  wednesday: "Wednesday", thursday: "Thursday", friday: "Friday" };
+
+function noteFor(id) {
+  if (NOTES[id]) return NOTES[id];
+  const day = id.match(/^(?:dua|ziyarat)-(\w+day)$/)?.[1];
+  if (WEEKDAYS[day]) return `Recited on ${WEEKDAYS[day]}`;
+  const r = id.match(/^dua-ramadan-(\d+)(-night)?$/);
+  if (r) return `${r[2] ? "Night" : "Day"} ${r[1]} of Ramadan`;
+  return "";
 }
 
 // -- majlis mode: one phone listens, other screens follow -------------------------
@@ -194,7 +278,7 @@ function watch(code) {
   document.body.classList.add("watching");
   $("dua-en").textContent = "Waiting for the reciter";
   setState("listening");
-  $("now-tl").textContent = `Following room ${code.toUpperCase()}`;
+  $("listen-msg").textContent = `Following room ${code.toUpperCase()}`;
   const connect = () => {
     const ws = new WebSocket(`${wsBase()}/ws/room/${encodeURIComponent(code)}`);
     ws.onmessage = (e) => {
@@ -289,18 +373,67 @@ async function begin(makeSource) {
   const node = new AudioWorkletNode(state.ctx, "capture");
   node.port.onmessage = (e) => state.engine.push(e.data);
   source.connect(node);
+  // Feeds the listening star (meter below); a dead end, like the capture node.
+  state.analyser ??= new AnalyserNode(state.ctx, { fftSize: 2048, smoothingTimeConstant: 0 });
+  source.connect(state.analyser);
   Object.assign(state, { node, source, dua: null, segment: null, token: null, listeningSince: Date.now() });
   showListening();
+  meter();
+}
+
+// While the du'a is being found, the star answers the reciter's voice: it glows
+// and swells as they recite, turns a little faster, and breathes when they pause.
+// voice.js turns the microphone into a calm 0..1 level; here a soft spring sits
+// between that level and the size, and only transform and opacity change, which
+// the compositor animates without repainting.
+function meter() {
+  const girih = document.querySelector(".girih");
+  const glow = document.querySelector(".voice-glow");
+  const { analyser } = state;
+  const spectrum = new Float32Array(analyser.frequencyBinCount);
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const voice = new VoiceLevel();
+  const debug = params.has("debug") && $("latency");
+  let size = 0, sizeV = 0; // spring toward the level
+  let spin = 3, angle = 0; // deg/s and deg
+  let last = performance.now();
+  const frame = (now) => {
+    if (document.body.dataset.state !== "listening" || !state.source) {
+      girih.style.transform = glow.style.opacity = "";
+      return;
+    }
+    const dt = Math.min(0.1, (now - last) / 1000); // a background tab can stall for seconds
+    last = now;
+    analyser.getFloatFrequencyData(spectrum);
+    const db = voiceBandDb(spectrum, state.ctx.sampleRate, analyser.fftSize);
+    const level = voice.update(db, dt);
+    if (debug) debug.textContent = `mic ${db.toFixed(0)} dB · room ${voice.floor.toFixed(0)} · voice ${voice.peak.toFixed(0)} · level ${level.toFixed(2)}`;
+
+    // Slightly underdamped spring (k = 120, damping ratio 0.8): settles with a hint of give.
+    sizeV += (120 * (level - size) - 2 * 0.8 * Math.sqrt(120) * sizeV) * dt;
+    size += sizeV * dt;
+    spin += (3 + 24 * level - spin) * (1 - Math.exp(-dt / 0.5)); // drifts at 3 deg/s, up to 27 while reciting
+    angle = (angle + spin * dt) % 360;
+
+    glow.style.opacity = Math.min(1, level * 1.15).toFixed(3);
+    if (!still) {
+      const breath = 0.015 * Math.sin((now / 1000) * (2 * Math.PI / 4.5)) * (1 - level);
+      girih.style.transform = `rotate(${angle.toFixed(2)}deg) scale(${(1 + 0.12 * size + breath).toFixed(4)})`;
+    }
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
 }
 
 function end() {
   const { node, source, stream } = state;
   if (source && node) source.disconnect(node);
+  if (source && state.analyser) source.disconnect(state.analyser);
   if (source === state.mediaSource) $("player").pause();
   stream?.getTracks().forEach((t) => t.stop());
   state.engine?.stop();
   if (state.room?.readyState === 1) state.room.send(JSON.stringify({ ended: true }));
-  Object.assign(state, { node: null, source: null, stream: null, dua: null, segment: null, chosen: null });
+  Object.assign(state, { node: null, source: null, stream: null, dua: null, segment: null, chosen: null, hl: null });
   $("guesses").hidden = true;
   $("menu").hidden = true;
   $("hint").textContent = "Tap to begin";
@@ -313,8 +446,9 @@ function showListening() {
   $("dua-ar").textContent = "";
   $("dua-en").textContent = "Listening";
   $("progress").style.width = "0";
-  $("prev").textContent = $("next").textContent = $("now-ar").textContent = $("now-en").textContent = "";
-  $("now-tl").textContent = "Begin reciting";
+  $("text").replaceChildren();
+  $("folio-head").hidden = true;
+  $("listen-msg").textContent = "Begin reciting";
 }
 
 function render(u) {
@@ -326,7 +460,8 @@ function render(u) {
   if (!u.dua) {
     if (state.dua) return; // hold the last place through a brief lapse in confidence
     const waited = Date.now() - state.listeningSince;
-    if (waited > 15000) $("now-tl").textContent = "Keep reciting, I'm finding your place";
+    if (waited > 10000 && u.unknown > 0.9) $("listen-msg").textContent = "I don't know this du'a yet";
+    else if (waited > 15000) $("listen-msg").textContent = "Keep reciting, I'm finding your place";
     showGuesses(waited > 5000 ? u.candidates : []);
     return;
   }
@@ -337,12 +472,12 @@ function render(u) {
     state.segment = null;
     $("dua-ar").textContent = dua.name_ar;
     $("dua-en").textContent = dua.name_en;
-    buildFull(dua);
+    buildText(dua);
     setState("following");
   }
   if (u.segment !== state.segment) moveTo(dua, u.segment);
-  paintWords(u.token);
-  $("next").classList.toggle("coming", !!u.pause);
+  glide(u);
+  state.lines.get(u.segment + 1)?.classList.toggle("coming", !!u.pause);
 }
 
 // -- choosing a du'a --------------------------------------------------------------
@@ -367,6 +502,8 @@ function fillPicker(query) {
       const b = document.createElement("button");
       const en = document.createElement("span");
       en.textContent = d.name_en;
+      const note = noteFor(d.id);
+      if (note) en.append(Object.assign(document.createElement("span"), { className: "note", textContent: note }));
       const ar = document.createElement("span");
       ar.className = "ar";
       ar.lang = "ar";
@@ -385,12 +522,14 @@ function fillPicker(query) {
 
 function showGuesses(candidates) {
   const likely = candidates.filter((c) => c.p >= 0.08).slice(0, 3);
+  const top = likely[0]?.p || 1;
   $("guesses").hidden = !likely.length;
   $("guess-chips").replaceChildren(
     ...likely.map((c) => {
       const d = state.duas[c.id];
       const b = document.createElement("button");
       b.className = "chip";
+      b.style.opacity = (0.45 + 0.55 * (c.p / top)).toFixed(2); // the likeliest stands out as it firms up
       b.textContent = d.name_en;
       const ar = document.createElement("span");
       ar.className = "ar";
@@ -405,71 +544,113 @@ function showGuesses(candidates) {
   );
 }
 
-function lineText(dua, id) {
-  return dua.segments.find((s) => s.id === id)?.ar ?? "";
+const arabicNumber = new Intl.NumberFormat("ar-EG");
+
+// A verse-end rosette carrying the line number, as in a mushaf.
+function marker(n) {
+  const mark = document.createElement("span");
+  mark.className = "mark";
+  mark.setAttribute("aria-hidden", "true");
+  mark.innerHTML = '<svg viewBox="-50 -50 100 100"><use href="#rosette" x="-50" y="-50" width="100" height="100"/></svg>';
+  mark.append(Object.assign(document.createElement("b"), { textContent: arabicNumber.format(n) }));
+  return mark;
+}
+
+// The whole du'a on one page; the recited line grows and brightens as it's reached.
+function buildText(dua) {
+  $("head-ar").textContent = dua.name_ar;
+  $("head-en").textContent = dua.name_en;
+  $("head-note").textContent = noteFor(dua.id);
+  $("folio-head").hidden = false;
+  state.lines = new Map();
+  $("text").replaceChildren(
+    ...dua.segments.map((s, i) => {
+      const ln = document.createElement("div");
+      ln.className = "ln";
+      ln.dataset.i = i;
+      const ar = Object.assign(document.createElement("p"), { className: "ar", lang: "ar" });
+      ar.append(s.ar, " ", marker(i + 1));
+      const inner = document.createElement("div");
+      inner.append(
+        Object.assign(document.createElement("p"), { className: "tl", textContent: s.tl || "" }),
+        Object.assign(document.createElement("p"), { className: "en", textContent: s.en || "" }),
+      );
+      const gloss = Object.assign(document.createElement("div"), { className: "gloss" });
+      gloss.append(inner);
+      ln.append(ar, gloss);
+      state.lines.set(s.id, ln);
+      return ln;
+    }),
+  );
+}
+
+// Only the line being recited is split into words; the rest stay plain text.
+function setWords(ln, split) {
+  const ar = ln.querySelector(".ar");
+  const text = state.duas[state.dua].segments[ln.dataset.i].ar;
+  const words = split
+    ? text.split(/\s+/).filter(Boolean).flatMap((w, i) => {
+      const span = Object.assign(document.createElement("span"), { className: "wd", textContent: w });
+      span.dataset.i = i;
+      return [span, " "];
+    })
+    : [text, " "];
+  ar.replaceChildren(...words, ar.querySelector(".mark"));
 }
 
 function moveTo(dua, segment) {
-  const stage = $("stage");
-  const first = state.segment === null;
+  const prev = state.lines.get(state.segment);
+  if (prev) setWords(prev, false);
   state.segment = segment;
   state.token = null;
   const idx = dua.segments.findIndex((s) => s.id === segment);
   $("progress").style.width = `${((idx + 1) / dua.segments.length) * 100}%`;
-  const swap = () => {
-    const s = dua.segments[idx];
-    $("prev").textContent = lineText(dua, segment - 1);
-    $("next").textContent = lineText(dua, segment + 1);
-    $("now-ar").replaceChildren(
-      ...s.ar.split(/\s+/).filter(Boolean).flatMap((w, i) => {
-        const span = document.createElement("span");
-        span.textContent = w;
-        span.dataset.i = i;
-        return [span, " "];
-      }),
-    );
-    $("now-tl").textContent = s.tl || "";
-    $("now-en").textContent = s.en || "";
-    stage.classList.remove("moving");
+  for (const [id, ln] of state.lines) {
+    ln.classList.toggle("now", id === segment);
+    ln.classList.toggle("past", id < segment);
+    ln.classList.toggle("next", id === segment + 1);
+    ln.classList.remove("coming");
+  }
+  setWords(state.lines.get(segment), true);
+  scrollToNow();
+}
+
+// Between updates the highlight glides at the reciter's pace (display.js)
+// instead of hopping a word or two once a second.
+function glide(u) {
+  const n = state.lines.get(state.segment).querySelectorAll(".wd").length;
+  if (u.token == null || !n || params.get("glide") === "0") return paintWords(u.token);
+  state.hl ??= new Highlight();
+  state.hl.update(performance.now() / 1000, `${u.dua}:${u.segment}`, u.token, 0, n, u.speed ?? 1);
+  if (state.gliding) return;
+  state.gliding = true;
+  const frame = () => {
+    if (!state.hl?.line || !state.lines?.get(state.segment)) return (state.gliding = false);
+    paintWords(state.hl.word(performance.now() / 1000));
+    requestAnimationFrame(frame);
   };
-  if (first) swap();
-  else {
-    stage.classList.add("moving");
-    setTimeout(swap, 180);
-  }
-  for (const p of $("full").children) {
-    const id = Number(p.dataset.id);
-    p.classList.toggle("now", id === segment);
-    p.classList.toggle("past", id < segment);
-  }
-  scrollFull();
+  requestAnimationFrame(frame);
 }
 
 function paintWords(token) {
   if (token === state.token) return;
   state.token = token;
-  for (const span of $("now-ar").querySelectorAll("span")) {
+  for (const span of state.lines.get(state.segment).querySelectorAll(".wd")) {
     const i = Number(span.dataset.i);
     span.classList.toggle("said", i < token);
     span.classList.toggle("w", i === token);
   }
 }
 
-function buildFull(dua) {
-  $("full").replaceChildren(
-    ...dua.segments.map((s) => {
-      const p = document.createElement("p");
-      p.dataset.id = s.id;
-      p.lang = "ar";
-      p.textContent = s.ar;
-      return p;
-    }),
-  );
-}
-
-function scrollFull() {
-  if ($("full").hidden) return;
-  $("full").querySelector("p.now")?.scrollIntoView({ block: "center", behavior: "smooth" });
+function scrollToNow() {
+  // The line grows over half a second: centre on it now, then again once it has settled.
+  const ln = state.lines?.get(state.segment);
+  if (!ln) return;
+  const behavior = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  const centre = () => ln.scrollIntoView({ block: "center", inline: "nearest", behavior });
+  requestAnimationFrame(centre);
+  clearTimeout(state.recentre);
+  state.recentre = setTimeout(centre, 550);
 }
 
 init();

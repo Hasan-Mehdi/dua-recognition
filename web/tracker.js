@@ -5,10 +5,13 @@
 
 const TASHKEEL = /[ً-ٰٟۖ-ۭـ]/g;
 const NON_ARABIC = /[^ء-ي\s]/g;
-const FOLD = { "آ": "ا", "أ": "ا", "إ": "ا", "ٱ": "ا", "ى": "ي", "ی": "ي", "ئ": "ي", "ؤ": "و", "ة": "ه", "ک": "ك" };
+const FOLD = {
+  "آ": "ا", "أ": "ا", "إ": "ا", "ٱ": "ا", "ى": "ي", "ی": "ي", "ئ": "ي", "ؤ": "و", "ة": "ه", "ک": "ك",
+  "ہ": "ه", "ۃ": "ه", "ھ": "ه", "ۂ": "ه", "ے": "ي", "ۓ": "ي",
+};
 
 export function normalize(text) {
-  let t = text.normalize("NFC").replace(TASHKEEL, "");
+  let t = text.normalize("NFKC").replace(TASHKEEL, "");
   t = Array.from(t, (c) => FOLD[c] ?? c).join("");
   return t.replace(NON_ARABIC, " ").replace(/\s+/g, " ").trim();
 }
@@ -22,27 +25,50 @@ function encode(text) {
   return Int16Array.from(out);
 }
 
-// D[m][e] of the edit-distance DP with a free start in r (see align.py).
+// D[m][e] of the edit-distance DP with a free start in r (see align.py), by
+// Myers' bit-parallel algorithm in 32-bit blocks: each DP column is a set of
+// vertical deltas, one bit per fragment letter, advanced one reference letter
+// at a time (align.py _myers_blocks is the same with 64-bit blocks). About 30x
+// faster than filling the DP, which matters with 500 texts on a phone.
 export function semiglobalEndCosts(h, r) {
+  const m = h.length;
   const n = r.length;
-  let prev = new Int32Array(n + 1);
-  let cur = new Int32Array(n + 1);
-  for (let i = 1; i <= h.length; i++) {
-    const c = h[i - 1];
-    cur[0] = i;
-    let run = i; // running min of cur[k] - k
-    for (let e = 1; e <= n; e++) {
-      const diag = prev[e - 1] + (r[e - 1] !== c ? 1 : 0);
-      const up = prev[e] + 1;
-      let v = diag < up ? diag : up;
-      const left = run + e;
-      if (left < v) v = left;
-      cur[e] = v;
-      if (v - e < run) run = v - e;
+  const nb = (m + 31) >>> 5;
+  const peq = new Uint32Array(64 * nb); // letter codes are < 64
+  for (let i = 0; i < m; i++) peq[h[i] * nb + (i >>> 5)] |= 1 << (i & 31);
+  const pv = new Uint32Array(nb).fill(0xffffffff);
+  const mv = new Uint32Array(nb);
+  const last = (1 << ((m - 1) & 31)) >>> 0;
+  const TOP = 0x80000000;
+  const out = new Int32Array(n);
+  let score = m;
+  for (let j = 0; j < n; j++) {
+    const row = r[j] * nb;
+    let hin = 0; // horizontal delta entering the block from above (row 0 is free)
+    for (let b = 0; b < nb; b++) {
+      const p = pv[b];
+      const mm = mv[b];
+      const neg = hin < 0 ? 1 : 0;
+      const pos = hin > 0 ? 1 : 0;
+      const eq0 = peq[row + b];
+      const xv = (eq0 | mm) >>> 0;
+      const eq = (eq0 | neg) >>> 0;
+      const xh = (((((((eq & p) >>> 0) + p) >>> 0) ^ p) | eq) >>> 0);
+      let ph = (mm | ~(xh | p)) >>> 0;
+      let mh = (p & xh) >>> 0;
+      if (b === nb - 1) {
+        if (ph & last) score++;
+        else if (mh & last) score--;
+      }
+      hin = ph & TOP ? 1 : mh & TOP ? -1 : 0;
+      ph = ((ph << 1) | pos) >>> 0;
+      mh = ((mh << 1) | neg) >>> 0;
+      pv[b] = (mh | ~(xv | ph)) >>> 0;
+      mv[b] = (ph & xv) >>> 0;
     }
-    [prev, cur] = [cur, prev];
+    out[j] = score;
   }
-  return prev.subarray(1);
+  return out;
 }
 
 export class CorpusIndex {
@@ -97,7 +123,17 @@ export const DEFAULTS = {
   // Speed prior and tempo adaptation: see TrackerConfig.speeds / tempo_memory in tracker.py.
   speeds: [0.59, 0.99, 1.15, 1.3, 1.44, 1.55, 1.67, 1.84, 2.05, 2.39], tempoMemory: 0.98,
   pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, startWeight: 0.3, startWords: 12, minDuaConfidence: 0.7,
+  displayLead: 0.5, // seconds shown ahead of the measured delay (see tracker.py)
+  enterLineAtStart: true, // moving on to the next line starts at its first word
+  // Pauses (TrackerConfig.still_after ... retreat_after in tracker.py): `quiet` is how
+  // long the reciter has been silent at the window's end (asr-worker.js quietAtEnd).
+  stillAfter: 0.3, leadWithinLine: false, stillMotionAfter: 0.3, leadCrossQuiet: 0.1, retreatAfter: 1.0,
+  // "None of these": recitations not in the corpus (TrackerConfig.null_rate in tracker.py).
+  nullRate: 0.45, nullEnter: 0.002, nullLeave: 0.05,
 };
+
+// Following a professional reciter (majlis mode): see RECITER in tracker.py.
+export const RECITER = { leadCrossQuiet: Infinity, retreatAfter: Infinity };
 
 export class Tracker {
   constructor(index, config = {}) {
@@ -118,12 +154,24 @@ export class Tracker {
         this.last[w] = hi - 1;
       }
     }
+    // First word of each word's line, and of the line after it.
+    this.lineFirst = new Int32Array(n);
+    this.nextLine = new Int32Array(n).fill(n);
+    for (let w = 0; w < n; w++) {
+      const starts = w === 0 || index.wordSegment[w] !== index.wordSegment[w - 1] || index.wordDua[w] !== index.wordDua[w - 1];
+      this.lineFirst[w] = starts ? w : this.lineFirst[w - 1];
+    }
+    for (let w = n - 2; w >= 0; w--) {
+      this.nextLine[w] = this.lineFirst[w + 1] === w + 1 ? w + 1 : this.nextLine[w + 1];
+    }
     this.reset();
   }
 
   reset() {
     this.post = Float64Array.from(this.floor);
     this.lastWord = null;
+    this.shown = null;
+    this.null = this.cfg.nullRate > 0 ? 0.5 : 0; // P(not in the corpus)
     const k = Math.max(1, this.cfg.speeds.length);
     this.tempo = new Float64Array(k).fill(1 / k);
     this.fwdBySpeed = null;
@@ -185,13 +233,16 @@ export class Tracker {
 
   _duaMass() {
     const mass = new Float64Array(this.ix.duaWordSpan.length);
-    for (let w = 0; w < this.post.length; w++) mass[this.ix.wordDua[w]] += this.post[w];
+    for (let w = 0; w < this.post.length; w++) mass[this.ix.wordDua[w]] += (1 - this.null) * this.post[w];
     return mass;
   }
 
-  update(transcript, dt) {
+  // With lead > 0: show the belief predicted `lead` s past the window's end, and hold it through silence.
+  // `quiet`: seconds the reciter has been silent at the window's end (see tracker.py update).
+  update(transcript, dt, lead = 0, quiet = 0) {
     const costs = transcript ? this.ix.wordCosts(transcript) : null;
-    this._advance(costs ? dt : 0, this._locked());
+    const moving = quiet > this.cfg.stillMotionAfter ? dt - quiet : dt;
+    this._advance(costs ? Math.max(0, moving) : 0, this._locked());
     if (costs) {
       const kappa = this._locked() ? this.cfg.kappa : this.cfg.kappaSearch;
       let min = Infinity;
@@ -208,6 +259,15 @@ export class Tracker {
         const tot = wts.reduce((a, b) => a + b, 0);
         if (tot > 0) wts.forEach((x, s) => (this.tempo[s] = x / tot));
       }
+      const { nullRate, nullEnter, nullLeave } = this.cfg;
+      const nLetters = encode(transcript).length;
+      if (nullRate > 0 && nLetters) {
+        const known = (1 - this.null) * (1 - nullEnter) + this.null * nullLeave;
+        let fit = 0;
+        for (let w = 0; w < lik.length; w++) fit += this.post[w] * lik[w];
+        const none = (1 - known) * Math.exp(-kappa * Math.min(50, Math.max(-50, nullRate * nLetters - min)));
+        this.null = none / (known * fit + none);
+      }
       let sum = 0;
       for (let w = 0; w < costs.length; w++) {
         this.post[w] *= lik[w];
@@ -215,7 +275,50 @@ export class Tracker {
       }
       for (let w = 0; w < costs.length; w++) this.post[w] /= sum;
     }
-    return this.forwardOnly(this.position());
+    if (lead <= 0) return this.forwardOnly(this.position());
+    if ((!costs || quiet > this.cfg.stillAfter) && this.shown) {
+      const now = this.position();
+      if (quiet > this.cfg.retreatAfter) this._retreat(now);
+      return { ...this.shown, candidates: now.candidates };
+    }
+    let led = this.lookahead(lead);
+    if (this.cfg.leadWithinLine || quiet >= this.cfg.leadCrossQuiet) {
+      // Only evidence starts a new line: stay at the end of the evidence's line.
+      const now = this.position();
+      if (now.dua !== null && (led.dua !== now.dua || led.segment !== now.segment)) led = this._lineEnd(now);
+    }
+    this.shown = this.forwardOnly(led);
+    return this.shown;
+  }
+
+  _lineEnd(p) {
+    const last = this.nextLine[p.word] - 1;
+    return { ...p, word: last, token: this.ix.words[last].token, atLineEnd: true };
+  }
+
+  // The display ran into a later line than the evidence: back to the end of the evidence's line.
+  _retreat(now) {
+    const shown = this.shown;
+    if (now.dua === null || now.word == null || shown.word == null || now.dua !== shown.dua
+        || shown.word <= now.word || this.lineFirst[shown.word] === this.lineFirst[now.word]) return;
+    this.shown = this._lineEnd(now);
+    this.lastWord = this.shown.word;
+  }
+
+  // Current pace estimate in words/s (the tempo-weighted speed prior).
+  get speed() {
+    const { speeds, maxSpeed } = this.cfg;
+    return speeds.length ? speeds.reduce((a, v, s) => a + v * this.tempo[s], 0) : maxSpeed / 2;
+  }
+
+  // Where the reciter probably is `seconds` from now; the belief is unchanged.
+  lookahead(seconds) {
+    const { post, fwdBySpeed } = this;
+    this.post = Float64Array.from(post);
+    this._advance(seconds, this._locked());
+    const p = this.position();
+    Object.assign(this, { post, fwdBySpeed });
+    return p;
   }
 
   // Within a line, the word highlight only moves forward (see tracker.py).
@@ -227,6 +330,12 @@ export class Tracker {
       p.word = last;
       p.token = ix.words[last].token;
       p.atLineEnd = last + 1 >= ix.nWords || ix.wordSegment[last + 1] !== p.segment;
+    } else if (last !== null && p.word != null && this.cfg.enterLineAtStart
+        && this.lineFirst[p.word] === this.nextLine[last] && ix.wordDua[p.word] === ix.wordDua[last]) {
+      // Moved on to the next line: start at its first word (see tracker.py).
+      p.word = this.lineFirst[p.word];
+      p.token = ix.words[p.word].token;
+      p.atLineEnd = p.word + 1 >= ix.nWords || this.lineFirst[p.word + 1] !== p.word;
     }
     this.lastWord = p.word ?? null;
     return p;
@@ -242,7 +351,7 @@ export class Tracker {
     if (conf < this.cfg.minDuaConfidence) return { dua: null, duaConfidence: conf, candidates };
     const [lo, hi] = ix.duaWordSpan[d];
     const segMass = new Map();
-    for (let w = lo; w < hi; w++) segMass.set(ix.wordSegment[w], (segMass.get(ix.wordSegment[w]) ?? 0) + post[w]);
+    for (let w = lo; w < hi; w++) segMass.set(ix.wordSegment[w], (segMass.get(ix.wordSegment[w]) ?? 0) + (1 - this.null) * post[w]);
     let seg = null;
     let best = -1;
     for (const [s, m] of segMass) if (m > best || (m === best && s < seg)) [seg, best] = [s, m];

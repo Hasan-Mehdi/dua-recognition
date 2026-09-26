@@ -25,6 +25,7 @@ import random
 import statistics
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -43,6 +44,19 @@ from dua_recognition.text import normalize  # noqa: E402
 from dua_recognition.tracker import Tracker, TrackerConfig  # noqa: E402
 
 WINDOWS = ROOT / "data" / "cache" / "windows"
+WORD_TRUTH = ROOT / "data" / "cache" / "word_truth"
+
+
+def load_word_truth(rec: Recording, ix: CorpusIndex) -> list[list] | None:
+    """Forced-aligned word timings (scripts/word_truth.py) as [word index in `ix`,
+    start s, end s, line score]. Stored per du'a (word 0 = its first word), so
+    adding texts to the corpus doesn't invalidate them."""
+    f = WORD_TRUTH / f"{rec.audio_id}.json"
+    if not f.exists() or rec.dua_id not in ix.dua_ids:
+        return None
+    raw = json.loads(f.read_text(encoding="utf-8"))
+    lo = ix.dua_word_span[ix.dua_ids.index(rec.dua_id)][0]
+    return [[lo + w[0], *w[1:]] for w in raw["words"]]
 
 
 def load_rows(tag: str, rec: Recording, window: float, hop: float, vad: bool = False) -> list[tuple[float, str]]:
@@ -61,6 +75,26 @@ def load_rows(tag: str, rec: Recording, window: float, hop: float, vad: bool = F
     # score exactly what the recognizer would do today.
     return [(r["t"], "" if _looks_hallucinated(r["text"]) or (vad and not r.get("speech", True)) else r["text"])
             for r in rows]
+
+
+class LazyCosts(Sequence):
+    """Per-window word costs, aligned when a window is read rather than held.
+
+    With 500 texts one window's costs take 270 KB, and a test run has 14,000
+    windows: keeping them all needed 4 GB per process (several at once hit the
+    Windows commit limit). Re-aligning costs ~3 ms a window (align._myers).
+    """
+
+    def __init__(self, ix: CorpusIndex, texts: list[str]):
+        self.ix, self.texts = ix, texts
+
+    def __len__(self) -> int:
+        return len(self.texts)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return LazyCosts(self.ix, self.texts[i])
+        return self.ix.word_costs(self.texts[i]) if self.texts[i] else None
 
 
 def load_ctc_costs(tag: str, rec: Recording, ix: CorpusIndex, window: float, hop: float, rows) -> list | None:
@@ -94,12 +128,16 @@ def run_matcher(duas, clf, matchers, rows):
     return preds
 
 
-def run_tracker(ix, cfg, costs, hop, start=0, steps=None):
+def run_tracker(ix, cfg, costs, hop, start=0, steps=None, lead=0.0, quiet=None):
+    """`lead`: seconds, or one value per window (e.g. latency + staleness).
+    `quiet`: per window, seconds since the reciter last spoke (scripts/dump_quiet.py)."""
     tr = Tracker(ix, cfg)
     end = len(costs) if steps is None else min(len(costs), start + steps)
+    leads = lead if isinstance(lead, list) else [lead] * len(costs)
+    quiet = quiet or [0.0] * len(costs)
     out = []
-    for c in costs[start:end]:
-        p = tr.update_costs(c, hop)
+    for c, ld, q in zip(costs[start:end], leads[start:end], quiet[start:end]):
+        p = tr.update_costs(c, hop, ld, quiet=q)
         out.append((p.dua, p.segment))
     return out
 
@@ -226,6 +264,14 @@ def main() -> None:
                     help="score line accuracy on repaired labels too (Ziyarat Ashura)")
     ap.add_argument("--ctc", action="store_true",
                     help="score the text against cached CTC posteriors (data/cache/ctc/<asr>) instead of transcripts")
+    ap.add_argument("--latency", type=float,
+                    help="score what a live display shows: each result reaches the screen this many seconds after "
+                         "its window ends, and is shown led by latency + display_lead")
+    ap.add_argument("--stale-lead", type=float, metavar="EXTRA",
+                    help="with --latency: lead each result by latency + how long ago its last word ended "
+                         "(data/cache/word_ends, scripts/dump_word_ends.py) + EXTRA, instead of + display_lead")
+    ap.add_argument("--still", action="store_true",
+                    help="hold still while the reciter is silent (VAD, data/cache/quiet from scripts/dump_quiet.py)")
     ap.add_argument("--corpus", choices=["all", "recorded"], default="all",
                     help="recorded: only texts that have recordings (no extra distractors)")
     args = ap.parse_args()
@@ -238,7 +284,7 @@ def main() -> None:
     clf = TextClassifier(duas)
     matchers = {k: PassageMatcher(v) for k, v in duas.items()}
 
-    data = []
+    data, stale_by_rec, quiet_by_rec = [], {}, {}
     for dua in duas.values():
         if args.duas and dua.id not in args.duas:
             continue
@@ -250,15 +296,26 @@ def main() -> None:
                 print(f"  (no cache for {dua.id} / {rec.reciter}; skipped)", file=sys.stderr)
                 continue
             costs = (load_ctc_costs(args.asr, rec, ix, args.window, args.hop, rows) if args.ctc else
-                     [ix.word_costs(text) if text else None for _, text in rows])
+                     LazyCosts(ix, [text for _, text in rows]))
             if costs is None:
                 print(f"  (no CTC cache for {dua.id} / {rec.reciter}; skipped)", file=sys.stderr)
                 continue
+            if args.latency:
+                rows = [(t + args.latency, x) for t, x in rows]  # scored against the truth when shown
+            stale = None
+            if args.stale_lead is not None:
+                f = ROOT / "data" / "cache" / "word_ends" / args.asr / f"{rec.audio_id}.json"
+                stale = [args.latency + (s or 0.0) + args.stale_lead for s in json.loads(f.read_text())]
+            stale_by_rec[rec.audio_id] = stale
+            if args.still:
+                qf = ROOT / "data" / "cache" / "quiet" / f"{rec.audio_id}.json"
+                quiet_by_rec[rec.audio_id] = json.loads(qf.read_text())[args.stride - 1 :: args.stride]
             data.append((rec, rows, costs))
     hop = args.hop * args.stride  # seconds between tracker updates
     print(f"{len(data)} recordings, {args.split} split, ASR = {args.asr}, update every {hop:g} s\n")
 
     base_cfg = replace(TrackerConfig(), **{k: float(v) for k, v in (kv.split("=", 1) for kv in args.set)})
+    lead = 0.0 if args.latency is None else args.latency + base_cfg.display_lead
     if args.tune:
         grid = {
             "kappa": [0.15, 0.25, 0.35, 0.5, 0.8],
@@ -279,7 +336,7 @@ def main() -> None:
             # Following matters most; finding the du'a fast mid-recitation second.
             s["objective"] = s["line_acc"] + 0.25 * (s["id5"] + s["id10"]) / 2
             print(f"{dict(zip(grid, values))}  line {s['line_acc']:.3f}  ±1 {s['line_acc_pm1']:.3f}  "
-                  f"wrong {s['wrong_dua_shown']:.3f}  jumps/min {s['jumps_per_min']:.2f}  id@5s {s['id5']:.2f}  id@10s {s['id10']:.2f}  "
+                  f"refrain {s['refrain_acc']:.3f}  wrong {s['wrong_dua_shown']:.3f}  jumps/min {s['jumps_per_min']:.2f}  id@5s {s['id5']:.2f}  id@10s {s['id10']:.2f}  "
                   f"lag {s['lag_median_s']:.1f}  obj {s['objective']:.3f}", flush=True)
             if s["wrong_dua_shown"] <= 0.005 and (best is None or s["objective"] > best[1]["objective"]):
                 best = (cfg, s)
@@ -296,8 +353,10 @@ def main() -> None:
         oracle_costs = [None if c is None else c[lo:hi] for c in costs]
         runs = {
             "matcher": run_matcher(duas, clf, matchers, rows),
-            "tracker": run_tracker(ix, base_cfg, costs, hop),
-            "oracle": run_tracker(subix[rec.dua_id], base_cfg, oracle_costs, hop),
+            "tracker": run_tracker(ix, base_cfg, costs, hop, lead=stale_by_rec[rec.audio_id] or lead,
+                                   quiet=quiet_by_rec.get(rec.audio_id)),
+            "oracle": run_tracker(subix[rec.dua_id], base_cfg, oracle_costs, hop, lead=stale_by_rec[rec.audio_id] or lead,
+                                  quiet=quiet_by_rec.get(rec.audio_id)),
         }
         for name, preds in runs.items():
             s = score(rec, rows, preds, refrains)

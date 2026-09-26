@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
-  <meta name="theme-color" content="#f5efe3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0e1320" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f3ead6" media="(prefers-color-scheme: light)">
   <title>Du'a Companion</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-12 -12 24 24'%3E%3Cg fill='%23d9b46a'%3E%3Crect x='-8' y='-8' width='16' height='16'/%3E%3Crect x='-8' y='-8' width='16' height='16' transform='rotate(45)'/%3E%3C/g%3E%3Ccircle r='4' fill='%230e1320'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Amiri+Quran&family=Aref+Ruqaa:wght@400;700&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <!-- Static hosts (GitHub Pages) can't send COOP/COEP headers; this vendored
        MIT shim (gzuidhof/coi-serviceworker) adds them, which lets ONNX Runtime
@@ -16,9 +17,27 @@
   <script src="coi-serviceworker.js"></script>
 </head>
 <body data-state="idle">
+  <!-- Reusable ornaments: an eight-pointed star (khatam) and a verse-end rosette. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="khatam" viewBox="-50 -50 100 100">
+        <rect x="-32" y="-32" width="64" height="64" pathLength="1"/>
+        <rect x="-32" y="-32" width="64" height="64" transform="rotate(45)" pathLength="1"/>
+        <circle r="24" pathLength="1" style="fill: var(--core, none)"/>
+      </symbol>
+      <symbol id="rosette" viewBox="-50 -50 100 100">
+        <path d="M0-46 7.2-36.3 17.6-42.5 20.6-30.8 32.5-32.5 30.8-20.6 42.5-17.6 36.3-7.2 46 0 36.3 7.2 42.5 17.6 30.8 20.6 32.5 32.5 20.6 30.8 17.6 42.5 7.2 36.3 0 46-7.2 36.3-17.6 42.5-20.6 30.8-32.5 32.5-30.8 20.6-42.5 17.6-36.3 7.2-46 0-36.3-7.2-42.5-17.6-30.8-20.6-32.5-32.5-20.6-30.8-17.6-42.5-7.2-36.3Z"/>
+        <circle r="29"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <!-- The page border: a double rule with corner rosettes, like an illuminated folio. -->
+  <div class="folio" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
   <header class="top">
     <div class="title">
-      <span id="dua-ar" class="title-ar"></span>
+      <span id="dua-ar" class="title-ar" lang="ar"></span>
       <span id="dua-en" class="title-en"></span>
     </div>
     <div class="actions">
@@ -31,16 +50,14 @@
   </header>
 
   <section id="home" class="home">
-    <svg class="ornament" viewBox="0 0 120 24" aria-hidden="true">
-      <path d="M0 12h44M76 12h44"/><path d="M60 3l6 9-6 9-6-9z"/><circle cx="50" cy="12" r="1.6"/><circle cx="70" cy="12" r="1.6"/>
-    </svg>
+    <p class="bismillah" lang="ar">بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ</p>
     <h1 class="brand-ar" lang="ar">رفيق الدعاء</h1>
     <p class="brand-en">Du'a Companion</p>
     <p class="tagline">Recite, and the words follow you.</p>
 
-    <button id="start" class="orb" aria-label="Start listening">
-      <span class="ring"></span><span class="ring r2"></span>
-      <svg viewBox="0 0 24 24" aria-hidden="true">
+    <button id="start" class="seal" aria-label="Start listening">
+      <svg class="seal-star" viewBox="-50 -50 100 100" aria-hidden="true"><use href="#khatam" x="-50" y="-50" width="100" height="100"/></svg>
+      <svg class="seal-mic" viewBox="0 0 24 24" aria-hidden="true">
         <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
       </svg>
     </button>
@@ -57,18 +74,30 @@
     <p id="footnote" class="footnote"></p>
   </section>
 
-  <main id="stage" class="stage" aria-live="polite">
-    <p id="prev" class="line faint" dir="rtl" lang="ar"></p>
-    <article class="current">
-      <p id="now-ar" class="now-ar" dir="rtl" lang="ar"></p>
-      <p id="now-tl" class="now-tl"></p>
-      <p id="now-en" class="now-en"></p>
-    </article>
-    <p id="next" class="line faint" dir="rtl" lang="ar"></p>
-    <div id="guesses" class="guesses" hidden>
-      <span class="guess-label">Is it…</span>
-      <div id="guess-chips" class="chips"></div>
+  <main id="stage" class="stage">
+    <!-- Before the du'a is known: a star draws itself while the guesses firm up. -->
+    <div id="listen" class="listen">
+      <!-- The voice's loudness moves only transform and opacity (see meter() in app.js). -->
+      <div class="voice" aria-hidden="true">
+        <i class="voice-glow"></i>
+        <svg class="girih" viewBox="-50 -50 100 100">
+          <use href="#khatam" x="-50" y="-50" width="100" height="100"/>
+          <circle r="44" pathLength="1"/><circle r="12" pathLength="1"/>
+        </svg>
+      </div>
+      <p id="listen-msg" class="listen-msg" aria-live="polite">Begin reciting</p>
+      <div id="guesses" class="guesses" hidden>
+        <span class="guess-label">Is it…</span>
+        <div id="guess-chips" class="chips"></div>
+      </div>
     </div>
+    <!-- Once it is: the whole text, scrolling with the reciter like lyrics. -->
+    <div id="folio-head" class="folio-head" hidden>
+      <h2 id="head-ar" class="head-ar" lang="ar"></h2>
+      <p id="head-en" class="head-en"></p>
+      <p id="head-note" class="head-note"></p>
+    </div>
+    <div id="text" class="text"></div>
   </main>
 
   <div id="picker" class="picker" hidden>
@@ -78,12 +107,13 @@
     </div>
   </div>
 
-  <section id="full" class="full" hidden></section>
-
   <div id="menu" class="menu" hidden>
+    <div class="seg" role="radiogroup" aria-label="Display">
+      <button id="mode-page" role="radio" aria-checked="true">Page</button>
+      <button id="mode-majlis" role="radio" aria-checked="false">Majlis</button>
+    </div>
     <label><input type="checkbox" id="opt-en" checked> Translation</label>
     <label><input type="checkbox" id="opt-tl" checked> Transliteration</label>
-    <label><input type="checkbox" id="opt-full"> Whole text</label>
     <button id="share" class="link share-btn" hidden>Show on other screens</button>
   </div>
 

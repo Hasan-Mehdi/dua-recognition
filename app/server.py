@@ -31,6 +31,7 @@ from dua_recognition.align import CorpusIndex  # noqa: E402
 from dua_recognition.asr import DEFAULT_MODEL, load_model  # noqa: E402
 from dua_recognition.corpus import load_all, load_recordings  # noqa: E402
 from dua_recognition.pipeline import StreamingRecognizer  # noqa: E402
+from dua_recognition.tracker import RECITER, TrackerConfig  # noqa: E402
 
 WEB = ROOT / "web"  # the one front end; it detects this server via /api/mode
 MODEL = os.environ.get("DUA_ASR_MODEL", DEFAULT_MODEL)
@@ -85,8 +86,10 @@ def audio(audio_id: str):
     return FileResponse(rec.path, media_type="audio/mpeg")
 
 
-def _message(update, step_ms: float, index: CorpusIndex) -> dict:
+def _message(update, step_ms: float, index: CorpusIndex, speed: float, unknown: float = 0.0,
+             still_after: float = 0.3) -> dict:
     p = update.position
+    still = update.quiet > still_after  # the reciter has stopped: so does the gliding highlight
     word = index.words[p.word] if p.word is not None else None
     return {
         "t": round(update.t, 2),
@@ -96,9 +99,12 @@ def _message(update, step_ms: float, index: CorpusIndex) -> dict:
         "segment": p.segment,
         "segment_confidence": round(p.segment_confidence, 3),
         "token": word.token if word and p.dua else None,
+        "speed": 0.0 if still else round(speed, 3),  # words/s: the page glides the highlight at this pace
+        "quiet": round(update.quiet, 2),  # seconds the reciter had been silent
+        "unknown": round(unknown, 3),  # P(the recitation isn't in the corpus)
         # Reached the end of the line and the latest window was silent: the
         # next line is probably coming, so the UI previews it.
-        "pause_at_line_end": bool(p.at_line_end and not update.transcript),
+        "pause_at_line_end": bool(p.at_line_end and (not update.transcript or still)),
         "candidates": [
             {"id": d, "name": DUAS[d].name_en, "p": round(prob, 3)} for d, prob in p.candidates
         ],
@@ -106,17 +112,26 @@ def _message(update, step_ms: float, index: CorpusIndex) -> dict:
     }
 
 
+def _follow(mode: str) -> TrackerConfig:
+    return TrackerConfig(**RECITER) if mode == "reciter" else TrackerConfig()
+
+
 @app.websocket("/ws")
 async def follow(ws: WebSocket):
     await ws.accept()
-    rec = StreamingRecognizer(DUAS, model=MODEL, index=INDEX)
+    # ?lead=0 / ?pauses=0 switch those off, for comparing by feel. ?follow=reciter:
+    # majlis mode, where the display runs on through a reciter's breaths.
+    rec = StreamingRecognizer(DUAS, model=MODEL, index=INDEX, lead=ws.query_params.get("lead") != "0",
+                              pauses=ws.query_params.get("pauses") != "0",
+                              config=_follow(ws.query_params.get("follow", "reading")))
     running: asyncio.Task | None = None
 
     async def run_step():
         t0 = time.perf_counter()
         update = await asyncio.to_thread(rec.step)
         if update is not None:
-            await ws.send_json(_message(update, (time.perf_counter() - t0) * 1000, rec.index))
+            await ws.send_json(_message(update, (time.perf_counter() - t0) * 1000, rec.index, rec.tracker.speed,
+                                        rec.tracker.null, rec.tracker.cfg.still_after))
 
     try:
         while True:
@@ -128,6 +143,11 @@ async def follow(ws: WebSocket):
                 if running:
                     await running
                 rec.lock(text[5:])
+                continue
+            if text.startswith("follow:"):  # the page switched between page and majlis mode
+                if running:
+                    await running
+                rec.config = rec.tracker.cfg = _follow(text[7:])
                 continue
             if msg.get("text") == "reset":
                 if running:

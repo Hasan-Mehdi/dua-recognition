@@ -114,9 +114,12 @@ def semiglobal_end_costs(h: np.ndarray, r: np.ndarray) -> np.ndarray:
     Row recurrence, vectorized over the reference:
         D[i][e] = min(D[i-1][e-1] + (h_i != r_e), D[i-1][e] + 1, D[i][e-1] + 1)
     The left-neighbour term is a running minimum: D[i][e] = e + cummin(D'[i][k] - k)
-    where D' is the row before horizontal moves. O(len(h) * len(r)) numpy work,
-    ~20 ms for a 60-letter fragment against the full 12-du'a corpus.
+    where D' is the row before horizontal moves. O(len(h) * len(r)) numpy work:
+    ~100 ms for a 40-letter fragment against the 506-text corpus, so when numba
+    is installed the bit-parallel version below does the same in a few ms.
     """
+    if _myers is not None and h.size and r.size:
+        return _myers(np.ascontiguousarray(h, dtype=np.int64), np.ascontiguousarray(r, dtype=np.int64))
     n = r.size
     idx = np.arange(1, n + 1, dtype=np.int32)
     prev = np.zeros(n + 1, dtype=np.int32)  # row 0: free start anywhere
@@ -130,3 +133,63 @@ def semiglobal_end_costs(h: np.ndarray, r: np.ndarray) -> np.ndarray:
         cur[1:] = np.minimum(cur[1:], np.minimum.accumulate(np.r_[cur[0], cur[1:] - idx] )[1:] + idx)
         prev = cur
     return prev[1:]
+
+
+
+def _myers_blocks(h: np.ndarray, r: np.ndarray) -> np.ndarray:  # pragma: no cover - compiled
+    """semiglobal_end_costs by Myers' bit-parallel algorithm, blocked for
+    fragments longer than 64 letters (Hyyrö 2003, as in edlib).
+
+    Each DP column is held as vertical deltas in 64-bit words, one bit per
+    fragment letter, and advanced one reference letter at a time with a
+    handful of word operations. Row 0 is free (the fragment may start
+    anywhere), so no horizontal delta enters the top block; each lower block
+    takes the delta leaving the bottom of the one above it. The score is read
+    at the fragment's last row: exactly the numbers the numpy DP gives.
+    """
+    m = h.size
+    n_blocks = (m + 63) // 64
+    one, zero = np.uint64(1), np.uint64(0)
+    peq = np.zeros((64, n_blocks), dtype=np.uint64)  # letter codes are < 64
+    for i in range(m):
+        peq[h[i], i // 64] |= one << np.uint64(i % 64)
+    pv = np.empty(n_blocks, dtype=np.uint64)  # (np.full would give numba an int64 array)
+    pv[:] = np.uint64(0xFFFFFFFFFFFFFFFF)
+    mv = np.zeros(n_blocks, dtype=np.uint64)
+    last = one << np.uint64((m - 1) % 64)
+    top = one << np.uint64(63)
+    out = np.empty(r.size, dtype=np.int32)
+    score = m
+    for j in range(r.size):
+        c = r[j]
+        hin = 0
+        for b in range(n_blocks):
+            p, mm, eq = pv[b], mv[b], peq[c, b]
+            neg = one if hin < 0 else zero
+            pos = one if hin > 0 else zero
+            xv = eq | mm
+            eq = eq | neg
+            xh = (((eq & p) + p) ^ p) | eq
+            ph = mm | ~(xh | p)
+            mh = p & xh
+            if b == n_blocks - 1:
+                if ph & last:
+                    score += 1
+                elif mh & last:
+                    score -= 1
+            # (branches, not int(ph >> 63): numba unifies uint64 with int64 as float64)
+            hin = 1 if ph & top else (-1 if mh & top else 0)
+            ph = (ph << one) | pos
+            mh = (mh << one) | neg
+            pv[b] = mh | ~(xv | ph)
+            mv[b] = ph & xv
+        out[j] = score
+    return out
+
+
+try:
+    from numba import njit
+
+    _myers = njit(cache=True, nogil=True)(_myers_blocks)
+except ImportError:  # numba is optional: the numpy DP gives the same answer, slower
+    _myers = None

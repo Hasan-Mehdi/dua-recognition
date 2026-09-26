@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .align import CorpusIndex
-from .asr import DEFAULT_MODEL, SAMPLE_RATE, transcribe_batch
+from .asr import DEFAULT_MODEL, SAMPLE_RATE, quiet_at_end, transcribe_batch
 from .corpus import Dua
 from .tracker import Position, Tracker, TrackerConfig
 
@@ -22,6 +22,7 @@ class Update:
     t: float  # seconds of audio consumed
     transcript: str
     position: Position
+    quiet: float = 0.0  # seconds the reciter had been silent at the window's end
 
 
 class StreamingRecognizer:
@@ -35,6 +36,8 @@ class StreamingRecognizer:
         config: TrackerConfig | None = None,
         prompt_bias: bool = True,
         vad: bool = False,  # hurts in noisy rooms at current thresholds (docs/results/comparison.md)
+        lead: bool = True,  # show the predicted current position (docs/results/display_lead.md)
+        pauses: bool = True,  # tell the tracker when the reciter stops (docs/results/pauses.md)
         index: CorpusIndex | None = None,
     ):
         self.duas = duas
@@ -46,6 +49,8 @@ class StreamingRecognizer:
         self.hop = int(hop * SAMPLE_RATE)
         self.prompt_bias = prompt_bias
         self.vad = vad
+        self.lead = lead
+        self.pauses = pauses
         self.reset()
 
     def reset(self) -> None:
@@ -90,9 +95,15 @@ class StreamingRecognizer:
         self._last = self._total
         prompt = self.tracker.prompt() if self.prompt_bias else None
         window = self._buf.copy()
+        end = self._total
         text = transcribe_batch([window], model=self.model, prompts=[prompt], vad=self.vad)[0]
-        pos = self.tracker.update(text, dt)
-        return Update(self._total / SAMPLE_RATE, text, pos)
+        quiet = quiet_at_end(window) if self.pauses else 0.0
+        # Audio that arrived while transcribing (the web server pushes
+        # concurrently) is how far the reciter has moved on since `end`.
+        delay = (self._total - end) / SAMPLE_RATE
+        pos = self.tracker.update(text, dt, lead=delay + self.tracker.cfg.display_lead if self.lead else 0.0,
+                                  quiet=quiet)
+        return Update(end / SAMPLE_RATE, text, pos, quiet)
 
 
 class Recognizer:

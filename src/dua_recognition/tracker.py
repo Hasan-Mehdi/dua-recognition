@@ -16,11 +16,11 @@ probability that it is the one being recited.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
-from .align import CorpusIndex
+from .align import CorpusIndex, encode
 
 
 @dataclass
@@ -63,8 +63,63 @@ class TrackerConfig:
     # Prior: this much mass on the first `start_words` words of each du'a.
     start_weight: float = 0.3
     start_words: int = 12
+    # "None of these": a state for recitations that aren't in the corpus. It
+    # explains a window as if its transcript missed at `null_rate` edits per
+    # letter. A du'a the corpus has matches far better than that, even misheard;
+    # a different du'a that only shares stock phrases ("yā qāḍiya ḥawāʾij
+    # al-sāʾilīn") doesn't, and without this state the tracker had to pick the
+    # nearest text anyway. Leave-one-out on the test reciters (scripts/ooc_eval.py):
+    # a du'a missing from the corpus showed some other du'a 68% of the time,
+    # 16% with this; line accuracy on known du'as 85.4% -> 85.3%. 0 = off.
+    null_rate: float = 0.45
+    null_enter: float = 0.002  # per update: the reciter moves on to something unknown
+    null_leave: float = 0.05  # per update: ...and back to something known
     # Reported only once the winning du'a holds this much posterior mass.
     min_dua_confidence: float = 0.7
+    # The belief is about the end of the audio window, but it reaches the
+    # screen later (ASR time), and the transcript's tail lags the voice. So
+    # the live display shows the belief predicted forward by the measured
+    # delay plus this much (`update(..., lead=delay + display_lead)`). Chosen
+    # on the train split; on test it cuts line-switch lag from 1.8 s to 0.6 s
+    # at 0.5 s ASR delay and raises line accuracy (docs/results/display_lead.md).
+    display_lead: float = 0.5
+    # When the display moves on to the next line, start at its first word.
+    # The lead's estimate often lands two or three words into a new line and
+    # the highlight appeared to skip its opening words (4 jerks/min on test;
+    # 0.1 with this, and closer to the word being said: docs/results/display_lead.md).
+    enter_line_at_start: bool = True
+    # The reciter has been silent this long (update(..., quiet=)): they aren't
+    # moving, so neither is the display. The last words stay in the 6 s window
+    # for seconds after they stop, and without this the prediction kept walking
+    # on through the next line.
+    still_after: float = 0.3
+    # The lead may move the highlight along the current line but not on to the
+    # next one: only evidence starts a new line. Otherwise a reciter who pauses
+    # at the end of a line sees the next one light up before they begin it.
+    lead_within_line: bool = False
+    # ...and past this much silence the belief itself stops moving too: it
+    # moves only for the time they were making sound. (With Silero alone this
+    # cost 11 points, because it hears long melodic notes as silence;
+    # asr.quiet_at_end also counts loudness, and it costs ~0.5.)
+    still_motion_after: float = 0.3
+    # The lead may carry the display into the next line only while the
+    # reciter is making sound (quiet below this). Someone who has just stopped
+    # at the end of a line hasn't started the next one. inf = always may.
+    lead_cross_quiet: float = 0.1
+    # After this much silence, a display that already ran into a line the
+    # evidence hasn't reached steps back to the end of the line they stopped
+    # on. (The lead crosses at the moment they stop, before any silence can
+    # be heard.) inf = never. With 4 s pauses inserted into the test
+    # recordings, the next line was on screen for 84% of each pause before
+    # these rules and 33% with them; a reciter who flows through breaths sees
+    # a step back now and then, which is why majlis mode uses RECITER.
+    retreat_after: float = 1.0
+
+
+# Following a professional reciter (majlis mode): they flow from line to line
+# and a breath isn't a stop, so the display may run on into the next line as
+# it always did. The hold and the frozen belief still apply (docs/results/pauses.md).
+RECITER = {"lead_cross_quiet": float("inf"), "retreat_after": float("inf")}
 
 
 @dataclass
@@ -104,18 +159,32 @@ class Tracker:
         self._idx = np.arange(ix.n_words)
         spans = np.array(ix.dua_word_span)[ix.word_dua]
         self._first, self._last = spans[:, 0], spans[:, 1] - 1
+        new_line = np.r_[True, (np.diff(ix.word_segment) != 0) | (np.diff(ix.word_dua) != 0)]
+        self._line_first = np.maximum.accumulate(np.where(new_line, self._idx, 0))
+        # First word of the following line (n_words past the end of the corpus).
+        starts = np.r_[np.flatnonzero(new_line), ix.n_words]
+        self._next_line = starts[np.searchsorted(starts, self._idx, side="right")]
+        self._spans = np.array(ix.dua_word_span).reshape(-1, 2)
+        self._edge_cache: dict[int, np.ndarray] = {}
         self.reset()
 
     def reset(self) -> None:
         self.post = self._floor.copy()
         self.tempo = np.full(max(1, len(self.cfg.speeds)), 1.0 / max(1, len(self.cfg.speeds)))
-        self._fwd_by_speed: np.ndarray | None = None
+        # (speed kernels, shifted beliefs) of the last prediction: row s of
+        # kernels @ shifted is the forward prediction under speed s.
+        self._fwd_by_speed: tuple[np.ndarray, np.ndarray] | None = None
         self._last_word: int | None = None
+        self._shown: Position | None = None
+        self.null = 0.5 if self.cfg.null_rate > 0 else 0.0  # P(not in the corpus)
 
     # -- predict ---------------------------------------------------------
     def _locked(self) -> bool:
-        dua_mass = np.bincount(self.ix.word_dua, weights=self.post, minlength=len(self.ix.duas))
-        return bool(dua_mass.max() >= self.cfg.lock_confidence)
+        return bool(self._dua_mass().max() >= self.cfg.lock_confidence)
+
+    def _dua_mass(self) -> np.ndarray:
+        # post is over the corpus's words; `null` is the rest.
+        return (1 - self.null) * np.bincount(self.ix.word_dua, weights=self.post, minlength=len(self.ix.duas))
 
     def _advance(self, dt: float, locked: bool = False) -> None:
         cfg = self.cfg
@@ -128,18 +197,47 @@ class Tracker:
         # not how fast. The observation sorts out the rest. Moves are clamped
         # to the du'a: finishing one doesn't carry you into the next one in
         # the index (that's what the teleport floor is for).
-        n = self.post.size
         kernels = self._speed_kernels(dt, n_fwd)  # speeds x (n_fwd + 1)
-        shifted = np.stack([np.bincount(np.minimum(self._idx + d, self._last), weights=self.post, minlength=n)
-                            for d in range(n_fwd + 1)])
-        self._fwd_by_speed = kernels @ shifted if self.cfg.tempo_memory > 0 else None
+        cs = np.r_[0.0, np.cumsum(self.post)]
+        shifted = np.stack([self._shift(self.post, cs, d) for d in range(n_fwd + 1)])
+        self._fwd_by_speed = (kernels, shifted) if self.cfg.tempo_memory > 0 else None
         fwd = (self.tempo @ kernels) @ shifted
         back = np.zeros_like(self.post)
         for d in range(1, cfg.back_words + 1):
-            back += np.bincount(np.maximum(self._idx - d, self._first), weights=self.post, minlength=n)
+            back += self._shift(self.post, cs, -d)
         back /= cfg.back_words
         p = (1 - cfg.p_back) * fwd + cfg.p_back * back
         self.post = (1 - tele) * p / p.sum() + tele * self._floor
+
+    def _shift(self, post: np.ndarray, cs: np.ndarray, d: int) -> np.ndarray:
+        """Mass moved d words (back if d < 0), clamped to its own du'a: what
+        overshoots a du'a's last (first) word piles up there. `cs` is post's
+        cumulative sum with a leading 0. Plain array shifts plus a fix-up at
+        each du'a's edge: several times faster than scattering word by word."""
+        if d == 0:
+            return post.copy()
+        out = np.zeros_like(post)
+        lo, hi = self._spans[:, 0], self._spans[:, 1]
+        if d > 0:
+            out[d:] = post[:-d]
+            out[self._edges(d)] = 0.0  # what slid in from the previous du'a
+            e = hi - 1
+            out[e] = cs[e + 1] - cs[np.maximum(lo, e - d)]
+        else:
+            d = -d
+            out[:-d] = post[d:]
+            out[self._edges(-d)] = 0.0  # what slid in from the next du'a
+            out[lo] = cs[np.minimum(hi, lo + d + 1)] - cs[lo]
+        return out
+
+    def _edges(self, d: int) -> np.ndarray:
+        """The first d words of every du'a (d > 0), or the last -d (d < 0)."""
+        if d not in self._edge_cache:
+            k = abs(d)
+            lo, hi = self._spans[:, 0], self._spans[:, 1]
+            self._edge_cache[d] = np.concatenate(
+                [np.arange(a, min(b, a + k)) if d > 0 else np.arange(max(a, b - k), b) for a, b in zip(lo, hi)])
+        return self._edge_cache[d]
 
     def _speed_kernels(self, dt: float, n_fwd: int) -> np.ndarray:
         """P(moved d words in dt | speed), one row per speed, d = 0..n_fwd."""
@@ -152,28 +250,92 @@ class Tracker:
         return k / k.sum(axis=1, keepdims=True)
 
     # -- correct ---------------------------------------------------------
-    def update(self, transcript: str, dt: float) -> Position:
-        """Advance by dt seconds, then condition on the latest window's text."""
-        costs = self.ix.word_costs(transcript) if transcript else None
-        return self.update_costs(costs, dt)
+    def update(self, transcript: str, dt: float, lead: float = 0.0, quiet: float = 0.0) -> Position:
+        """Advance by dt seconds, then condition on the latest window's text.
 
-    def update_costs(self, costs: np.ndarray | None, dt: float) -> Position:
-        """`update` with the alignment already done (evaluation reuses it)."""
+        With `lead` > 0 the position returned is the belief predicted `lead`
+        seconds past the window's end (see TrackerConfig.display_lead), and a
+        silent window holds the last position shown rather than falling back.
+        `quiet`: seconds since the reciter last spoke (asr.quiet_at_end); the
+        position moves only for the time they were speaking.
+        """
+        costs = self.ix.word_costs(transcript) if transcript else None
+        return self.update_costs(costs, dt, lead, n_letters=len(encode(transcript)) if transcript else 0, quiet=quiet)
+
+    def update_costs(self, costs: np.ndarray | None, dt: float, lead: float = 0.0,
+                     n_letters: int | None = None, quiet: float = 0.0) -> Position:
+        """`update` with the alignment already done (evaluation reuses it).
+
+        `n_letters`: the transcript's length in letters (align.encode), for the
+        "not in the corpus" state. If not given it is estimated as the largest
+        cost: no alignment costs more than deleting the whole transcript, and
+        across the corpus the worst one comes within a letter of that.
+        """
+        if n_letters is None and costs is not None:
+            n_letters = int(costs.max())
         # An empty window is almost always the pause between lines: the
         # reciter isn't moving, so neither does the belief (bar the floors).
-        self._advance(dt if costs is not None else 0.0, locked=self._locked())
+        moving = dt - quiet if quiet > self.cfg.still_motion_after else dt
+        self._advance(max(0.0, moving) if costs is not None else 0.0, locked=self._locked())
         if costs is not None:
             kappa = self.cfg.kappa if self._locked() else self.cfg.kappa_search
-            lik = np.exp(-kappa * (costs - costs.min()).astype(np.float64))
+            c0 = float(costs.min())
+            lik = np.exp(-kappa * (costs - c0).astype(np.float64))
             if self._fwd_by_speed is not None:
                 # Which speed predicted this evidence best? Forget a little first.
-                ev = self._fwd_by_speed @ lik
+                kernels, shifted = self._fwd_by_speed
+                ev = kernels @ (shifted @ lik)
                 w = self.tempo ** self.cfg.tempo_memory * ev
                 if w.sum() > 0:
                     self.tempo = w / w.sum()
+            if self.cfg.null_rate > 0 and n_letters:
+                cfg = self.cfg
+                known = (1 - self.null) * (1 - cfg.null_enter) + self.null * cfg.null_leave
+                in_corpus = known * float(self.post @ lik)
+                none = (1 - known) * np.exp(-kappa * min(50.0, max(-50.0, cfg.null_rate * n_letters - c0)))
+                self.null = none / (in_corpus + none)
             self.post = self.post * lik
             self.post /= self.post.sum()
-        return self._forward_only(self.position())
+        if lead <= 0:
+            return self._forward_only(self.position())
+        if (costs is None or quiet > self.cfg.still_after) and self._shown is not None:
+            now = self.position()
+            if quiet > self.cfg.retreat_after:
+                self._retreat(now)
+            return replace(self._shown, candidates=now.candidates)
+        led = self.lookahead(lead)
+        if self.cfg.lead_within_line or quiet >= self.cfg.lead_cross_quiet:
+            now = self.position()
+            if now.dua is not None and (led.dua, led.segment) != (now.dua, now.segment):
+                # Stay on the evidence's line, as far along it as the lead reached (its last word).
+                last = int(self._next_line[now.word]) - 1
+                led = replace(now, word=last, at_line_end=True)
+        self._shown = self._forward_only(led)
+        return self._shown
+
+    def _retreat(self, now: Position) -> None:
+        """The display is in a later line of the same du'a than the evidence: go
+        back to the end of the evidence's line."""
+        shown = self._shown
+        if (now.dua is None or now.word is None or shown.word is None or now.dua != shown.dua
+                or shown.word <= now.word or self._line_first[shown.word] == self._line_first[now.word]):
+            return
+        last = int(self._next_line[now.word]) - 1
+        self._shown = replace(now, word=last, at_line_end=True)
+        self._last_word = last
+
+    @property
+    def speed(self) -> float:
+        """Current pace estimate in words/s (the tempo-weighted speed prior)."""
+        return float(np.dot(self.tempo, self.cfg.speeds)) if self.cfg.speeds else self.cfg.max_speed / 2
+
+    def lookahead(self, seconds: float) -> Position:
+        """Where the reciter probably is `seconds` from now; the belief is unchanged."""
+        post, fwd = self.post, self._fwd_by_speed
+        self._advance(seconds, locked=self._locked())
+        pos = self.position()
+        self.post, self._fwd_by_speed = post, fwd
+        return pos
 
     def _forward_only(self, pos: Position) -> Position:
         """Within a line, the word highlight only moves forward.
@@ -187,12 +349,18 @@ class Tracker:
                 and pos.word < last):
             pos.word = last
             pos.at_line_end = last + 1 >= len(self.ix.words) or self.ix.word_segment[last + 1] != pos.segment
+        elif (last is not None and pos.word is not None and self.cfg.enter_line_at_start
+              and self._line_first[pos.word] == self._next_line[last]
+              and self.ix.word_dua[pos.word] == self.ix.word_dua[last]):
+            # Moved on to the next line: start at its first word.
+            pos.word = int(self._line_first[pos.word])
+            pos.at_line_end = pos.word + 1 >= self.ix.n_words or self._line_first[pos.word + 1] != pos.word
         self._last_word = pos.word
         return pos
 
     def position(self) -> Position:
         ix = self.ix
-        dua_mass = np.bincount(ix.word_dua, weights=self.post, minlength=len(ix.duas))
+        dua_mass = self._dua_mass()
         d = int(dua_mass.argmax())
         conf = float(dua_mass[d])
         top = [(ix.dua_ids[i], float(dua_mass[i])) for i in np.argsort(-dua_mass)[:3]]
@@ -200,7 +368,7 @@ class Tracker:
             return Position(None, conf, None, 0.0, None, candidates=top)
         lo, hi = ix.dua_word_span[d]
         seg_ids = ix.word_segment[lo:hi]
-        seg_mass = np.bincount(seg_ids, weights=self.post[lo:hi])
+        seg_mass = (1 - self.null) * np.bincount(seg_ids, weights=self.post[lo:hi])
         s = int(seg_mass.argmax())
         # The word shown must lie in the line shown: the weighted median of the
         # posterior within that line (a lone argmax flickers across a flat line,

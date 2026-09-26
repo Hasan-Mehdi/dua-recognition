@@ -68,3 +68,31 @@ def test_finishing_a_dua_does_not_spill_into_the_next_one():
         pos = tracker.update("مالك يوم الدين", 1.0)
     assert pos.dua == "a" and pos.segment == 2
     assert tracker.post[tracker.ix.dua_word_span[2][0]] < 1e-3  # nothing leaked into "b"
+
+
+def _stop_after_first_name(config):
+    """Recite the opening and the first name, then stop: the windows keep hearing
+    the last words (as a 6 s window does) while the reciter is silent."""
+    corpus = _corpus()
+    tracker = Tracker(CorpusIndex(corpus), config)
+    words = [w for s in corpus["tawassul"].segments[:2] for w in s.arabic.split()]
+    for i in range(len(words)):
+        tracker.update(" ".join(words[max(0, i - 4) : i + 1]), 1.0, lead=1.0)
+    tail = " ".join(words[-5:])
+    return [tracker.update(tail, 1.0, lead=1.0, quiet=q) for q in (0.2, 1.2, 2.2, 3.0, 3.0, 3.0)]
+
+
+def test_waits_at_the_end_of_a_line_when_the_reciter_stops():
+    from dua_recognition.tracker import TrackerConfig
+
+    shown = _stop_after_first_name(TrackerConfig())
+    # Whatever the lead did at the moment they stopped, once the silence is
+    # clear the display is back on the line they stopped on, at its end.
+    assert all(p.dua == "tawassul" and p.segment == 2 and p.at_line_end for p in shown[2:])
+
+
+def test_reciter_mode_keeps_running_on_through_a_breath():
+    from dua_recognition.tracker import RECITER, TrackerConfig
+
+    shown = _stop_after_first_name(TrackerConfig(**RECITER))
+    assert all(p.segment == shown[0].segment for p in shown)  # no stepping back

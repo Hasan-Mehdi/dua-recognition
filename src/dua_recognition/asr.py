@@ -88,6 +88,84 @@ def speech_in_tail(window: np.ndarray, tail_s: float = 1.5) -> bool:
     return _speech_run(probs)
 
 
+VAD_FRAME_S = 512 / SAMPLE_RATE
+
+
+def speech_runs(probs: np.ndarray, min_frames: int = 7, on: float = 0.5, off: float = 0.35) -> list[tuple[int, int]]:
+    """Frame spans [start, end) that count as speech under the rule above."""
+    runs, start, peak = [], None, 0.0
+    for i, p in enumerate(list(probs) + [0.0]):
+        if p >= off:
+            start = i if start is None else start
+            peak = max(peak, p)
+        else:
+            if start is not None and i - start >= min_frames and peak >= on:
+                runs.append((start, i))
+            start, peak = None, 0.0
+    return runs
+
+
+def quiet_at_end(window: np.ndarray, tail_s: float = 3.0, energy_db: float | None = 6.0) -> float:
+    """Seconds since the reciter last made a sound (tail_s if not in the last tail_s).
+
+    The transcript of a 6 s window keeps the last words for seconds after the
+    reciter stops. This says how much of that is silence, so the tracker only
+    moves the position for time the reciter was actually speaking.
+
+    A 32 ms frame counts as sound if Silero calls it speech (p >= 0.35) or it
+    is `energy_db` above the window's floor (its 10th-percentile frame
+    energy, at least -70 dBFS); sound is a run of at least 3 frames. Silero alone misses long
+    melodic notes: against forced-aligned word timings it called 19% of the
+    test reciters' mid-word moments silent for > 0.3 s, and the energy term
+    brings that to 4% (docs/results/pauses.md). None = Silero only.
+    Mirrored in web/asr-worker.js (quietAtEnd).
+    """
+    probs, db, floor = _tail_activity(window, tail_s)
+    if probs is None:
+        return tail_s
+    return _quiet(probs, db, floor, energy_db)
+
+
+def _tail_activity(window: np.ndarray, tail_s: float):
+    """Silero probabilities and frame energies (dBFS) over the window's last tail_s,
+    in 512-sample frames ending exactly at the window's end, plus the whole
+    window's energy floor. (None, ...) if the tail is digital silence."""
+    from faster_whisper.vad import get_vad_model
+
+    x = np.asarray(window, dtype=np.float32)
+    x = x[x.size % 512 :]
+    n_tail = min(x.size, int(tail_s * SAMPLE_RATE) // 512 * 512)
+    if not n_tail or _is_silent(x[-n_tail:]):
+        return None, None, None
+    frames = x.reshape(-1, 512).astype(np.float64)
+    db = 10 * np.log10(np.mean(frames**2, axis=1) + 1e-12)
+    floor = float(np.percentile(db, 10))
+    # (a copy: faster-whisper's VAD zeroes the last 64 samples of what it's given, in place)
+    probs = np.ravel(get_vad_model()(x[-n_tail:].copy()))[: n_tail // 512]
+    return probs, db[-probs.size :], floor
+
+
+def _quiet(probs: np.ndarray, db: np.ndarray, floor: float, energy_db: float | None) -> float:
+    if energy_db is None:
+        runs = speech_runs(probs)
+    else:
+        # The floor is never taken below -70 dBFS: phones and headsets with noise
+        # suppression output exact zeros between words, and against a floor of
+        # digital silence a faint click read as "still reciting".
+        active = (probs >= 0.35) | (db >= max(floor, -70.0) + energy_db)
+        runs, start = [], None
+        for i, a in enumerate(list(active) + [False]):
+            if a and start is None:
+                start = i
+            elif not a and start is not None:
+                if i - start >= 3:
+                    runs.append((start, i))
+                start = None
+    if not runs:
+        return probs.size * VAD_FRAME_S
+    return (probs.size - runs[-1][1]) * VAD_FRAME_S
+
+
 def _speech_run(probs: np.ndarray, min_frames: int = 7, on: float = 0.5, off: float = 0.35) -> bool:
     run, peak = 0, 0.0
     for p in probs:

@@ -20,6 +20,9 @@ _FOLD = str.maketrans(
         "ؤ": "و",                                # waw-hamza
         "ة": "ه",                                # ta marbuta -> ha
         "ک": "ك",                                # Persian kaf
+        # Urdu-style spellings (duas.org prints اَللّٰہُمَّ with heh goal)
+        "ہ": "ه", "ۃ": "ه", "ھ": "ه", "ۂ": "ه",
+        "ے": "ي", "ۓ": "ي",
     }
 )
 
@@ -30,7 +33,9 @@ def strip_diacritics(text: str) -> str:
 
 def normalize(text: str) -> str:
     """Fold a string down to bare Arabic letters for fuzzy matching."""
-    text = unicodedata.normalize("NFC", text)
+    # NFKC, not NFC: presentation forms (ﷲ, ﻷ, ﭐ) become ordinary letters.
+    # Under NFC they were dropped, splitting وَﭐجْعَلْهَا into two words.
+    text = unicodedata.normalize("NFKC", text)
     text = strip_diacritics(text).translate(_FOLD)
     text = _NON_ARABIC.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()

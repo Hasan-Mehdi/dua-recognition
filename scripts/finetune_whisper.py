@@ -56,7 +56,7 @@ class AudioBank:
         pcm = ROOT / "data" / "cache" / "pcm"
         pcm.mkdir(parents=True, exist_ok=True)
         self.audio = {}
-        for p in sorted(set(paths)):
+        for p in sorted({p for p in paths if p}):
             f = pcm / (hashlib.sha1(p.encode("utf-8")).hexdigest()[:16] + ".npy")
             if not f.exists():
                 y = decode_audio(p, sampling_rate=SR)
@@ -64,6 +64,8 @@ class AudioBank:
             self.audio[p] = np.load(f, mmap_mode="r")
 
     def window(self, row) -> np.ndarray:
+        if "clip" in row:  # a whole crowd-sourced clip (scripts/build_crowd_set.py)
+            return np.load(ROOT / row["clip"]).astype(np.float32) / 32767
         y = self.audio[row["audio"]]
         return y[int(row["start"] * SR) : int(row["end"] * SR)].astype(np.float32) / 32767
 
@@ -87,6 +89,52 @@ def augment(x: np.ndarray, rng: random.Random, room_p: float = 0.0) -> np.ndarra
     return np.clip(x, -1, 1)
 
 
+def speed_perturb(x: np.ndarray, rng: random.Random, lo: float = 0.9, hi: float = 1.1) -> np.ndarray:
+    """Play faster or slower, pitch moving with it (Kaldi-style speed perturbation)."""
+    f = rng.uniform(lo, hi)
+    n = max(1, int(len(x) / f))
+    return np.interp(np.arange(n) * f, np.arange(len(x)), x).astype(np.float32)
+
+
+def vtlp(feats: torch.Tensor, rng: random.Random, p: float, lo: float = 0.85, hi: float = 1.15) -> torch.Tensor:
+    """Vocal tract length perturbation on log-mel features: stretch the
+    frequency axis by alpha, as a longer or shorter vocal tract would (a
+    different speaker: women, children, other men)."""
+    n_mels = feats.shape[1]
+    out = feats.clone()
+    for b in range(feats.shape[0]):
+        if rng.random() >= p:
+            continue
+        a = rng.uniform(lo, hi)
+        src = torch.clamp(torch.arange(n_mels, dtype=torch.float32) / a, 0, n_mels - 1)
+        i0 = src.floor().long()
+        i1 = torch.clamp(i0 + 1, max=n_mels - 1)
+        w = (src - i0).view(-1, 1)
+        out[b] = feats[b, i0] * (1 - w) + feats[b, i1] * w
+    return out
+
+
+def spec_augment(feats: torch.Tensor, rng: random.Random, n_freq: int = 2, f_max: int = 12,
+                 n_time: int = 2, t_max: int = 40) -> torch.Tensor:
+    """SpecAugment: blank a few mel bands and short stretches of time (masked
+    to each clip's mean), so no single cue is indispensable. Time masks stay
+    short (<=0.4 s) so a whole word is rarely hidden from its label."""
+    out = feats.clone()
+    for b in range(feats.shape[0]):
+        fill = out[b].mean()
+        for _ in range(n_freq):
+            w = rng.randint(0, f_max)
+            f0 = rng.randint(0, feats.shape[1] - w)
+            out[b, f0 : f0 + w, :] = fill
+        # only mask where there is audio (features are padded to 30 s)
+        used = int((feats[b] > feats[b].min() + 1e-3).any(0).nonzero().max().item()) + 1 if (feats[b] > feats[b].min() + 1e-3).any() else feats.shape[2]
+        for _ in range(n_time):
+            w = rng.randint(0, t_max)
+            t0 = rng.randint(0, max(0, used - w))
+            out[b, :, t0 : t0 + w] = fill
+    return out
+
+
 def cer(refs: list[str], hyps: list[str]) -> float:
     import jiwer
 
@@ -105,6 +153,14 @@ def main() -> None:
     ap.add_argument("--warmup", type=int, default=100)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--room", type=float, default=0.0, help="share of training windows given room reverb + noise")
+    ap.add_argument("--data", default="", help="training set version suffix, e.g. v2 -> train_v2.jsonl / val_v2.jsonl")
+    ap.add_argument("--speed", type=float, default=0.0, help="share of windows speed-perturbed (0.9-1.1x)")
+    ap.add_argument("--vtlp", type=float, default=0.0, help="share of windows given vocal tract length perturbation")
+    ap.add_argument("--specaug", action="store_true", help="SpecAugment frequency and time masks")
+    ap.add_argument("--freeze-encoder", action="store_true",
+                    help="train only the decoder: the acoustic model keeps what it learnt from many voices")
+    ap.add_argument("--crowd", type=float, default=0.0,
+                    help="add crowd-sourced clips (data/cache/finetune/crowd.jsonl) as this share of the training set")
     ap.add_argument("--lora", type=int, default=0, metavar="RANK",
                     help="train LoRA adapters of this rank instead of all weights (for large models)")
     args = ap.parse_args()
@@ -116,9 +172,16 @@ def main() -> None:
     rng = random.Random(args.seed)
     torch.manual_seed(args.seed)
 
-    train, val = load_rows("train"), load_rows("val")
+    sfx = f"_{args.data}" if args.data else ""
+    train, val = load_rows("train" + sfx), load_rows("val" + sfx)
+    if args.crowd:
+        crowd = load_rows("crowd")
+        rng.shuffle(crowd)
+        n = min(len(crowd), int(len(train) * args.crowd / (1 - args.crowd)))
+        train += crowd[:n]
+        print(f"+{n} crowd-sourced clips", flush=True)
     print(f"{len(train)} train / {len(val)} val windows", flush=True)
-    bank = AudioBank([r["audio"] for r in train + val])
+    bank = AudioBank([r.get("audio") for r in train + val])
 
     proc = WhisperProcessor.from_pretrained(args.base, language="arabic", task="transcribe")
     tok = proc.tokenizer
@@ -137,6 +200,9 @@ def main() -> None:
     model.generation_config.task = "transcribe"
     model.generation_config.forced_decoder_ids = None
     start_id = model.config.decoder_start_token_id
+    if args.freeze_encoder:
+        for p in model.model.encoder.parameters():
+            p.requires_grad = False
     if args.lora:
         # large-v3-turbo's 809M weights plus AdamW state don't fit in 16 GB;
         # low-rank adapters on every attention and MLP projection do.
@@ -150,8 +216,13 @@ def main() -> None:
     def batch_of(rows, train_mode):
         wav = [bank.window(r) for r in rows]
         if train_mode:
+            wav = [speed_perturb(x, rng) if rng.random() < args.speed else x for x in wav]
             wav = [augment(x, rng, args.room) for x in wav]
         feats = proc.feature_extractor(wav, sampling_rate=SR, return_tensors="pt").input_features
+        if train_mode and args.vtlp:
+            feats = vtlp(feats, rng, args.vtlp)
+        if train_mode and args.specaug:
+            feats = spec_augment(feats, rng)
         labels = tok([r["text"] for r in rows], padding=True, return_tensors="pt")
         ids = labels.input_ids.masked_fill(labels.attention_mask == 0, -100)
         if (ids[:, 0] == start_id).all():
