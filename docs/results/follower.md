@@ -286,7 +286,8 @@ WebSocket and scored like the follow lane):
 Within 5 pts of offline. Word step on CPU: p50 286 ms, p90 350 ms. That is far above the
 36 ms measured offline, because whisper shares the process and another job was using the
 CPU. Since that exceeds the 0.2 s hop, word updates arrived about every 0.35 s, 0.19 s
-(p50) after their audio. On the GPU server the CTC window should be a few ms. The live
+(p50) after their audio. On the restarted phone server (GPU, turbo tracker in the same
+process) a 25 s smoke test gave word steps of 12 ms p50, 80 ms p90. The live
 number is a little lower than offline, which fits the slower cadence.
 
 ## Other uses (not built)
