@@ -59,10 +59,56 @@ def fold_matrix(vocab: dict[str, int], blank_id: int) -> np.ndarray:
     return m
 
 
-def main() -> None:
-    import torch
-    from transformers import AutoModelForCTC, AutoProcessor
+class CtcModel:
+    """A CTC model plus the fold onto the corpus alphabet, ready to run over windows."""
 
+    def __init__(self, name: str):
+        import torch
+        from transformers import AutoModelForCTC, AutoProcessor
+
+        self.torch = torch
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.proc = AutoProcessor.from_pretrained(name)
+        self.model = AutoModelForCTC.from_pretrained(name).to(self.device).eval()
+        if self.device == "cuda":
+            self.model = self.model.half()
+        vocab = self.proc.tokenizer.get_vocab()
+        self.blank = self.proc.tokenizer.pad_token_id
+        self.fold = torch.tensor(fold_matrix(vocab, self.blank), device=self.device)
+        self.inv = {i: t for t, i in vocab.items()}
+
+    def windows(self, y: np.ndarray, times: list[float], window: float, batch: int = 16):
+        """Folded log posteriors [n, frames, N_COLS] (float16, padded with LOG_FLOOR),
+        frame counts, and greedy transcripts for the windows ending at `times`."""
+        torch = self.torch
+        wins = [y[int(max(0.0, t - window) * SR) : int(t * SR)] for t in times]
+        lps, lens, texts = [], [], []
+        with torch.no_grad():
+            for b in range(0, len(wins), batch):
+                chunk = wins[b : b + batch]
+                inp = self.proc(chunk, sampling_rate=SR, return_tensors="pt", padding=True)
+                vals = inp.input_values.to(self.device)
+                mask = inp.get("attention_mask")
+                logits = self.model(vals.half() if self.device == "cuda" else vals,
+                                    attention_mask=mask.to(self.device) if mask is not None else None).logits.float()
+                probs = logits.softmax(-1)
+                folded = torch.log((probs @ self.fold).clamp_min(np.exp(LOG_FLOOR)))
+                ids = logits.argmax(-1).cpu().numpy()
+                for k, x in enumerate(chunk):
+                    f = int(self.model._get_feat_extract_output_lengths(torch.tensor(len(x))).item()) if len(x) else 0
+                    lps.append(folded[k, :f].cpu().numpy().astype(np.float16))
+                    lens.append(f)
+                    # greedy CTC decode: collapse repeats, drop blanks
+                    seq = [i for j, i in enumerate(ids[k, :f]) if i != self.blank and (j == 0 or i != ids[k, j - 1])]
+                    texts.append("".join(self.inv[i] for i in seq).replace("|", " ").strip())
+        fmax = max(lens) if lens else 0
+        arr = np.full((len(wins), fmax, N_COLS), LOG_FLOOR, dtype=np.float16)
+        for k, a in enumerate(lps):
+            arr[k, : len(a)] = a
+        return arr, np.array(lens, dtype=np.int32), texts, wins
+
+
+def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="models/wav2vec2-quran-dua")
     ap.add_argument("--tag", help="cache name (defaults to the model's last path part)")
@@ -70,31 +116,26 @@ def main() -> None:
     ap.add_argument("--hop", type=float, default=1.0)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--test-only", action="store_true")
+    ap.add_argument("--train-only", action="store_true")
     ap.add_argument("--duas", nargs="*", help="limit to these du'a ids")
+    ap.add_argument("--limit", type=int, default=0, help="stop after this many recordings (timing check)")
     ap.add_argument("--room", type=float, metavar="SNR_DB")
     args = ap.parse_args()
     tag = (args.tag or Path(args.model).name) + (f"+room{args.room:g}" if args.room is not None else "")
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    proc = AutoProcessor.from_pretrained(args.model)
-    model = AutoModelForCTC.from_pretrained(args.model).to(device).eval()
-    if device == "cuda":
-        model = model.half()
-    vocab = proc.tokenizer.get_vocab()
-    blank = proc.tokenizer.pad_token_id
-    fold = torch.tensor(fold_matrix(vocab, blank), device=device)
-    inv = {i: t for t, i in vocab.items()}
-
+    m = CtcModel(args.model)
+    done = 0
     for dua in load_all().values():
         if args.duas and dua.id not in args.duas:
             continue
         for rec in load_recordings(dua):
-            if args.test_only and not is_test(rec.reciter):
+            if (args.test_only and not is_test(rec.reciter)) or (args.train_only and is_test(rec.reciter)):
                 continue
             out = ctc_cache_path(tag, rec.audio_id, args.window, args.hop)
             txt = cache_path(tag, rec.audio_id, args.window, args.hop)
             if out.exists() and txt.exists():
                 continue
+            if args.limit and done >= args.limit:
+                return
             out.parent.mkdir(parents=True, exist_ok=True)
             txt.parent.mkdir(parents=True, exist_ok=True)
             y = decode_audio(str(rec.path), sampling_rate=SR)
@@ -103,36 +144,15 @@ def main() -> None:
             t0 = time.time()
             n = int((rec.end_s + 1e-6) // args.hop)
             times = [round((k + 1) * args.hop, 3) for k in range(n)]
-            wins = [y[int(max(0.0, t - args.window) * SR) : int(t * SR)] for t in times]
-            lps, lens, texts = [], [], []
-            with torch.no_grad():
-                for b in range(0, n, args.batch):
-                    chunk = wins[b : b + args.batch]
-                    inp = proc(chunk, sampling_rate=SR, return_tensors="pt", padding=True)
-                    vals = inp.input_values.to(device)
-                    mask = inp.get("attention_mask")
-                    logits = model(vals.half() if device == "cuda" else vals,
-                                   attention_mask=mask.to(device) if mask is not None else None).logits.float()
-                    probs = logits.softmax(-1)
-                    folded = torch.log((probs @ fold).clamp_min(np.exp(LOG_FLOOR)))
-                    ids = logits.argmax(-1).cpu().numpy()
-                    for k, x in enumerate(chunk):
-                        f = int(model._get_feat_extract_output_lengths(torch.tensor(len(x))).item()) if len(x) else 0
-                        lps.append(folded[k, :f].cpu().numpy().astype(np.float16))
-                        lens.append(f)
-                        # greedy CTC decode: collapse repeats, drop blanks
-                        seq = [i for j, i in enumerate(ids[k, :f]) if i != blank and (j == 0 or i != ids[k, j - 1])]
-                        texts.append("".join(inv[i] for i in seq).replace("|", " ").strip())
-            fmax = max(lens) if lens else 0
-            arr = np.full((n, fmax, N_COLS), LOG_FLOOR, dtype=np.float16)
-            for k, a in enumerate(lps):
-                arr[k, : len(a)] = a
-            np.savez(out, lp=arr, n_frames=np.array(lens, dtype=np.int32), t=np.array(times))
+            arr, lens, texts, wins = m.windows(y, times, args.window, args.batch)
+            np.savez(out, lp=arr, n_frames=lens, t=np.array(times))
             speech = [speech_in_tail(w) for w in wins]
             rows = [{"t": t, "text": x, "speech": sp} for t, x, sp in zip(times, texts, speech)]
             txt.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
             took = time.time() - t0
-            print(f"{dua.id:28s} {rec.reciter[:20]:20s} {n:5d} windows  {took:6.1f}s", flush=True)
+            done += 1
+            print(f"{dua.id:28s} {rec.reciter[:20]:20s} {n:5d} windows  {took:6.1f}s  "
+                  f"{out.stat().st_size / 1e6:6.1f} MB", flush=True)
 
 
 if __name__ == "__main__":

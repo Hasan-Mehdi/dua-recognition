@@ -79,6 +79,44 @@ def room_tone(y: np.ndarray, seconds: float) -> np.ndarray:
     return np.tile(snip, reps)[: int(seconds * SR)].astype(np.float32)
 
 
+def paused_audio(y: np.ndarray, at: list[float], P: float) -> np.ndarray:
+    """`y` with `P` seconds of its own room tone inserted at each time in `at`."""
+    tone = room_tone(y, P)
+    pieces, prev = [], 0
+    for t in at:
+        pieces += [y[prev : int(t * SR)], tone]
+        prev = int(t * SR)
+    pieces.append(y[prev:])
+    return np.concatenate(pieces)
+
+
+def build_ctc(args, out_dir: Path) -> None:
+    """CTC posteriors of the paused audio (same pauses as the built set), for the
+    word follower: `--ctc-window` s windows every `--ctc-hop` s."""
+    from dump_ctc import CtcModel
+    from faster_whisper.audio import decode_audio
+
+    recs = {rec.audio_id: rec for dua in ev.load_all().values() for rec in ev.load_recordings(dua)}
+    ctag = Path(args.ctc_model).name
+    cdir = out_dir / f"ctc-{ctag}"
+    cdir.mkdir(parents=True, exist_ok=True)
+    m = None
+    for f in sorted(out_dir.glob("*.json")):
+        out = cdir / f"{f.stem}_w{args.ctc_window:g}_h{args.ctc_hop:g}.npz"
+        if out.exists():
+            continue
+        m = m or CtcModel(args.ctc_model)
+        r = json.loads(f.read_text(encoding="utf-8"))
+        P = r["pause_s"]
+        y = decode_audio(str(recs[r["audio_id"]].path), sampling_rate=SR)
+        y2 = paused_audio(y, [s - P * j for j, (s, _) in enumerate(r["pauses"])], P)
+        end = r["rows"][-1][0]
+        times = [round((k + 1) * args.ctc_hop, 3) for k in range(int((end + 1e-6) // args.ctc_hop))]
+        arr, lens, _, _ = m.windows(y2, times, args.ctc_window, 32)
+        np.savez(out, lp=arr, n_frames=lens, t=np.array(times))
+        print(f"  ctc {f.stem} {len(times)} windows {out.stat().st_size / 1e6:.0f} MB", flush=True)
+
+
 def build(args) -> None:
     os.environ.setdefault("DUA_ASR_DEVICE", args.device)
     from faster_whisper.audio import decode_audio
@@ -90,6 +128,9 @@ def build(args) -> None:
     P = args.pause
     out_dir = OUT / (args.tag + ("" if args.split == "test" else f"@{args.split}"))
     out_dir.mkdir(parents=True, exist_ok=True)
+    if args.ctc_model:
+        build_ctc(args, out_dir)
+        return
     for dua in duas.values():
         if dua.id in ev.LINE_LABELS_UNRELIABLE:
             continue
@@ -108,13 +149,7 @@ def build(args) -> None:
             by_t = {round(t): x for t, x in cached}
             pts = pause_points(words, ix)
             y = decode_audio(str(rec.path), sampling_rate=SR)
-            tone = room_tone(y, P)
-            pieces, prev = [], 0
-            for t, _ in pts:
-                pieces += [y[prev : int(t * SR)], tone]
-                prev = int(t * SR)
-            pieces.append(y[prev:])
-            y2 = np.concatenate(pieces)
+            y2 = paused_audio(y, [t for t, _ in pts], P)
             starts2 = [t + P * j for j, (t, _) in enumerate(pts)]  # where each pause begins in y2
 
             def shift(t: float) -> float:
@@ -240,11 +275,14 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build")
-    b.add_argument("--model", required=True)
+    b.add_argument("--model")
     b.add_argument("--tag", required=True, help="window-cache tag of the same model")
     b.add_argument("--pause", type=float, default=4.0, help="seconds (whole seconds keep the 1 s hop grid)")
     b.add_argument("--device", default="cpu")
     b.add_argument("--split", choices=["test", "train"], default="test", help="train: for tuning (tag gets @train)")
+    b.add_argument("--ctc-model", help="instead: dump this CTC model's posteriors over the already built paused audio")
+    b.add_argument("--ctc-window", type=float, default=3.0)
+    b.add_argument("--ctc-hop", type=float, default=0.2)
     s = sub.add_parser("score")
     s.add_argument("--tag", required=True)
     s.add_argument("--delay", type=float, default=0.5)
