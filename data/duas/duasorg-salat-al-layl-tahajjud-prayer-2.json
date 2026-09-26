@@ -1,0 +1,36 @@
+{
+ "dua_id": "duasorg-salat-al-layl-tahajjud-prayer-2",
+ "dua_name_en": "Instruction Block",
+ "dua_name_ar": "",
+ "source": "https://www.duas.org/salat-al-layl-tahajjud-prayer.html",
+ "segments": [
+  {
+   "segment_id": 1,
+   "arabic": "اَللّهُمَّ إِنَّهُ لاَ يُوَارِي مِنْكَ لَيْلٌ دَاجٍ"
+  },
+  {
+   "segment_id": 2,
+   "arabic": "وَلاَ سَمَاءٌ ذَاتُ أَبْرَاجٍ"
+  },
+  {
+   "segment_id": 3,
+   "arabic": "وَلاَ أَرْضٌ ذَاتُ مِهَادٍ"
+  },
+  {
+   "segment_id": 4,
+   "arabic": "وَلاَ ظَلَمَاتٌ بَعْضُهَا فَوْقَ بَعْضٍ"
+  },
+  {
+   "segment_id": 5,
+   "arabic": "وَلاَ بَحْرٌ لُجّيٌّ"
+  },
+  {
+   "segment_id": 6,
+   "arabic": "تُدْلِجُ بَيْنَ يَدَيْ الْمُدْلِجِ مِنْ خَلْقِكَ"
+  },
+  {
+   "segment_id": 7,
+   "arabic": "تَعْلَمُ خَائِنَةَ الأَعْيُنِ وَمَا تُخْفِي الصُّدُورُ"
+  }
+ ]
+}

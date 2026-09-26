@@ -46,6 +46,10 @@ KNOWN_RECITERS = [
     "فاني", "fani", "قمبر", "qambar", "kambar", "العطار", "attar", "بوماد", "boumad",
     "رسولي", "rasouli", "رضوي", "rizvi",
 ]
+# Uploads whose voice matches a test reciter (scripts/speaker_check.py), under a
+# name the list above can't catch. qxuDk75kkBI is Halwachi's DuaPlayer Hujjat
+# recording re-uploaded (voice 0.95, same length): a test recording in training.
+EXCLUDED_VIDEOS = {"qxuDk75kkBI"}
 NOT_A_RECITATION = ["شرح", "تفسير", "محاضرة", "lecture", "explained", "tafseer", "reaction", "مقطع", "shorts"]
 
 
@@ -63,6 +67,8 @@ def _fold(text: str) -> str:
 
 
 def excluded(v: dict) -> bool:
+    if v.get("id") in EXCLUDED_VIDEOS:
+        return True
     text = _fold(f"{v.get('title', '')} {v.get('channel', '')} {v.get('uploader', '')}")
     return any(_fold(name) in text for name in KNOWN_RECITERS + NOT_A_RECITATION)
 
@@ -103,7 +109,7 @@ def prune() -> None:
         if meta_path.name.endswith(".labels.json"):
             continue
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if not excluded({"title": meta.get("title"), "channel": meta.get("channel")}):
+        if not excluded({"id": meta.get("video_id"), "title": meta.get("title"), "channel": meta.get("channel")}):
             continue
         vid = meta["video_id"]
         for p in list(meta_path.parent.glob(f"{vid}.*")) + list((ROOT / "data/cache/windows").glob(f"*/yt-{vid}_*")):

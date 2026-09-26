@@ -20,6 +20,14 @@ data/duaplayer/
 data/cache/
 models/
 data/youtube/
+data/noha/
+data/captioned/
 web/corpus.json
 .venv-export/
 web/models/
+data/duaspro/
+data/duasorg/
+data/duasorg_timed/
+data/untimed/
+# personal test recordings (voice) stay local
+/*.mp4

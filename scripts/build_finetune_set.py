@@ -88,6 +88,8 @@ def main() -> None:
     ap.add_argument("--split", choices=["train", "test"], default="train",
                     help="test: build an ASR benchmark (windows + snapped references) from test reciters")
     ap.add_argument("--youtube", action="store_true", help="also use YouTube recordings (silver labels)")
+    ap.add_argument("--untimed", action="store_true", help="also use the labelled untimed duas.org recordings (silver)")
+    ap.add_argument("--version", default="", help="write train_<v>.jsonl / val_<v>.jsonl (finetune_whisper.py --data v)")
     args = ap.parse_args()
     test_mode = args.split == "test"
 
@@ -102,8 +104,10 @@ def main() -> None:
         recs = [(r, args.hop) for r in load_recordings(dua) if is_test(r.reciter) == test_mode]
         if args.youtube and not test_mode:
             recs += [(r, YT_HOP) for r in load_youtube(dua)]
+        if args.untimed and not test_mode:
+            recs += [(r, YT_HOP) for r in load_youtube(dua, untimed=True)]
         for rec, hop in recs:
-            rows = load_yt_rows(args.teacher, rec) if rec.audio_id.startswith("yt-") else                 load_rows(args.teacher, rec, args.window, hop)[:: args.every]
+            rows = load_yt_rows(args.teacher, rec) if rec.audio_id.startswith(("yt-", "do-")) else                 load_rows(args.teacher, rec, args.window, hop)[:: args.every]
             for t, text in rows:
                 t0 = max(0.0, t - args.window)
                 if not text:
@@ -131,7 +135,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     parts = (("test", rows_out),) if test_mode else (("val", rows_out[:n_val]), ("train", rows_out[n_val:]))
     for name, part in parts:
-        (OUT / f"{name}.jsonl").write_text(
+        (OUT / f"{name}{'_' + args.version if args.version else ''}.jsonl").write_text(
             "\n".join(json.dumps(r, ensure_ascii=False) for r in part), encoding="utf-8")
     hours = sum(r["end"] - r["start"] for r in rows_out) / 3600
     print(f"{stats} -> {len(rows_out) - n_val} {args.split} / {n_val} val windows ({hours:.1f} h of audio)")

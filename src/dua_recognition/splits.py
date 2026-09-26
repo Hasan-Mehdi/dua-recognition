@@ -16,6 +16,11 @@ TEST_RECITERS = frozenset(
         "Murtada al-Qureish",
         "Murtaza Quraish",  # the same reciter, spelled differently on another upload
         "Mohsen Farahmand Azad",
+        # duas.org recordings whose voice matched no named reciter confidently
+        # (scripts/speaker_check.py): uncertain voices go to test, never train.
+        "duas.org: Naqvi",
+        "duas.org: Jamia Kabira reciter",
+        "duas.org: Ya Mafzai reciter",
     }
 )
 

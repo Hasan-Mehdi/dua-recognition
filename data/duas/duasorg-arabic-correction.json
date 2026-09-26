@@ -1,0 +1,176 @@
+{
+ "dua_id": "duasorg-arabic-correction",
+ "dua_name_en": "New dua",
+ "dua_name_ar": "",
+ "source": "https://www.duas.org/arabic-correction.html",
+ "segments": [
+  {
+   "segment_id": 1,
+   "arabic": "<b>"
+  },
+  {
+   "segment_id": 2,
+   "arabic": "Urdu Yeh (ی) Medial"
+  },
+  {
+   "segment_id": 3,
+   "arabic": "</b>"
+  },
+  {
+   "segment_id": 4,
+   "arabic": "Original: الْعَظِیْمِ"
+  },
+  {
+   "segment_id": 5,
+   "arabic": "Standard Arabic: الْعَظِيْمِ"
+  },
+  {
+   "segment_id": 6,
+   "arabic": "Indo-Pak Style: الْعَظِيْمِ"
+  },
+  {
+   "segment_id": 7,
+   "arabic": "- See in Me Quran Font to notice the difference - Prevents broken cursive ligatures and restores standard dual sub-dots"
+  },
+  {
+   "segment_id": 8,
+   "arabic": "<hr>"
+  },
+  {
+   "segment_id": 9,
+   "arabic": "<b>"
+  },
+  {
+   "segment_id": 10,
+   "arabic": "Ulta Pesh (ٗ U+0657)"
+  },
+  {
+   "segment_id": 11,
+   "arabic": "</b>"
+  },
+  {
+   "segment_id": 12,
+   "arabic": "Original: كُنْهَهٗ"
+  },
+  {
+   "segment_id": 13,
+   "arabic": "Standard Arabic: كُنْهَهُ"
+  },
+  {
+   "segment_id": 14,
+   "arabic": "Indo-Pak Style: كُنْهَهٗ"
+  },
+  {
+   "segment_id": 15,
+   "arabic": "Indo-Pak readers recite -hū (long vowel) with ٗ, but clip to short -hu with ُ."
+  },
+  {
+   "segment_id": 16,
+   "arabic": "Original: حَقُّهٗ"
+  },
+  {
+   "segment_id": 17,
+   "arabic": "Standard Arabic: حَقُّهُ"
+  },
+  {
+   "segment_id": 18,
+   "arabic": "Indo-Pak Style: حَقُّهٗ"
+  },
+  {
+   "segment_id": 19,
+   "arabic": "Maintains traditional ishba' elongation on the singular masculine pronoun."
+  },
+  {
+   "segment_id": 20,
+   "arabic": "Original: اَهْلُهٗ"
+  },
+  {
+   "segment_id": 21,
+   "arabic": "Standard Arabic: اَهْلُهُ"
+  },
+  {
+   "segment_id": 22,
+   "arabic": "Indo-Pak Style: اَهْلُهٗ"
+  },
+  {
+   "segment_id": 23,
+   "arabic": "Retains proper phonetic elongation (ahluhū)."
+  },
+  {
+   "segment_id": 24,
+   "arabic": "<hr><b>"
+  },
+  {
+   "segment_id": 25,
+   "arabic": "Khari Zer (ٖ U+0656)"
+  },
+  {
+   "segment_id": 26,
+   "arabic": "</b>"
+  },
+  {
+   "segment_id": 27,
+   "arabic": "Original: اٰلِهٖ"
+  },
+  {
+   "segment_id": 28,
+   "arabic": "Standard Arabic: اٰلِهِ"
+  },
+  {
+   "segment_id": 29,
+   "arabic": "Indo-Pak Style: اٰلِهٖ"
+  },
+  {
+   "segment_id": 30,
+   "arabic": "Crucial for South Asian readers to recite -hī (long vowel) instead of clipping to -hi."
+  },
+  {
+   "segment_id": 31,
+   "arabic": "Original: بِهٖ"
+  },
+  {
+   "segment_id": 32,
+   "arabic": "Standard Arabic: بِهِ"
+  },
+  {
+   "segment_id": 33,
+   "arabic": "Indo-Pak Style: بِهٖ"
+  },
+  {
+   "segment_id": 34,
+   "arabic": "Retains traditional Indo-Pak kasra elongation mark (bihī)."
+  },
+  {
+   "segment_id": 35,
+   "arabic": "<hr>"
+  },
+  {
+   "segment_id": 36,
+   "arabic": "<b>"
+  },
+  {
+   "segment_id": 37,
+   "arabic": "Urdu Heh Goal (ہ)"
+  },
+  {
+   "segment_id": 38,
+   "arabic": "</b>"
+  },
+  {
+   "segment_id": 39,
+   "arabic": "Original: طٰہٰ"
+  },
+  {
+   "segment_id": 40,
+   "arabic": "Standard Arabic: طٰهٰ"
+  },
+  {
+   "segment_id": 41,
+   "arabic": "Indo-Pak Style: طٰهٰ"
+  },
+  {
+   "segment_id": 42,
+   "arabic": "Converts Urdu hooked Heh Goal (ہ U+06C1) to standard Arabic Ha (ه U+0647) to eliminate awkward script hooks."
+  }
+ ]
+}

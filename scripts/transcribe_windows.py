@@ -70,6 +70,29 @@ def _youtube(dua) -> list[Recording]:
     return out
 
 
+def _untimed(dua) -> list[Recording]:
+    """Untimed recordings (scripts/fetch_duasorg.py untimed) that the voice check
+    put on the train side; test and holdout voices are never labelled for training."""
+    out = []
+    for meta_path in sorted((UNTIMED / dua.id).glob("*.json")) if (UNTIMED / dua.id).exists() else []:
+        if meta_path.name.endswith(".labels.json"):
+            continue
+        m = json.loads(meta_path.read_text(encoding="utf-8"))
+        if m.get("split") != "train":
+            continue
+        dur = float(m.get("duration_s") or 0)
+        out.append(Recording(untimed_id(meta_path), dua.id, m.get("reciter") or "duas.org",
+                             meta_path.with_name(m["audio"]), dur, [], dur))
+    return out
+
+
+UNTIMED = ROOT / "data" / "untimed" / "duasorg"
+
+
+def untimed_id(meta_path: Path) -> str:
+    return f"do-{meta_path.stem}"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="large-v3-turbo")
@@ -86,6 +109,8 @@ def main() -> None:
                     help="simulate a phone in a room: reverb + noise at this SNR (tag gets +room<SNR>)")
     ap.add_argument("--youtube", action="store_true",
                     help="transcribe data/youtube/* instead (teacher pass for align_offline.py)")
+    ap.add_argument("--untimed", action="store_true",
+                    help="transcribe data/untimed/duasorg/* (train voices) instead (teacher pass for align_offline.py)")
     args = ap.parse_args()
     tag = args.tag or Path(args.model).name
     if args.constrain:
@@ -98,7 +123,7 @@ def main() -> None:
     for dua in duas.values():
         if args.duas and dua.id not in args.duas:
             continue
-        recs = _youtube(dua) if args.youtube else load_recordings(dua)
+        recs = _youtube(dua) if args.youtube else _untimed(dua) if args.untimed else load_recordings(dua)
         if args.test_only:
             recs = [r for r in recs if is_test(r.reciter)]
         for rec in recs:

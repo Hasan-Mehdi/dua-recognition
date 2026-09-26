@@ -1,0 +1,28 @@
+{
+ "dua_id": "duasorg-aamaal-umm-e-dawood-2",
+ "dua_name_en": "Dua in Sajdah",
+ "dua_name_ar": "",
+ "source": "https://www.duas.org/aamaal-umm-e-dawood.html",
+ "segments": [
+  {
+   "segment_id": 1,
+   "arabic": "اَللَّهُمَّ لَكَ سَجَدْتُ"
+  },
+  {
+   "segment_id": 2,
+   "arabic": "وَبِكَ آمَنْتُ"
+  },
+  {
+   "segment_id": 3,
+   "arabic": "فَٱرْحَمْ ذُلِّي وَفَاقَتِي"
+  },
+  {
+   "segment_id": 4,
+   "arabic": "وَٱجْتِهَادِي وَتَضَرُّعِي"
+  },
+  {
+   "segment_id": 5,
+   "arabic": "وَمَسْكَنَتِي وَفَقْرِي إِلَيْكَ يَا رَبِّ"
+  }
+ ]
+}

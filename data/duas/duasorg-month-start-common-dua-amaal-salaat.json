@@ -1,0 +1,36 @@
+{
+ "dua_id": "duasorg-month-start-common-dua-amaal-salaat",
+ "dua_name_en": "Instruction Block",
+ "dua_name_ar": "",
+ "source": "https://www.duas.org/month-start-common-dua-amaal-salaat.html",
+ "segments": [
+  {
+   "segment_id": 1,
+   "arabic": "سَيَجْعَلُ ٱللَّهُ بَعْدَ عُسْرٍ يُسْرًا"
+  },
+  {
+   "segment_id": 2,
+   "arabic": "مَا شَاءَ ٱللَّهُ لَا قُوَّةَ إِلَّا بِٱللَّهِ"
+  },
+  {
+   "segment_id": 3,
+   "arabic": "حَسْبُنَا ٱللَّهُ وَنِعْمَ ٱلْوَكِيلُ"
+  },
+  {
+   "segment_id": 4,
+   "arabic": "وَأُفَوِّضُ أَمْرِي إِلَى ٱللَّهِ إِنَّ ٱللَّهَ بَصِيرٌ بِٱلْعِبَادِ"
+  },
+  {
+   "segment_id": 5,
+   "arabic": "لَّا إِلَٰهَ إِلَّا أَنتَ سُبْحَانَكَ إِنِّي كُنتُ مِنَ ٱلظَّالِمِينَ"
+  },
+  {
+   "segment_id": 6,
+   "arabic": "رَبِّ إِنِّي لِمَا أَنزَلْتَ إِلَيَّ مِنْ خَيْرٍ فَقِيرٌ"
+  },
+  {
+   "segment_id": 7,
+   "arabic": "رَبِّ لَا تَذَرْنِي فَرْدًا وَأَنتَ خَيْرُ ٱلْوَارِثِينَ"
+  }
+ ]
+}

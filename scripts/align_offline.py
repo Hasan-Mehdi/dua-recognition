@@ -32,6 +32,7 @@ from dua_recognition.offline import align_recording  # noqa: E402
 from dua_recognition.splits import LINE_LABELS_UNRELIABLE  # noqa: E402
 
 YT = ROOT / "data" / "youtube"
+UNTIMED = ROOT / "data" / "untimed" / "duasorg"
 
 
 def starts_from(times: list[float], segs: np.ndarray, placed: list[bool]) -> list[tuple[float, int]]:
@@ -83,14 +84,22 @@ def validate(asr: str, stride: int) -> None:
     print("lowest:", ", ".join(f"{d}/{r} {a:.0%}" for d, r, a in worst))
 
 
-def label(asr: str, hop: float) -> None:
+def label(asr: str, hop: float, untimed: bool = False) -> None:
+    """Label data/youtube/* (or, with untimed, data/untimed/duasorg/*)."""
     duas = load_all()
-    for meta_path in sorted(YT.glob("*/*.json")):
+    for meta_path in sorted((UNTIMED if untimed else YT).glob("*/*.json")):
         if meta_path.name.endswith(".labels.json"):
             continue
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if meta["dua_id"] not in duas:
+            continue
         dua = duas[meta["dua_id"]]
-        cache = WINDOWS / asr / f"yt-{meta['video_id']}_w6_h{hop:g}.jsonl"
+        if untimed:  # same fields as a YouTube meta from here on
+            meta = {**meta, "video_id": meta_path.stem, "channel": meta.get("reciter"), "title": meta.get("source", "")}
+            audio_id = f"do-{meta_path.stem}"
+        else:
+            audio_id = f"yt-{meta['video_id']}"
+        cache = WINDOWS / asr / f"{audio_id}_w6_h{hop:g}.jsonl"
         if not cache.exists():
             continue
         rows = [json.loads(line) for line in cache.read_text(encoding="utf-8").splitlines() if line]
@@ -106,7 +115,8 @@ def label(asr: str, hop: float) -> None:
         usable = coverage >= 0.5 and lines >= 0.5
         out = meta_path.with_name(meta_path.stem + ".labels.json")
         out.write_text(json.dumps({
-            "video_id": meta["video_id"], "dua_id": dua.id, "reciter": f"yt:{meta.get('channel')}",
+            "video_id": meta["video_id"], "dua_id": dua.id,
+            "reciter": f"duas.org:{meta.get('channel')}" if untimed else f"yt:{meta.get('channel')}",
             "slide_start_s": {str(s): t for t, s in starts},
             "end_s": rows[-1][0] if rows else 0,
             "placed_fraction": round(coverage, 3), "lines_found": round(lines, 3), "usable": usable,
@@ -115,17 +125,21 @@ def label(asr: str, hop: float) -> None:
               f"{'ok' if usable else 'UNUSABLE'}  {meta.get('title', '')[:50]}")
 
 
-def load_youtube(dua) -> list[Recording]:
-    """YouTube recordings of a du'a with usable silver labels, as Recordings."""
+def load_youtube(dua, untimed: bool = False) -> list[Recording]:
+    """YouTube (or untimed duas.org) recordings of a du'a with usable silver labels, as Recordings."""
     out = []
-    for lab_path in sorted((YT / dua.id).glob("*.labels.json")) if (YT / dua.id).exists() else []:
+    root = (UNTIMED if untimed else YT) / dua.id
+    for lab_path in sorted(root.glob("*.labels.json")) if root.exists() else []:
         lab = json.loads(lab_path.read_text(encoding="utf-8"))
         if not lab["usable"]:
             continue
         meta = json.loads(lab_path.with_name(lab["video_id"] + ".json").read_text(encoding="utf-8"))
+        if untimed and meta.get("split") != "train":
+            continue
         starts = sorted((t, int(s)) for s, t in lab["slide_start_s"].items())
-        out.append(Recording(f"yt-{lab['video_id']}", dua.id, lab["reciter"], lab_path.with_name(meta["audio"]),
-                             meta.get("duration_s") or lab["end_s"], starts, lab["end_s"]))
+        out.append(Recording(f"{'do' if untimed else 'yt'}-{lab['video_id']}", dua.id, lab["reciter"],
+                             lab_path.with_name(meta["audio"]), meta.get("duration_s") or lab["end_s"], starts,
+                             lab["end_s"]))
     return out
 
 
@@ -135,11 +149,12 @@ def main() -> None:
     ap.add_argument("--validate", action="store_true")
     ap.add_argument("--stride", type=int, default=2, help="validation: use every Nth 1 s window")
     ap.add_argument("--hop", type=float, default=2.0, help="labelling: window hop of the YouTube caches")
+    ap.add_argument("--untimed", action="store_true", help="label data/untimed/duasorg/* instead of data/youtube/*")
     args = ap.parse_args()
     if args.validate:
         validate(args.asr, args.stride)
     else:
-        label(args.asr, args.hop)
+        label(args.asr, args.hop, args.untimed)
 
 
 if __name__ == "__main__":

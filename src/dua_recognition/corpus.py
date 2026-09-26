@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import bisect
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "duas"
 CACHE_DIR = ROOT / "data" / "duaplayer"
+# More human-timed recordings in the same format (scripts/fetch_duaspro.py).
+# Opt-in (extra=True or DUA_EXTRA_SOURCES=1) so results stay comparable with
+# the DuaPlayer-only numbers until they're re-baselined.
+EXTRA_CACHE_DIRS = [ROOT / "data" / "duaspro", ROOT / "data" / "duasorg_timed"]
 
 
 @dataclass(frozen=True)
@@ -84,16 +89,22 @@ class Recording:
         return self.starts[i][1] if i >= 0 else None
 
 
-def load_recordings(dua: Dua, cache_dir: str | Path = CACHE_DIR, repaired: bool = False) -> list[Recording]:
+def load_recordings(dua: Dua, cache_dir: str | Path = CACHE_DIR, repaired: bool = False,
+                    extra: bool | None = None) -> list[Recording]:
     """Labelled recordings of a du'a.
 
     repaired: use `<audio>.repaired.json` timings where scripts/audit_labels.py
     wrote them (human boundary times, line numbers re-derived after a text
     re-split). Off by default: those labels are partly machine-made.
+    extra: also read EXTRA_CACHE_DIRS (default: the DUA_EXTRA_SOURCES env var).
     """
+    if extra is None:
+        extra = os.environ.get("DUA_EXTRA_SOURCES", "") not in ("", "0")
+    dirs = [Path(cache_dir)] + (EXTRA_CACHE_DIRS if extra else [])
     out = []
     n = len(dua.segments)
-    for meta_path in sorted((Path(cache_dir) / dua.id).glob("*-*.json")):
+    metas = sorted(p for d in dirs for p in (d / dua.id).glob("*-*.json"))
+    for meta_path in metas:
         if meta_path.name.endswith(".repaired.json"):
             continue
         m = json.loads(meta_path.read_text(encoding="utf-8"))
