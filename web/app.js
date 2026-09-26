@@ -5,10 +5,14 @@
 import { CorpusIndex, DEFAULTS, RECITER, Tracker } from "./tracker.js";
 import { Highlight } from "./display.js";
 import { VoiceLevel, voiceBandDb } from "./voice.js";
+import { SessionLog, clearSessions, listSessions, sessionFile, shareFiles } from "./session-log.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const SR = 16000;
+// Debug sessions (session-log.js): on for now; ?log=0 turns them off.
+const log = new SessionLog({ enabled: params.get("log") !== "0" });
+const cands = (list) => list.map(([id, p]) => [id, Number(p.toFixed(3))]);
 
 // -- engines ----------------------------------------------------------------
 class ServerEngine {
@@ -16,12 +20,20 @@ class ServerEngine {
   async prepare() {}
   async start(onUpdate) {
     // ?lead=0 turns off showing the predicted current position (for comparing by feel).
+    // ?words=ctc: the server's CTC word follower places the word (docs/results/follower.md).
     const q = ["lead", "pauses"].filter((k) => params.get(k) === "0").map((k) => `${k}=0`)
-      .concat(`follow=${following()}`).join("&");
+      .concat(`follow=${following()}`, params.get("words") === "ctc" ? ["words=ctc"] : []).join("&");
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws${q ? "?" + q : ""}`);
     ws.binaryType = "arraybuffer";
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
+      if (m.type === "word") {
+        log.event("wordstep", { end: m.t, ms: m.step_ms, dua: m.dua, seg: m.segment, token: m.token });
+        return onUpdate({ word: true, dua: m.dua, segment: m.segment, token: m.token, ms: m.step_ms });
+      }
+      log.event("hop", { end: m.t, asr_ms: m.step_ms, text: m.heard, quiet: m.quiet, dua: m.dua, seg: m.segment,
+        token: m.token, eol: m.pause_at_line_end, dua_p: m.dua_confidence, seg_p: m.segment_confidence,
+        unknown: m.unknown, speed: m.speed, cand: cands((m.candidates || []).map((c) => [c.id, c.p])) });
       onUpdate({ dua: m.dua, segment: m.segment, token: m.token, speed: m.speed, unknown: m.unknown, pause: m.pause_at_line_end, heard: m.heard, ms: m.step_ms,
         candidates: (m.candidates || []).map((c) => ({ id: c.id, p: c.p })) });
     };
@@ -55,11 +67,15 @@ class DeviceEngine {
   prepare(onProgress) {
     if (this.ready) return this.ready;
     this.worker = new Worker("asr-worker.js", { type: "module" });
+    const t0 = performance.now();
     this.ready = new Promise((resolve, reject) => {
       this.worker.onmessage = ({ data }) => {
         if (data.type === "progress") onProgress?.(data.progress);
-        else if (data.type === "ready") resolve();
-        else if (data.type === "error" && !this.onUpdate) reject(new Error(data.message));
+        else if (data.type === "ready") {
+          this.loadMs = Math.round(performance.now() - t0);
+          resolve();
+        } else if (data.type === "error" && !this.onUpdate) reject(new Error(data.message));
+        else if (data.type === "error") log.event("error", { where: "asr", message: data.message });
         else if (data.type === "text") this._onText(data);
       };
     });
@@ -105,6 +121,15 @@ class DeviceEngine {
     const quiet = params.get("pauses") === "0" ? 0 : data.quiet ?? 0; // seconds the reciter has been silent (asr-worker.js)
     const p = this.tracker.update(data.text, dt, lead, quiet);
     const still = quiet > this.tracker.cfg.stillAfter; // they've stopped: so does the gliding highlight
+    if (log.live) {
+      // `now_*`: where the evidence alone puts them (no lead, no holding through
+      // pauses), to tell recognition errors from display ones.
+      const now = this.tracker.position();
+      log.event("hop", { end: data.id / SR, asr_ms: data.ms, text: data.text, quiet, dt, lead,
+        dua: p.dua, seg: p.segment, token: p.token, eol: p.atLineEnd, dua_p: p.duaConfidence, seg_p: p.segmentConfidence,
+        now_seg: now.segment, now_token: now.token, unknown: this.tracker.null, speed: this.tracker.speed,
+        cand: cands(p.candidates) });
+    }
     this.onUpdate({ dua: p.dua, segment: p.segment, token: p.token, speed: still ? 0 : this.tracker.speed, unknown: this.tracker.null, pause: p.atLineEnd && (!data.text || still), heard: data.text, ms: data.ms,
       candidates: p.candidates.map(([id, prob]) => ({ id, p: prob })) });
     this._maybeSend();
@@ -130,12 +155,23 @@ async function init() {
   const corpus = await fetch("corpus.json").then((r) => r.json());
   for (const d of corpus) state.duas[d.id] = d;
   const mode = await fetch("api/mode").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  state.mode = mode;
   state.engine = mode?.mode === "server"
     ? new ServerEngine()
     : new DeviceEngine(corpus, params.get("model") || "whisper-base-aug-v4");
+  log.upload = log.enabled && !!mode?.sessions;
   $("footnote").textContent = state.engine.kind === "device"
-    ? "Runs entirely on this device. No audio leaves it."
+    ? (log.upload ? "Runs on this device. Debug sessions go to this server." : "Runs entirely on this device. No audio leaves it.")
     : "";
+  if (log.upload) log.sendPending().then(showSessions); // anything a closed tab left behind
+  showSessions();
+  $("sessions-send").onclick = sendSessions;
+  $("sessions-clear").onclick = async () => {
+    if (!confirm("Delete the debug sessions saved on this device?")) return;
+    await clearSessions().catch(() => {});
+    showSessions();
+  };
+  watchForDebugging();
 
   $("start").onclick = () => begin(micSource);
   $("play").onclick = showRecordings;
@@ -143,11 +179,20 @@ async function init() {
   $("picker").onclick = (e) => e.target === $("picker") && closePicker();
   $("search").oninput = () => fillPicker($("search").value);
   addEventListener("keydown", (e) => e.key === "Escape" && closePicker());
-  $("file").onchange = (e) => e.target.files[0] && begin(fileSource(URL.createObjectURL(e.target.files[0])));
-  $("stop").onclick = end;
+  $("file").onchange = (e) => {
+    const f = e.target.files[0];
+    if (f) begin(fileSource(URL.createObjectURL(f), f.name));
+  };
+  $("stop").onclick = () => end("stop");
   $("menu-btn").onclick = () => ($("menu").hidden = !$("menu").hidden);
-  $("opt-en").onchange = (e) => document.body.classList.toggle("no-en", !e.target.checked);
-  $("opt-tl").onchange = (e) => document.body.classList.toggle("no-tl", !e.target.checked);
+  $("opt-en").onchange = (e) => {
+    document.body.classList.toggle("no-en", !e.target.checked);
+    log.event("option", { translation: e.target.checked });
+  };
+  $("opt-tl").onchange = (e) => {
+    document.body.classList.toggle("no-tl", !e.target.checked);
+    log.event("option", { transliteration: e.target.checked });
+  };
   $("mode-page").onclick = () => setMajlis(false);
   $("mode-majlis").onclick = () => setMajlis(true);
   setMajlis(params.has("watch") || params.has("majlis") || stored("majlis") === "1", false);
@@ -162,10 +207,63 @@ async function init() {
   addEventListener("pointerdown", showChrome);
   if (params.has("debug")) $("debug").hidden = false;
   // Rooms are relayed by app/server.py, so sharing needs it (not a static host).
-  $("share").hidden = mode?.mode !== "server";
+  $("share").hidden = !mode;
   $("share").onclick = share;
   $("share-card").onclick = (e) => e.target === $("share-card") && ($("share-card").hidden = true);
   if (params.get("watch")) watch(params.get("watch"));
+}
+
+// -- debug sessions (session-log.js) --------------------------------------------------
+// What the log can't see from the recognizer: the user and the page around it.
+function watchForDebugging() {
+  // Tapping a line marks it: "I'm here" when the display is wrong is the best
+  // ground truth a live session can have.
+  $("text").addEventListener("click", (e) => {
+    const ln = e.target.closest(".ln");
+    if (!ln || !state.dua) return;
+    const i = Number(ln.dataset.i);
+    log.event("tap", { seg: state.duas[state.dua].segments[i].id, shown: state.segment });
+    ln.classList.remove("tapped");
+    void ln.offsetWidth; // restart the flash
+    ln.classList.add("tapped");
+  });
+  // Scrolling by hand usually means hunting for the place.
+  let from = null;
+  addEventListener("touchstart", () => (from = scrollY), { passive: true });
+  addEventListener("touchend", () => {
+    if (from !== null && Math.abs(scrollY - from) > 40) log.event("scroll", { dy: Math.round(scrollY - from) });
+    from = null;
+  }, { passive: true });
+  addEventListener("error", (e) => log.event("error", { where: "page", message: String(e.message) }));
+  addEventListener("unhandledrejection", (e) => log.event("error", { where: "page", message: String(e.reason) }));
+}
+
+async function showSessions() {
+  const all = await listSessions().catch(() => []);
+  const unsent = all.filter((r) => !r.sent && r.id !== log.live?.rec.id);
+  $("sessions").hidden = !log.enabled || !all.length;
+  const min = Math.round(all.reduce((n, r) => n + r.seconds, 0) / 60);
+  $("sessions-info").textContent = `Debug log: ${all.length} session${all.length === 1 ? "" : "s"} (${min} min) on this device`
+    + (unsent.length ? `, ${unsent.length} not sent` : "");
+  $("sessions-send").textContent = "send";
+  $("sessions-send").hidden = log.upload && !unsent.length;
+  if (log.upload) return;
+  // By hand: the unsent ones (or the latest), built now so a tap on "send" can
+  // open the share sheet straight away.
+  const ids = (unsent.length ? unsent.slice(-5) : all.slice(-1)).map((r) => r.id);
+  state.sendFiles = Promise.all(ids.map(sessionFile)).catch(() => []);
+}
+
+async function sendSessions() {
+  $("sessions-send").textContent = "sending…";
+  try {
+    if (log.upload) await log.sendPending();
+    else await shareFiles(await state.sendFiles);
+  } catch (e) {
+    $("sessions-send").textContent = e.name === "AbortError" ? "send" : "couldn't send";
+    return;
+  }
+  showSessions();
 }
 
 function stored(key, value) {
@@ -190,6 +288,7 @@ function followConfig() {
 function setMajlis(on, remember = true) {
   document.body.classList.toggle("majlis", on);
   state.engine?.follow?.(following());
+  log.event("follow", { mode: following() });
   $("mode-page").setAttribute("aria-checked", String(!on));
   $("mode-majlis").setAttribute("aria-checked", String(on));
   if (remember) stored("majlis", on ? "1" : "0");
@@ -303,8 +402,8 @@ async function micSource(ctx) {
   return ctx.createMediaStreamSource(state.stream);
 }
 
-function fileSource(url) {
-  return async (ctx) => {
+function fileSource(url, name) {
+  const source = async (ctx) => {
     const player = $("player");
     player.src = url;
     if (!state.mediaSource) {
@@ -312,10 +411,12 @@ function fileSource(url) {
       state.mediaSource = ctx.createMediaElementSource(player);
       state.mediaSource.connect(ctx.destination);
     }
-    player.onended = end;
+    player.onended = () => end("file ended");
     player.play();
     return state.mediaSource;
   };
+  source.label = `file:${name}`;
+  return source;
 }
 
 async function showRecordings() {
@@ -327,7 +428,7 @@ async function showRecordings() {
     const li = document.createElement("li");
     const b = document.createElement("button");
     b.textContent = `${r.dua_name} · ${r.reciter}`;
-    b.onclick = () => begin(fileSource(`audio/${r.id}`));
+    b.onclick = () => begin(fileSource(`audio/${r.id}`, r.id));
     li.append(b);
     return li;
   });
@@ -357,7 +458,11 @@ async function begin(makeSource) {
     $("load").hidden = true;
     $("start").disabled = false;
   }
-  state.ctx ??= new AudioContext();
+  if (!state.ctx) {
+    state.ctx = new AudioContext();
+    // A suspended context (phone locked, a call) stops the audio, and the log's clock with it.
+    state.ctx.onstatechange = () => log.event("audio", { state: state.ctx.state });
+  }
   await state.ctx.resume();
   state.worklet ??= state.ctx.audioWorklet.addModule("capture-worklet.js");
   await state.worklet;
@@ -370,8 +475,21 @@ async function begin(makeSource) {
   }
   await state.engine.start(update);
   if (state.chosen) state.engine.lock(state.chosen);
+  const track = state.stream?.getAudioTracks()[0];
+  const mic = track?.getSettings() ?? {};
+  log.start({
+    engine: state.engine.kind, model: state.engine.model ?? state.mode?.model, source: makeSource.label ?? "mic",
+    chosen: state.chosen, follow: following(), params: location.search, ua: navigator.userAgent,
+    screen: [innerWidth, innerHeight, devicePixelRatio], audio_rate: state.ctx.sampleRate, load_ms: state.engine.loadMs,
+    mic: track && { label: track.label, rate: mic.sampleRate, echo: mic.echoCancellation, noise: mic.noiseSuppression,
+      agc: mic.autoGainControl },
+    tracker: state.engine.tracker?.cfg,
+  });
   const node = new AudioWorkletNode(state.ctx, "capture");
-  node.port.onmessage = (e) => state.engine.push(e.data);
+  node.port.onmessage = (e) => {
+    log.audio(e.data);
+    state.engine.push(e.data);
+  };
   source.connect(node);
   // Feeds the listening star (meter below); a dead end, like the capture node.
   state.analyser ??= new AnalyserNode(state.ctx, { fftSize: 2048, smoothingTimeConstant: 0 });
@@ -425,7 +543,7 @@ function meter() {
   requestAnimationFrame(frame);
 }
 
-function end() {
+function end(reason) {
   const { node, source, stream } = state;
   if (source && node) source.disconnect(node);
   if (source && state.analyser) source.disconnect(state.analyser);
@@ -433,7 +551,9 @@ function end() {
   stream?.getTracks().forEach((t) => t.stop());
   state.engine?.stop();
   if (state.room?.readyState === 1) state.room.send(JSON.stringify({ ended: true }));
-  Object.assign(state, { node: null, source: null, stream: null, dua: null, segment: null, chosen: null, hl: null });
+  log.end(reason).then(showSessions);
+  Object.assign(state, { node: null, source: null, stream: null, dua: null, segment: null, chosen: null, hl: null,
+    preview: false, guessesShown: "" });
   $("guesses").hidden = true;
   $("menu").hidden = true;
   $("hint").textContent = "Tap to begin";
@@ -451,7 +571,19 @@ function showListening() {
   $("listen-msg").textContent = "Begin reciting";
 }
 
+// ?words=ctc: word messages place the line and word directly (no glide) while they
+// keep coming; the tracker's updates still identify the du'a and drive the rest.
+function renderWord(u) {
+  state.wordAt = performance.now();
+  state.wordLive = !!u.dua && u.dua === state.dua;
+  if (!state.wordLive) return; // not locked yet, or the tracker changed du'a: its updates lead
+  state.hl = null; // stops the glide loop
+  if (u.segment !== state.segment) moveTo(state.duas[u.dua], u.segment);
+  paintWords(u.token);
+}
+
 function render(u) {
+  if (u.word) return renderWord(u);
   state.last = u;
   if (params.has("debug")) {
     $("heard").textContent = u.heard || "…";
@@ -460,14 +592,15 @@ function render(u) {
   if (!u.dua) {
     if (state.dua) return; // hold the last place through a brief lapse in confidence
     const waited = Date.now() - state.listeningSince;
-    if (waited > 10000 && u.unknown > 0.9) $("listen-msg").textContent = "I don't know this du'a yet";
-    else if (waited > 15000) $("listen-msg").textContent = "Keep reciting, I'm finding your place";
+    if (waited > 10000 && u.unknown > 0.9) listenMsg("I don't know this du'a yet");
+    else if (waited > 15000) listenMsg("Keep reciting, I'm finding your place");
     showGuesses(waited > 5000 ? u.candidates : []);
     return;
   }
   $("guesses").hidden = true;
   const dua = state.duas[u.dua];
   if (u.dua !== state.dua) {
+    log.event("dua", { dua: u.dua });
     state.dua = u.dua;
     state.segment = null;
     $("dua-ar").textContent = dua.name_ar;
@@ -475,9 +608,20 @@ function render(u) {
     buildText(dua);
     setState("following");
   }
-  if (u.segment !== state.segment) moveTo(dua, u.segment);
-  glide(u);
-  state.lines.get(u.segment + 1)?.classList.toggle("coming", !!u.pause);
+  const words = state.wordLive && performance.now() - state.wordAt < 1000;
+  if (!words) {
+    if (u.segment !== state.segment) moveTo(dua, u.segment);
+    glide(u);
+  }
+  state.lines.get((words ? state.segment : u.segment) + 1)?.classList.toggle("coming", !!u.pause);
+  if (!!u.pause !== !!state.preview) log.event("preview", { on: !!u.pause });
+  state.preview = !!u.pause;
+}
+
+function listenMsg(text) {
+  if ($("listen-msg").textContent === text) return;
+  $("listen-msg").textContent = text;
+  log.event("msg", { text });
 }
 
 // -- choosing a du'a --------------------------------------------------------------
@@ -523,6 +667,9 @@ function fillPicker(query) {
 function showGuesses(candidates) {
   const likely = candidates.filter((c) => c.p >= 0.08).slice(0, 3);
   const top = likely[0]?.p || 1;
+  const shown = likely.map((c) => c.id).join(" ");
+  if (shown !== (state.guessesShown ?? "")) log.event("guesses", { ids: likely.map((c) => c.id) });
+  state.guessesShown = shown;
   $("guesses").hidden = !likely.length;
   $("guess-chips").replaceChildren(
     ...likely.map((c) => {
@@ -536,6 +683,7 @@ function showGuesses(candidates) {
       ar.textContent = d.name_ar;
       b.append(ar);
       b.onclick = () => {
+        log.event("lock", { dua: c.id, from: "guess" });
         state.engine.lock(c.id);
         $("guesses").hidden = true;
       };
@@ -604,6 +752,7 @@ function moveTo(dua, segment) {
   state.segment = segment;
   state.token = null;
   const idx = dua.segments.findIndex((s) => s.id === segment);
+  log.event("line", { seg: segment, idx });
   $("progress").style.width = `${((idx + 1) / dua.segments.length) * 100}%`;
   for (const [id, ln] of state.lines) {
     ln.classList.toggle("now", id === segment);
@@ -635,6 +784,7 @@ function glide(u) {
 function paintWords(token) {
   if (token === state.token) return;
   state.token = token;
+  log.event("word", { token });
   for (const span of state.lines.get(state.segment).querySelectorAll(".wd")) {
     const i = Number(span.dataset.i);
     span.classList.toggle("said", i < token);

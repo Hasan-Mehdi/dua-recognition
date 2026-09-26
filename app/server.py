@@ -4,17 +4,28 @@ replay a recording, and the du'a follows the line and word being recited.
 
     python app/server.py                                  # http://localhost:8000
     DUA_ASR_MODEL=models/whisper-base-quran-dua-ct2 DUA_ASR_DEVICE=cpu python app/server.py
+    DUA_ENGINE=device python app/server.py                # the phone runs the model; this serves
+                                                          # the page, majlis rooms and debug sessions
 
 The browser streams 16 kHz mono float32 over a WebSocket; the server answers
 each hop with the tracker's position. ASR runs off the event loop, and audio
 that arrives meanwhile is folded into the next step, so a slow machine lags
 gracefully instead of queueing.
+
+?words=ctc (off by default) adds the CTC word follower (docs/results/follower.md):
+every 0.2 s a {"type": "word"} message says which word is being recited. The CTC
+model (DUA_CTC_MODEL, default models/wav2vec2-quran-dua) loads on first use.
+
+Debug sessions the page records (web/session-log.js) are uploaded to
+data/sessions/, one .wav each with its log inside (scripts/session_report.py).
 """
 from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -23,7 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import numpy as np  # noqa: E402
 import uvicorn  # noqa: E402
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
@@ -35,6 +46,22 @@ from dua_recognition.tracker import RECITER, TrackerConfig  # noqa: E402
 
 WEB = ROOT / "web"  # the one front end; it detects this server via /api/mode
 MODEL = os.environ.get("DUA_ASR_MODEL", DEFAULT_MODEL)
+ENGINE = os.environ.get("DUA_ENGINE", "server")  # "device": the browser runs speech recognition itself
+SESSIONS = ROOT / "data" / "sessions"
+CTC_MODEL = os.environ.get("DUA_CTC_MODEL", str(ROOT / "models" / "wav2vec2-quran-dua"))
+_ctc = None
+_ctc_lock = threading.Lock()
+
+
+def ctc_model():
+    """The CTC model for ?words=ctc, loaded once, on first use."""
+    global _ctc
+    with _ctc_lock:
+        if _ctc is None:
+            from dua_recognition.ctc import CtcModel
+
+            _ctc = CtcModel(CTC_MODEL)
+        return _ctc
 
 DUAS = load_all()
 INDEX = CorpusIndex(DUAS)
@@ -45,12 +72,27 @@ app = FastAPI(title="dua-recognition")
 
 @app.on_event("startup")
 def _warm() -> None:
-    load_model(MODEL)  # first request shouldn't pay for the model load
+    if ENGINE == "server":
+        load_model(MODEL)  # first request shouldn't pay for the model load
 
 
 @app.get("/api/mode")
 def mode():
-    return {"mode": "server", "model": MODEL}
+    return {"mode": ENGINE, "model": MODEL if ENGINE == "server" else None, "sessions": True}
+
+
+@app.post("/api/sessions/{name}")
+async def save_session(name: str, request: Request):
+    """A debug session from the page: its audio, with the log in a RIFF chunk."""
+    if not re.fullmatch(r"[\w-]{1,80}\.wav", name):
+        raise HTTPException(400)
+    SESSIONS.mkdir(parents=True, exist_ok=True)
+    part = SESSIONS / (name + ".part")
+    with part.open("wb") as f:
+        async for chunk in request.stream():
+            f.write(chunk)
+    part.replace(SESSIONS / name)
+    return {"saved": name}
 
 
 @app.get("/corpus.json")
@@ -120,11 +162,28 @@ def _follow(mode: str) -> TrackerConfig:
 async def follow(ws: WebSocket):
     await ws.accept()
     # ?lead=0 / ?pauses=0 switch those off, for comparing by feel. ?follow=reciter:
-    # majlis mode, where the display runs on through a reciter's breaths.
+    # majlis mode, where the display runs on through a reciter's breaths. ?words=ctc: the
+    # word follower (an experiment, off by default).
+    words = "ctc" if ws.query_params.get("words") == "ctc" else None
     rec = StreamingRecognizer(DUAS, model=MODEL, index=INDEX, lead=ws.query_params.get("lead") != "0",
                               pauses=ws.query_params.get("pauses") != "0",
-                              config=_follow(ws.query_params.get("follow", "reading")))
+                              config=_follow(ws.query_params.get("follow", "reading")),
+                              words=words, ctc=await asyncio.to_thread(ctc_model) if words else None)
     running: asyncio.Task | None = None
+    word_running: asyncio.Task | None = None
+
+    async def idle():
+        for task in (running, word_running):
+            if task:
+                await task
+
+    async def run_word():
+        t0 = time.perf_counter()
+        wu = await asyncio.to_thread(rec.word_step)
+        if wu is not None:
+            token = rec.index.words[wu.word].token if wu.word is not None else None
+            await ws.send_json({"type": "word", "t": round(wu.t, 2), "dua": wu.dua, "segment": wu.segment,
+                                "token": token, "step_ms": round((time.perf_counter() - t0) * 1000)})
 
     async def run_step():
         t0 = time.perf_counter()
@@ -140,18 +199,15 @@ async def follow(ws: WebSocket):
                 break
             text = msg.get("text") or ""
             if text.startswith("lock:") and text[5:] in DUAS:
-                if running:
-                    await running
+                await idle()
                 rec.lock(text[5:])
                 continue
             if text.startswith("follow:"):  # the page switched between page and majlis mode
-                if running:
-                    await running
+                await idle()
                 rec.config = rec.tracker.cfg = _follow(text[7:])
                 continue
             if msg.get("text") == "reset":
-                if running:
-                    await running
+                await idle()
                 rec.reset()
                 continue
             data = msg.get("bytes")
@@ -160,11 +216,14 @@ async def follow(ws: WebSocket):
             rec.push(np.frombuffer(data, dtype=np.float32))
             if rec.due and (running is None or running.done()):
                 running = asyncio.create_task(run_step())
+            if rec.word_due and (word_running is None or word_running.done()):
+                word_running = asyncio.create_task(run_word())
     except WebSocketDisconnect:
         pass
     finally:
-        if running:
-            running.cancel()
+        for task in (running, word_running):
+            if task:
+                task.cancel()
 
 
 # -- majlis mode ----------------------------------------------------------------

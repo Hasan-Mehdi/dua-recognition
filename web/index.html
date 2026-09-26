@@ -71,6 +71,11 @@
     </div>
     <input id="file" type="file" accept="audio/*" hidden>
     <ul id="samples" class="samples" hidden></ul>
+    <!-- Debug sessions (session-log.js): what was heard and shown, for replaying offline. -->
+    <p id="sessions" class="sessions" hidden>
+      <span id="sessions-info"></span>
+      <button id="sessions-send" class="link"></button><span class="dot">·</span><button id="sessions-clear" class="link">delete</button>
+    </p>
     <p id="footnote" class="footnote"></p>
   </section>
 

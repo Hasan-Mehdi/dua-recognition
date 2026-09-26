@@ -205,6 +205,27 @@ python -m http.server -d web                              # any static host work
 following. Other phones or a projector scan the QR code (or open `?watch=CODE`) and
 follow along. They run no speech recognition themselves.
 
+**Debug sessions** (on for now; `?log=0` turns them off): every listening session keeps
+the 16 kHz audio the recognizer heard and a log of what it made of it (each window's
+transcript and tracker state, each line and word shown, taps, scrolls, the phone going
+to sleep) as one `.wav`, with the log in a RIFF chunk that players ignore. Served by
+`app/server.py`, the page uploads them to `data/sessions/` when a session ends;
+`DUA_ENGINE=device python app/server.py` serves the on-device app the same way, with
+no speech model on the server. From a static host they stay on the phone until *send*
+on the home screen (share sheet or download). While following, tapping the line you're
+really on logs "I'm here".
+
+```bash
+python scripts/session_report.py               # newest session: device, mic, speed, what was shown when
+python scripts/session_report.py ID --timeline # every update, line move and tap
+python scripts/session_report.py ID --score    # vs fine-tuned turbo + offline smoother (GPU)
+python scripts/session_report.py ID --score --set kappa=0.2   # what a tracker change would have shown
+```
+
+The `--score` reference agreed with the human line timings on 88% of seconds (100% within
+a line) on a held-out Tawassul clip, and replaying a session's own transcripts through the
+Python tracker reproduces the phone's display exactly.
+
 Reproduce the numbers:
 
 ```bash
@@ -231,6 +252,7 @@ src/dua_recognition/
 scripts/         data: fetch_duaplayer, fetch_duaspro, fetch_duasorg, fetch_youtube, find_captioned, speaker_check
                  training: transcribe_windows, align_offline, build_finetune_set, finetune_whisper, export_onnx
                  evaluation: evaluate, word_truth, word_eval, pause_eval, ooc_eval, voice_eval, asr_benchmark, ...
+                 live sessions: session_report (the phone's debug sessions, data/sessions/)
                  noha research: noha_lid, noha_match, noha_finetune, ...
 app/             server.py (FastAPI + WebSocket; majlis-mode rooms); demo.py (CLI)
 web/             the one front end: server or on-device engine (transformers.js + tracker.js port)
