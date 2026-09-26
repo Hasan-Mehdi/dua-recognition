@@ -37,7 +37,7 @@ import numpy as np  # noqa: E402
 from dua_recognition.align import CorpusIndex  # noqa: E402
 from dua_recognition.asr import _looks_hallucinated, speech_in_tail  # noqa: E402
 from dua_recognition.classify import TextClassifier  # noqa: E402
-from dua_recognition.corpus import Recording, load_all  # noqa: E402
+from dua_recognition.corpus import TESTSETS, Recording, load_all  # noqa: E402
 from dua_recognition.corpus import load_recordings as _load_recordings  # noqa: E402
 from dua_recognition.match import PassageMatcher  # noqa: E402
 from dua_recognition.splits import LINE_LABELS_UNRELIABLE  # noqa: E402
@@ -47,24 +47,37 @@ from dua_recognition.tracker import Tracker, TrackerConfig  # noqa: E402
 
 WINDOWS = ROOT / "data" / "cache" / "windows"
 WORD_TRUTH = ROOT / "data" / "cache" / "word_truth"
-# --source user: the real-user recordings (scripts/user_label.py), all of them held out.
-USER_DIR = ROOT / "data" / "usertest"
+# --source NAME (corpus.TESTSETS: user, majlis, amateur): a held-out set, every
+# recording in it test. --tier: gold (human or reviewed line times), silver
+# (auto labels) or all but the auto labels still waiting for review.
 SOURCE = "duaplayer"
+TIER = "all"
 
 
-def use_source(source: str) -> None:
-    global SOURCE
-    SOURCE = source
+def use_source(source: str, tier: str = "all") -> None:
+    global SOURCE, TIER
+    SOURCE, TIER = source, tier
 
 
 def load_recordings(dua, **kw) -> list[Recording]:
-    if SOURCE == "user":
-        return _load_recordings(dua, cache_dir=USER_DIR, extra=False)
-    return _load_recordings(dua, **kw)
+    if SOURCE in TESTSETS:
+        recs = _load_recordings(dua, cache_dir=TESTSETS[SOURCE], extra=False)
+    else:
+        recs = _load_recordings(dua, **kw)
+    return [r for r in recs if r.tier == TIER or (TIER == "all" and r.tier != "review")]
 
 
 def is_test(reciter: str) -> bool:
-    return SOURCE == "user" or _is_test(reciter)
+    return SOURCE in TESTSETS or _is_test(reciter)
+
+
+def describe(recs: Sequence[Recording]) -> str:
+    """Report header: what the numbers were measured on."""
+    hours = sum(r.end_s for r in recs) / 3600
+    conds = Counter(r.condition for r in recs)
+    return (f"source {SOURCE}, tier {TIER}: {len(recs)} recordings, {hours:.2f} h, "
+            f"{len({r.reciter for r in recs})} voices, {len({r.venue for r in recs if r.venue})} venues ("
+            + ", ".join(f"{k} {v}" for k, v in sorted(conds.items())) + ")")
 
 
 def load_word_truth(rec: Recording, ix: CorpusIndex) -> list[list] | None:
@@ -270,8 +283,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--asr", default="large-v3-turbo", help="window-cache tag")
     ap.add_argument("--split", choices=["test", "train", "all"], default="test")
-    ap.add_argument("--source", choices=["duaplayer", "user"], default="duaplayer",
-                    help="user: data/usertest (scripts/user_label.py), all counted as test")
+    ap.add_argument("--source", choices=["duaplayer", *TESTSETS], default="duaplayer",
+                    help="a held-out set from corpus.TESTSETS (user, majlis, amateur): all counted as test")
+    ap.add_argument("--tier", choices=["gold", "silver", "all"], default="all",
+                    help="gold: human or reviewed line times; silver: auto labels")
     ap.add_argument("--window", type=float, default=6.0)
     ap.add_argument("--hop", type=float, default=1.0)
     ap.add_argument("--stride", type=int, default=1,
@@ -297,7 +312,7 @@ def main() -> None:
     ap.add_argument("--corpus", choices=["all", "recorded"], default="all",
                     help="recorded: only texts that have recordings (no extra distractors)")
     args = ap.parse_args()
-    use_source(args.source)
+    use_source(args.source, args.tier)
 
     duas = load_all()
     if args.corpus == "recorded":
@@ -335,7 +350,8 @@ def main() -> None:
                 quiet_by_rec[rec.audio_id] = json.loads(qf.read_text())[args.stride - 1 :: args.stride]
             data.append((rec, rows, costs))
     hop = args.hop * args.stride  # seconds between tracker updates
-    print(f"{len(data)} recordings, {args.split} split, ASR = {args.asr}, update every {hop:g} s\n")
+    header = describe([r for r, _, _ in data])
+    print(f"{len(data)} recordings, {args.split} split, ASR = {args.asr}, update every {hop:g} s\n{header}\n")
 
     base_cfg = replace(TrackerConfig(), **{k: float(v) for k, v in (kv.split("=", 1) for kv in args.set)})
     lead = 0.0 if args.latency is None else args.latency + base_cfg.display_lead
@@ -408,7 +424,7 @@ def main() -> None:
 
     if args.json:
         Path(args.json).write_text(json.dumps(
-            {"asr": args.asr, "split": args.split, "summary": summary,
+            {"asr": args.asr, "split": args.split, "set": header, "summary": summary,
              "identification": {str(h): {"classifier": b, "tracker": t} for h, (b, t) in ident.items()}},
             indent=1), encoding="utf-8")
 

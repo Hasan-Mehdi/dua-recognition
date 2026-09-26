@@ -150,14 +150,17 @@ def main() -> None:
     ap.add_argument("--asr", default="whisper-base-quran-dua")
     ap.add_argument("--delay", type=float, default=0.5)
     ap.add_argument("--split", choices=["test", "train"], default="test")
-    ap.add_argument("--source", choices=["duaplayer", "user"], default="duaplayer",
-                    help="user: data/usertest (scripts/user_label.py)")
+    ap.add_argument("--source", choices=["duaplayer", *ev.TESTSETS], default="duaplayer",
+                    help="a held-out set from corpus.TESTSETS (user, majlis, amateur)")
+    ap.add_argument("--tier", choices=["gold", "silver", "all"], default="all",
+                    help="gold: human or reviewed line times; silver: auto labels")
     ap.add_argument("variants", nargs="*", default=["none", "fixed"],
                     help="lead[;smooth k=v,...][;cfg k=v,...], lead = none | fixed | stale:<extra s>")
     args = ap.parse_args()
-    ev.use_source(args.source)
+    ev.use_source(args.source, args.tier)
     ix, data = load(args.asr, args.split)
-    print(f"{len(data)} recordings ({args.split}), ASR {args.asr}, delay {args.delay:g} s")
+    print(f"{len(data)} recordings ({args.split}), ASR {args.asr}, delay {args.delay:g} s\n"
+          f"{ev.describe([d[0] for d in data])}")
     for v in args.variants:
         parts = v.split(";")
         smooth = None

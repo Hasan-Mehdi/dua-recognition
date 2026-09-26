@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from faster_whisper.audio import decode_audio  # noqa: E402
 
 from dua_recognition.asr import load_model, speech_in_tail, transcribe_batch  # noqa: E402
-from dua_recognition.corpus import Recording, load_all, load_recordings  # noqa: E402
+from dua_recognition.corpus import TESTSETS, Recording, load_all, load_recordings  # noqa: E402
 from dua_recognition.splits import is_test  # noqa: E402
 
 CACHE = ROOT / "data" / "cache" / "windows"
@@ -126,8 +126,8 @@ def main() -> None:
                     help="transcribe data/youtube/* instead (teacher pass for align_offline.py)")
     ap.add_argument("--untimed", action="store_true",
                     help="transcribe data/untimed/duasorg/* (train voices) instead (teacher pass for align_offline.py)")
-    ap.add_argument("--source", choices=["duaplayer", "user"], default="duaplayer",
-                    help="user: the real-user recordings in data/usertest (scripts/user_label.py)")
+    ap.add_argument("--source", choices=["duaplayer", *TESTSETS], default="duaplayer",
+                    help="a held-out set from corpus.TESTSETS instead (user, majlis, amateur)")
     ap.add_argument("--stream-dir", type=Path,
                     help="transcribe every stream in this flat folder instead (e.g. data/fatemah/audio)")
     args = ap.parse_args()
@@ -145,7 +145,7 @@ def main() -> None:
             continue
         if recs is None:
             recs = (_youtube(dua) if args.youtube else _untimed(dua) if args.untimed
-                    else load_recordings(dua, cache_dir=ROOT / "data" / "usertest", extra=False) if args.source == "user"
+                    else load_recordings(dua, cache_dir=TESTSETS[args.source], extra=False) if args.source in TESTSETS
                     else load_recordings(dua))
         if args.test_only:
             recs = [r for r in recs if is_test(r.reciter)]

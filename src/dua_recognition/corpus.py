@@ -14,6 +14,13 @@ CACHE_DIR = ROOT / "data" / "duaplayer"
 # Opt-in (extra=True or DUA_EXTRA_SOURCES=1) so results stay comparable with
 # the DuaPlayer-only numbers until they're re-baselined.
 EXTRA_CACHE_DIRS = [ROOT / "data" / "duaspro", ROOT / "data" / "duasorg_timed"]
+# Held-out test sets in the same shape, every recording in them test
+# (evaluate.py --source NAME). Voices stay local: all of these are gitignored.
+TESTSETS = {
+    "user": ROOT / "data" / "usertest",  # people recording themselves for us (STATUS.md guide)
+    "majlis": ROOT / "data" / "testsets" / "majlis",  # du'a nights streamed from other centres
+    "amateur": ROOT / "data" / "testsets" / "amateur",  # ordinary voices found online
+}
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,15 @@ class Recording:
     duration_s: float
     starts: list[tuple[float, int]]  # (start seconds, segment id), ascending
     end_s: float  # labels stop here; anything after is unlabelled
+    auto: bool = False  # machine-made line times nobody has reviewed ("silver")
+    condition: str = "studio"  # studio / phone / headset / room / majlis
+    venue: str = ""  # the centre or uploader a test recording came from
+    needs_review: bool = False  # auto labels the two teachers disagree on: in neither tier
+
+    @property
+    def tier(self) -> str:
+        """gold = human-timed or reviewed; silver = auto labels; review = auto labels in doubt."""
+        return "review" if self.auto and self.needs_review else "silver" if self.auto else "gold"
 
     def segment_at(self, t: float) -> int | None:
         """Ground-truth segment being recited at time t (seconds)."""
@@ -128,6 +144,10 @@ def load_recordings(dua: Dua, cache_dir: str | Path = CACHE_DIR, repaired: bool 
                 duration_s=m["duration_ms"] / 1000,
                 starts=starts,
                 end_s=end,
+                auto=bool(m.get("auto", False)),
+                condition=m.get("condition", "studio"),
+                venue=m.get("venue", ""),
+                needs_review=bool(m.get("needs_review", False)),
             )
         )
     return out

@@ -26,7 +26,7 @@ from transcribe_windows import SR, cache_path  # noqa: E402
 
 from dua_recognition.align import CorpusIndex  # noqa: E402
 from dua_recognition.asr import load_model, transcribe_batch  # noqa: E402
-from dua_recognition.corpus import load_all, load_recordings  # noqa: E402
+from dua_recognition.corpus import TESTSETS, load_all, load_recordings  # noqa: E402
 from dua_recognition.splits import is_test  # noqa: E402
 from dua_recognition.tracker import Tracker  # noqa: E402
 
@@ -38,14 +38,19 @@ def main() -> None:
     ap.add_argument("--window", type=float, default=6.0)
     ap.add_argument("--hop", type=float, default=1.0)
     ap.add_argument("--prompt-words", type=int, default=12)
+    ap.add_argument("--source", choices=["duaplayer", *TESTSETS], default="duaplayer",
+                    help="a held-out set from corpus.TESTSETS instead (all of it)")
     args = ap.parse_args()
     tag = f"{Path(args.model).name}+prompt"
     load_model(args.model)
 
     duas = load_all()
     ix = CorpusIndex(duas)
-    recs = [r for d in duas.values() for r in load_recordings(d)
-            if args.split == "all" or is_test(r.reciter) == (args.split == "test")]
+    if args.source in TESTSETS:
+        recs = [r for d in duas.values() for r in load_recordings(d, cache_dir=TESTSETS[args.source], extra=False)]
+    else:
+        recs = [r for d in duas.values() for r in load_recordings(d)
+                if args.split == "all" or is_test(r.reciter) == (args.split == "test")]
     recs = [r for r in recs if not cache_path(tag, r.audio_id, args.window, args.hop).exists()]
     audio = {r.audio_id: decode_audio(str(r.path), sampling_rate=SR) for r in recs}
     trackers = {r.audio_id: Tracker(ix) for r in recs}
