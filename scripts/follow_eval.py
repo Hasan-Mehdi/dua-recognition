@@ -19,6 +19,9 @@ enters more than 0.3 s early. `--pauses` scores the pause benchmark instead
     python scripts/follow_eval.py --split train --grid           # tune the follower
     python scripts/follow_eval.py "fw window_s=2,beta_back=3"    # test, one setting
     python scripts/follow_eval.py --pauses "fw ..."
+    python scripts/follow_eval.py --split train --diag           # where the line-entry lag comes from
+
+Eval sets are pickled under data/cache/follow_items (--no-cache rebuilds them).
 """
 from __future__ import annotations
 

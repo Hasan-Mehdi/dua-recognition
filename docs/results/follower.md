@@ -247,3 +247,55 @@ the voice worse than one that is 0.3 s early a third of the time and jumps ahead
 The ±0.3 s criterion treats late as the only failure. `?words=ctc` lets Hasan judge that by
 ear and eye.
 
+## Try it: `?words=ctc` (opt-in, off by default)
+
+The follower now runs in the server when the page asks for it. It uses the round-1 config;
+no onset setting qualified, so the onset rule stays off.
+
+- `src/dua_recognition/ctc.py`: `CtcModel` (moved from `scripts/dump_ctc.py`, same CLI),
+  plus `CtcModel.window(y)` for one live window. Device: `DUA_CTC_DEVICE` (default cuda if
+  available).
+- `StreamingRecognizer(..., words="ctc", ctc=model)`: `step()` also stores the tracker's
+  evidence position (the follower's anchor) and its lead word. `word_step()` runs every
+  0.2 s of new audio on the last 3 s. The tracker is touched only in `step()`, the follower
+  only in `word_step()`, so the server runs them in separate threads. `lock()` and `reset()`
+  rebuild or reset the follower.
+- `app/server.py`: `/ws?words=ctc` loads the CTC model once (`DUA_CTC_MODEL`, default
+  `models/wav2vec2-quran-dua`) and sends `{"type": "word", "t", "dua", "segment", "token",
+  "step_ms"}` alongside the usual messages.
+- `web/app.js`: `?words=ctc` in the page URL passes the flag on. While word messages keep
+  coming (the last one under 1 s old, same du'a), they place the line and word directly,
+  with no glide. The tracker's updates still drive identification, candidates, "unknown"
+  and the next-line preview. Majlis viewers get the word messages too, because the host page
+  relays what it renders. Device mode ignores the flag.
+
+To try it: restart the server (the running one predates this code), then open the page
+with `?words=ctc`, e.g. `https://192.168.1.157:8443/?words=ctc`. Compare with the same
+recitation without the flag.
+
+**Live check** (a second server instance, CPU only, whisper-base-quran-dua as the tracker
+ASR; one train recording, dua-ya-aliyu-ya-azeem, 163 s, streamed in real time over the
+WebSocket and scored like the follow lane):
+
+| | word exact | ±1 | jerks |
+|---|---:|---:|---:|
+| live, `?words=ctc` | 51.8% | 80.5% | 0 |
+| offline follow lane, same recording | 56.7% | 80.5% | 3 |
+| offline page mode, same recording | 37.0% | 89.8% | 4 |
+
+Within 5 pts of offline. Word step on CPU: p50 286 ms, p90 350 ms. That is far above the
+36 ms measured offline, because whisper shares the process and another job was using the
+CPU. Since that exceeds the 0.2 s hop, word updates arrived about every 0.35 s, 0.19 s
+(p50) after their audio. On the GPU server the CTC window should be a few ms. The live
+number is a little lower than offline, which fits the slower cadence.
+
+## Other uses (not built)
+
+- **Majlis**: a word-accurate display for the room (it already relays).
+- **Pauses**: replace the pause heuristics (still/lead-cross/retreat rules) with the
+  follower's own evidence: "blank tail after word w" is a direct end-of-word signal.
+- **Karaoke**: `end_scores` knows the letter, not just the word, so a letter-level sweep
+  across the current word is possible.
+- **Learners**: skip and misread flags, from words the path jumps over or explains badly.
+- **Phone**: on-device would need a small CTC model (wav2vec2-quran-dua is ~300 M
+  parameters). A separate decision.
