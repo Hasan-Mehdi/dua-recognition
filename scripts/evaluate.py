@@ -37,14 +37,34 @@ import numpy as np  # noqa: E402
 from dua_recognition.align import CorpusIndex  # noqa: E402
 from dua_recognition.asr import _looks_hallucinated, speech_in_tail  # noqa: E402
 from dua_recognition.classify import TextClassifier  # noqa: E402
-from dua_recognition.corpus import Recording, load_all, load_recordings  # noqa: E402
+from dua_recognition.corpus import Recording, load_all  # noqa: E402
+from dua_recognition.corpus import load_recordings as _load_recordings  # noqa: E402
 from dua_recognition.match import PassageMatcher  # noqa: E402
-from dua_recognition.splits import LINE_LABELS_UNRELIABLE, is_test  # noqa: E402
+from dua_recognition.splits import LINE_LABELS_UNRELIABLE  # noqa: E402
+from dua_recognition.splits import is_test as _is_test  # noqa: E402
 from dua_recognition.text import normalize  # noqa: E402
 from dua_recognition.tracker import Tracker, TrackerConfig  # noqa: E402
 
 WINDOWS = ROOT / "data" / "cache" / "windows"
 WORD_TRUTH = ROOT / "data" / "cache" / "word_truth"
+# --source user: the real-user recordings (scripts/user_label.py), all of them held out.
+USER_DIR = ROOT / "data" / "usertest"
+SOURCE = "duaplayer"
+
+
+def use_source(source: str) -> None:
+    global SOURCE
+    SOURCE = source
+
+
+def load_recordings(dua, **kw) -> list[Recording]:
+    if SOURCE == "user":
+        return _load_recordings(dua, cache_dir=USER_DIR, extra=False)
+    return _load_recordings(dua, **kw)
+
+
+def is_test(reciter: str) -> bool:
+    return SOURCE == "user" or _is_test(reciter)
 
 
 def load_word_truth(rec: Recording, ix: CorpusIndex) -> list[list] | None:
@@ -250,6 +270,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--asr", default="large-v3-turbo", help="window-cache tag")
     ap.add_argument("--split", choices=["test", "train", "all"], default="test")
+    ap.add_argument("--source", choices=["duaplayer", "user"], default="duaplayer",
+                    help="user: data/usertest (scripts/user_label.py), all counted as test")
     ap.add_argument("--window", type=float, default=6.0)
     ap.add_argument("--hop", type=float, default=1.0)
     ap.add_argument("--stride", type=int, default=1,
@@ -275,6 +297,7 @@ def main() -> None:
     ap.add_argument("--corpus", choices=["all", "recorded"], default="all",
                     help="recorded: only texts that have recordings (no extra distractors)")
     args = ap.parse_args()
+    use_source(args.source)
 
     duas = load_all()
     if args.corpus == "recorded":
