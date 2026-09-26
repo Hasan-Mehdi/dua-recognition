@@ -132,7 +132,7 @@ async function init() {
   const mode = await fetch("api/mode").then((r) => (r.ok ? r.json() : null)).catch(() => null);
   state.engine = mode?.mode === "server"
     ? new ServerEngine()
-    : new DeviceEngine(corpus, params.get("model") || "whisper-base-quran-dua");
+    : new DeviceEngine(corpus, params.get("model") || "whisper-base-aug-v4");
   $("footnote").textContent = state.engine.kind === "device"
     ? "Runs entirely on this device. No audio leaves it."
     : "";
