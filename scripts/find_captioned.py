@@ -21,6 +21,7 @@ treated as an IP block. --cookies raises YouTube's per-IP ceiling.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import random
 import re
@@ -53,6 +54,20 @@ EXTRA_NAMES = [
     "دعاء السحر", "دعاء البهاء", "زيارة الإمام الحسين", "زيارة الإمام الرضا", "زيارة السيدة زينب",
     "زيارة السيدة المعصومة", "زيارة أم البنين", "زيارة العباس", "دعاء الإمام الحسين يوم عرفة",
 ]
+
+
+def _splits():
+    # splits.py by path: this script runs in whichever Python has yt-dlp, which
+    # needn't have the package's dependencies (its __init__ imports them).
+    spec = importlib.util.spec_from_file_location("splits", ROOT / "src" / "dua_recognition" / "splits.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def is_test_upload(video: dict) -> bool:
+    """A test venue's or test uploader's video: never harvested for training."""
+    return _splits().is_test_upload(video)
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -216,7 +231,7 @@ def cmd_channels(args) -> None:
     seen = {r["id"] for r in _read_jsonl(CANDIDATES)}
     pacer = Pacer(args.gap)
     with ydl(args, extract_flat=True) as y:
-        for ch in sorted({r["channel_id"] for r in hits} - crawled):
+        for ch in sorted({r["channel_id"] for r in hits} - crawled - set(_splits()._holdout()[0])):
             try:
                 r = y.extract_info(f"https://www.youtube.com/channel/{ch}/videos", download=False)
             except Exception as e:  # noqa: BLE001
@@ -239,7 +254,7 @@ def cmd_channels(args) -> None:
 
 
 def cmd_fetch(args) -> None:
-    hits = [r for r in _read_jsonl(SCANNED) if r["has_ar"]]
+    hits = [r for r in _read_jsonl(SCANNED) if r["has_ar"] and not is_test_upload(r)]
     # The same recording is often uploaded once per subtitle language: keep one
     # per (channel, duration to the nearest 3 s).
     uniq: dict[tuple, dict] = {}

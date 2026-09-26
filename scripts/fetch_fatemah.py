@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from find_captioned import Pacer, _append, _read_jsonl, classify, ydl  # noqa: E402
+from find_captioned import Pacer, _append, _read_jsonl, classify, is_test_upload, ydl  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "fatemah"
@@ -123,7 +123,9 @@ def selection(rows: list[dict], hours: float, min_min: float) -> list[dict]:
 
 
 def cmd_download(args) -> None:
-    rows = selection(_read_jsonl(INDEX), args.hours, args.min_minutes)
+    # Training venue: never a test venue, and no video a test set holds out.
+    rows = [r for r in _read_jsonl(INDEX) if not is_test_upload({"id": r["id"], "channel_url": CHANNEL})]
+    rows = selection(rows, args.hours, args.min_minutes)
     print(f"selected {len(rows)} videos, {sum(r['duration'] for r in rows) / 3600:.1f} h", flush=True)
     AUDIO.mkdir(parents=True, exist_ok=True)
     pacer = Pacer(args.gap)

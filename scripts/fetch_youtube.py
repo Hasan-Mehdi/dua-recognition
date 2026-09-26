@@ -30,22 +30,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from dua_recognition.corpus import load_all, load_recordings  # noqa: E402
+from dua_recognition.splits import KNOWN_RECITERS, is_test_upload  # noqa: E402
 from dua_recognition.text import strip_diacritics  # noqa: E402
 
 OUT = ROOT / "data" / "youtube"
 YTDLP = str(Path(sys.executable).with_name("yt-dlp"))
 
-KNOWN_RECITERS = [
-    # test
-    "حلواجي", "الحلواجي", "halwachi", "halawaji", "abather", "abu thar", "أباذر", "اباذر",
-    "غريب", "ghareeb", "ghreeb", "gharib",
-    "الأكرف", "الاكرف", "akraf",
-    "قريش", "qureish", "quraish", "qurayshi",
-    "فرهمند", "farahmand",
-    # train
-    "فاني", "fani", "قمبر", "qambar", "kambar", "العطار", "attar", "بوماد", "boumad",
-    "رسولي", "rasouli", "رضوي", "rizvi",
-]
 # Uploads whose voice matches a test reciter (scripts/speaker_check.py), under a
 # name the list above can't catch. qxuDk75kkBI is Halwachi's DuaPlayer Hujjat
 # recording re-uploaded (voice 0.95, same length): a test recording in training.
@@ -67,7 +57,8 @@ def _fold(text: str) -> str:
 
 
 def excluded(v: dict) -> bool:
-    if v.get("id") in EXCLUDED_VIDEOS:
+    # Held-out venues and uploaders (splits.TEST_CHANNELS, data/testsets/*/holdout.json).
+    if v.get("id") in EXCLUDED_VIDEOS or is_test_upload(v):
         return True
     text = _fold(f"{v.get('title', '')} {v.get('channel', '')} {v.get('uploader', '')}")
     return any(_fold(name) in text for name in KNOWN_RECITERS + NOT_A_RECITATION)
@@ -97,7 +88,7 @@ def download(v: dict, dua_id: str) -> Path | None:
         return None
     meta_path.write_text(json.dumps({
         "video_id": v["id"], "url": f"https://www.youtube.com/watch?v={v['id']}",
-        "title": v.get("title"), "channel": v.get("channel") or v.get("uploader"),
+        "title": v.get("title"), "channel": v.get("channel") or v.get("uploader"), "channel_id": v.get("channel_id"),
         "duration_s": v.get("duration"), "dua_id": dua_id, "audio": audio[0].name,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
     return meta_path
@@ -109,7 +100,8 @@ def prune() -> None:
         if meta_path.name.endswith(".labels.json"):
             continue
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if not excluded({"id": meta.get("video_id"), "title": meta.get("title"), "channel": meta.get("channel")}):
+        if not excluded({"id": meta.get("video_id"), "title": meta.get("title"), "channel": meta.get("channel"),
+                         "channel_id": meta.get("channel_id")}):
             continue
         vid = meta["video_id"]
         for p in list(meta_path.parent.glob(f"{vid}.*")) + list((ROOT / "data/cache/windows").glob(f"*/yt-{vid}_*")):
