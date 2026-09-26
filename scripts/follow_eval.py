@@ -1,0 +1,224 @@
+#!/usr/bin/env python
+"""The CTC word follower (follower.py) against the page-mode display it would replace.
+
+Two lanes over the same recordings:
+
+    hmm       the live display today: tracker + lead + pause rules + gliding
+              highlight (word_eval's page mode), from the cached 6 s windows
+    follow    the tracker says which du'a and line (its evidence position, no
+              lead); the follower moves word by word from CTC frames every
+              0.2 s (scripts/dump_ctc.py --window 3 --hop 0.2), each result on
+              screen `--follow-delay` s after its window ends
+
+Scored every 0.1 s against forced-aligned word timings (as word_eval.py), plus
+a line-entry check against the *human* line starts, which doesn't depend on the
+wav2vec2 word truth: how late the display enters each new line, how often it
+enters more than 0.3 s early. `--pauses` scores the pause benchmark instead
+(scripts/pause_eval.py: 4 s of room tone after every third line end).
+
+    python scripts/follow_eval.py --split train --grid           # tune the follower
+    python scripts/follow_eval.py "fw window_s=2,beta_back=3"    # test, one setting
+    python scripts/follow_eval.py --pauses "fw ..."
+"""
+from __future__ import annotations
+
+import argparse
+import bisect
+import itertools
+import json
+import sys
+import time
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import evaluate as ev  # noqa: E402
+import pause_eval as pe  # noqa: E402
+import word_eval as we  # noqa: E402
+from dua_recognition.align import encode  # noqa: E402
+from dua_recognition.follower import FollowerConfig, LocalFollower  # noqa: E402
+from dua_recognition.tracker import TrackerConfig  # noqa: E402
+
+CTC = ROOT / "data" / "cache" / "ctc"
+SMOOTH = {"ease": 1.0, "speed_scale": 1.2}  # page mode (web/app.js defaults)
+
+
+def load_set(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool, cfg, delay) -> list[dict]:
+    """Recordings with everything both lanes need; the HMM lane is replayed here, once."""
+    items = []
+    if not pauses:
+        _, data = we.load(asr, split)
+        for rec, rows, costs, stale, truth, quiet in data:
+            good = [w for w in truth if w[3] >= -1.5]
+            f = CTC / ctc_tag / f"{rec.audio_id}_w3_h0.2.npz"
+            if not good or not f.exists():
+                continue
+            anchors = []
+            ups = we.hmm_updates(ix, rows, costs, quiet, cfg, delay, "fixed", stale, still=True, anchors=anchors)
+            t_end = min(rec.end_s, good[-1][2] + 2.0)
+            items.append({"id": rec.audio_id, "dua": rec.dua_id, "ups": ups, "anchors": anchors, "good": good,
+                          "ticks": np.arange(good[0][1], t_end, 0.1), "ctc": f,
+                          "lines": [(t, s) for t, s in rec.starts if t < t_end], "pauses": [], "pause_s": 0.0})
+        return items
+    recs = {r.audio_id: r for d in ev.load_all().values() for r in ev.load_recordings(d)}
+    d = pe.OUT / (asr + ("" if split == "test" else f"@{split}"))
+    for jf in sorted(d.glob("*.json")):
+        r = json.loads(jf.read_text(encoding="utf-8"))
+        f = d / f"ctc-{ctc_dir}" / f"{jf.stem}_w3_h0.2.npz"
+        if not f.exists():
+            continue
+        lo = ix.dua_word_span[ix.dua_ids.index(r["dua"])][0]
+        P = r["pause_s"]
+        orig = [s - P * j for j, (s, _) in enumerate(r["pauses"])]
+
+        def shift(t: float) -> float:
+            return t + P * sum(1 for p in orig if p <= t)
+
+        truth = [[lo + w, a, b, 0.0] for w, a, b in r["truth"]]
+        costs = ev.LazyCosts(ix, [x for _, x in r["rows"]])
+        letters = [len(encode(x)) if x else 0 for _, x in r["rows"]]
+        anchors = []
+        ups = we.hmm_updates(ix, r["rows"], costs, r["quiet"], cfg, delay, "fixed", None, still=True,
+                             anchors=anchors, letters=letters)
+        end = r["rows"][-1][0] + delay
+        items.append({"id": r["audio_id"], "dua": r["dua"], "ups": ups, "anchors": anchors, "good": truth,
+                      "ticks": np.arange(truth[0][1], end, 0.1), "ctc": f,
+                      "lines": [(shift(t), s) for t, s in recs[r["audio_id"]].starts if shift(t) < end],
+                      "pauses": [[s, lo + w] for s, w in r["pauses"]], "pause_s": P})
+    return items
+
+
+def follow_updates(ix, it: dict, fcfg: FollowerConfig, hmm_delay: float, f_delay: float) -> list[tuple]:
+    """The follow lane's screen updates for one recording."""
+    z = np.load(it["ctc"])
+    lp, nf, ts = z["lp"], z["n_frames"], z["t"]
+    fol = LocalFollower(ix, fcfg)
+    anchors = it["anchors"]
+    at = [a[0] + hmm_delay for a in anchors]  # when each tracker result is available
+    ups = []
+    for k, t in enumerate(ts):
+        j = bisect.bisect_right(at, t) - 1
+        hmm_word = anchors[j][1] if j >= 0 else None
+        w = fol.step(lp[k, : nf[k]], float(t), hmm_word)
+        if w is None:
+            ups.append((t + f_delay, None, None, None, None, 0.0))
+        else:
+            ups.append((t + f_delay, ix.dua_ids[ix.word_dua[w]], int(ix.word_segment[w]), w, None, 0.0))
+    return ups
+
+
+def line_entries(ix, it: dict, shown: list) -> list[float | None]:
+    """For each human line start after the first: when the display entered that line, relative to it."""
+    ticks = it["ticks"]
+    seg = [None if w is None else int(ix.word_segment[w]) for w in shown]
+    out = []
+    for t, s in it["lines"][1:]:
+        a, b = np.searchsorted(ticks, [t - 4.0, t + 4.0])
+        lag = None
+        for i in range(max(1, a), min(b, len(ticks))):
+            if seg[i] == s and seg[i - 1] != s:
+                lag = float(ticks[i] - t)
+                break
+        out.append(lag)
+    return out
+
+
+def pause_stats(ix, it: dict, shown: list) -> list[bool]:
+    """Per tick inside a pause: is a later line than the one just finished on screen?"""
+    starts = [w[1] for w in it["good"]]
+    out = []
+    for tick, w in zip(it["ticks"], shown):
+        if w is None or not any(s + 0.5 <= tick < s + it["pause_s"] for s, _ in it["pauses"]):
+            continue
+        i = bisect.bisect_right(starts, tick) - 1
+        if i < 0:
+            continue
+        tw = it["good"][i][0]
+        out.append(bool(ix.word_segment[w] != ix.word_segment[tw] and w > tw))
+    return out
+
+
+def score(ix, items, lane: str, fcfg=None, hmm_delay=0.5, f_delay=0.1) -> dict:
+    offs, jerks, minutes, entries, nxt, covered, n_ticks = [], 0, 0.0, [], [], 0, 0
+    for it in items:
+        if lane == "hmm":
+            r = we.replay_ticks(ix, it["dua"], it["ups"], it["good"], it["ticks"], SMOOTH)
+        else:
+            ups = follow_updates(ix, it, fcfg, hmm_delay, f_delay)
+            r = we.replay_ticks(ix, it["dua"], ups, it["good"], it["ticks"], None)
+        offs += r["offs"]
+        jerks += r["jerks"]
+        minutes += len(it["ticks"]) / 600
+        covered += sum(w is not None for w in r["shown"])
+        n_ticks += len(r["shown"])
+        entries += line_entries(ix, it, r["shown"])
+        nxt += pause_stats(ix, it, r["shown"])
+    o = np.array(offs)
+    found = [x for x in entries if x is not None]
+    return {"exact": float(np.mean(o == 0)), "pm1": float(np.mean(np.abs(o) <= 1)), "mean": float(o.mean()),
+            "jerks_min": jerks / max(minutes, 1e-9), "shown": covered / max(1, n_ticks),
+            "entry_lag": float(np.median(found)) if found else float("nan"),
+            "early": float(np.mean([x < -0.3 for x in found])) if found else float("nan"),
+            "missed": 1 - len(found) / max(1, len(entries)), "n_lines": len(entries),
+            "pause_next": float(np.mean(nxt)) if nxt else float("nan")}
+
+
+def parse_fw(v: str) -> FollowerConfig:
+    kind, _, kv = v.partition(" ")
+    kw = {k: float(x) for k, x in (a.split("=") for a in kv.split(",") if a)}
+    for k in ("max_jump", "back_words", "ahead_words"):
+        if k in kw:
+            kw[k] = int(kw[k])
+    return replace(FollowerConfig(), **kw)
+
+
+def fmt(name: str, m: dict) -> str:
+    return (f"{name:55s} | {m['exact']:.1%} | {m['pm1']:.1%} | {m['mean']:+.2f} | {m['jerks_min']:.2f} | "
+            f"{m['shown']:.1%} | {m['entry_lag']:+.2f} s | {m['early']:.1%} | {m['missed']:.1%} | "
+            f"{m['pause_next']:.1%}")
+
+
+HEADER = ("lane | word exact | ±1 | mean off | jerks/min | shown | line entry median | >0.3 s early | "
+          "missed | next line in pause")
+
+GRID = {"window_s": [1.5, 2.0, 3.0], "beta_back": [1.0, 3.0, 10.0], "max_jump": [2, 4], "temp": [1.0, 3.0],
+        "reset_after": [1.0, 3.0]}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--asr", default="whisper-base-quran-dua", help="window-cache tag for the tracker")
+    ap.add_argument("--ctc", default="wav2vec2-quran-dua", help="CTC stream cache tag")
+    ap.add_argument("--ctc-dir", help="pause set: ctc-<name> folder (default: --ctc)")
+    ap.add_argument("--split", choices=["test", "train"], default="test")
+    ap.add_argument("--pauses", action="store_true", help="the pause benchmark (scripts/pause_eval.py)")
+    ap.add_argument("--delay", type=float, default=0.5, help="tracker (Whisper) delay, s")
+    ap.add_argument("--follow-delay", type=float, default=0.1, help="follower compute delay, s")
+    ap.add_argument("--grid", action="store_true", help="also run the tuning grid")
+    ap.add_argument("variants", nargs="*", help='follower settings: "fw k=v,..."')
+    args = ap.parse_args()
+    cfg = TrackerConfig()
+    ix = ev.CorpusIndex(ev.load_all())
+    t0 = time.time()
+    items = load_set(ix, args.asr, args.split, args.ctc, args.ctc_dir or args.ctc, args.pauses, cfg, args.delay)
+    print(f"{len(items)} recordings ({args.split}{', pauses' if args.pauses else ''}), tracker ASR {args.asr}, "
+          f"CTC {args.ctc}, delays {args.delay:g} / {args.follow_delay:g} s  (loaded in {time.time() - t0:.0f} s)")
+    print(HEADER, flush=True)
+    print(fmt("hmm (page mode)", score(ix, items, "hmm")), flush=True)
+    variants = list(args.variants) or (["fw"] if not args.grid else [])
+    if args.grid:
+        keys = list(GRID)
+        variants += ["fw " + ",".join(f"{k}={v:g}" for k, v in zip(keys, vals))
+                     for vals in itertools.product(*GRID.values())]
+    for v in variants:
+        m = score(ix, items, "follow", parse_fw(v), args.delay, args.follow_delay)
+        print(fmt(v, m), flush=True)
+
+
+if __name__ == "__main__":
+    main()
