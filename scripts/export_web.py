@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Write web/corpus.json so the front end can run with no server (on-device mode).
 
-Includes translations and transliterations when the local DuaPlayer cache has
-them (scripts/fetch_duaplayer.py); like the cache itself, the output isn't
-committed.
+Includes translations when the local DuaPlayer cache has them
+(scripts/fetch_duaplayer.py), and a transliteration for every line
+(translit.py); like the cache itself, the output isn't committed.
 """
 from __future__ import annotations
 
@@ -14,18 +14,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from dua_recognition.corpus import load_all  # noqa: E402
+from dua_recognition.corpus import load_all, web_json  # noqa: E402
 
 
 def corpus_json() -> list[dict]:
-    return [
-        {
-            "id": d.id, "name_en": d.name_en, "name_ar": d.name_ar,
-            "segments": [{"id": s.id, "ar": s.arabic, "tl": s.transliteration, "en": s.translation}
-                         for s in d.segments],
-        }
-        for d in load_all().values()
-    ]
+    return web_json(load_all())
 
 
 if __name__ == "__main__":

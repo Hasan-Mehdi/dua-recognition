@@ -22,6 +22,7 @@ data/sessions/, one .wav each with its log inside (scripts/session_report.py).
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import re
 import sys
@@ -40,7 +41,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from dua_recognition.align import CorpusIndex  # noqa: E402
 from dua_recognition.asr import DEFAULT_MODEL, load_model  # noqa: E402
-from dua_recognition.corpus import load_all, load_recordings  # noqa: E402
+from dua_recognition.corpus import load_all, load_recordings, web_json  # noqa: E402
 from dua_recognition.pipeline import StreamingRecognizer  # noqa: E402
 from dua_recognition.tracker import RECITER, TrackerConfig  # noqa: E402
 
@@ -97,19 +98,9 @@ async def save_session(name: str, request: Request):
 
 @app.get("/corpus.json")
 @app.get("/api/duas")
+@functools.cache
 def duas():
-    return [
-        {
-            "id": d.id,
-            "name_en": d.name_en,
-            "name_ar": d.name_ar,
-            "segments": [
-                {"id": s.id, "ar": s.arabic, "tl": s.transliteration, "en": s.translation}
-                for s in d.segments
-            ],
-        }
-        for d in DUAS.values()
-    ]
+    return web_json(DUAS)  # built once: every line's reading is worked out here
 
 
 @app.get("/api/recordings")

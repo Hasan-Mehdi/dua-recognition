@@ -76,6 +76,21 @@ def load_all(data_dir: str | Path = DATA_DIR) -> dict[str, Dua]:
     return out
 
 
+def web_json(duas: dict[str, Dua]) -> list[dict]:
+    """The texts as the front end reads them (app/server.py, scripts/export_web.py),
+    with every line's reading in one style (translit.for_display)."""
+    from .translit import for_display
+
+    return [
+        {
+            "id": d.id, "name_en": d.name_en, "name_ar": d.name_ar,
+            "segments": [{"id": s.id, "ar": s.arabic, "tl": for_display(s.arabic, s.transliteration),
+                          "en": s.translation} for s in d.segments],
+        }
+        for d in duas.values()
+    ]
+
+
 @dataclass
 class Recording:
     """A recitation with a human-labelled start time for every segment."""
