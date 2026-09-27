@@ -43,12 +43,23 @@ DUAS = ROOT / "data" / "duas"
 PAGES = ROOT / "data" / "duasorg"
 TIMED = ROOT / "data" / "duasorg_timed"
 LINES = ROOT / "data" / "lines"  # corpus.LINES_DIR
+# English duas.org's current pages leave out but its older mobile pages have
+# (saved alongside, with each text's source URL), by segment id. Local, like PAGES.
+EXTRA = ROOT / "data" / "duasorg_extra" / "lines.json"
 SITE = "https://www.duas.org"
 UA = {"User-Agent": "dua-recognition/0.2 (research)"}
 CONTINUED = re.compile(r"^\s*continue", re.I)
 # Texts whose page shifts the Arabic column against reading + English (an
 # "Arabic" header row in it), so the English moves with the reading.
 EN_WITH_READING = {"duasorg-sahifa-fatimiya-short-dua-miscellaneous-3"}
+# Texts whose English column is a row out of step from some line on (checked by
+# eye after a length-correlation scan): {id: (first line, rows to move by)}.
+# +1 = each line takes the next row's English; the first line's own row (an
+# instruction) stays in front of it as a note. -1 = the previous row's.
+EN_SHIFT = {
+    "duasorg-sahifa-fatimiya-dua-hareeq-ater-fajr-5": (1, -1),
+    "duasorg-ramadan-day-15-3": (11, 1),
+}
 
 
 def _get(url: str) -> bytes:
@@ -85,15 +96,41 @@ def pages() -> dict[str, dict]:
     return out
 
 
+ARABIC_LETTER = re.compile(r"[ء-ي]")
+
+
+def clean_line(text: str) -> tuple[str, str]:
+    """A page line as (Arabic, note). Some pages type an instruction into the Arabic
+    ("THEN Repeat seven times.", "Say three times. سُبْحانَ اللَّهِ"): it leaves the
+    recited text and becomes a note, the way DuaPlayer keeps its instruction slides
+    (no Arabic, the instruction as the English). A leftover word ("Arabic", "?") goes."""
+    text = text.strip()
+    if not ARABIC_LETTER.search(text):
+        return "", text if len(text.split()) >= 3 else ""
+    first = ARABIC_LETTER.search(text).start()
+    lead = text[:first]
+    if re.search(r"[A-Za-z]{2,}", lead):
+        return text[first:].strip(), lead.strip(" ()").strip()
+    return text, ""
+
+
 def blocks(page: dict) -> list[dict]:
-    """The page's du'as, with "Continued..." blocks folded into the one before."""
+    """The page's du'as, with "Continued..." blocks folded into the one before
+    and instructions typed into the Arabic moved to the English (clean_line)."""
     out: list[dict] = []
     for d in page.get("duas") or []:
         kept = [s for s in d.get("segments") or []
                 if s.get("type") != "instruction" and (s.get("arabic") or "").strip()]
-        segs = [s["arabic"].strip() for s in kept]
-        extra = [{"tl": (s.get("transliteration") or "").strip(), "en": (s.get("translation") or "").strip()}
-                 for s in kept]
+        segs, extra = [], []
+        for s in kept:
+            ar, note = clean_line(s["arabic"])
+            en = (s.get("translation") or "").strip()
+            if note and ar:  # the instruction goes before the line's own translation
+                en = en if note.lower() in en.lower() else f"({note}) {en}".strip()
+            elif note or not ar:
+                en = note
+            segs.append(ar)
+            extra.append({"tl": (s.get("transliteration") or "").strip() if ar else "", "en": en})
         if out and CONTINUED.match(d.get("title") or ""):
             out[-1]["segments"] += segs
             out[-1]["extra"] += extra
@@ -218,13 +255,15 @@ def cmd_lines(args) -> None:
     lines gives them in order; a text edited since falls back to matching each
     line's letters anywhere on the page. Then the page's own slips are mended:
     reading and English swapped over, readings a row or two out of step
-    (translit.match_readings), and English left blank that another text has."""
+    (translit.match_readings), and English left blank that duas.org's older
+    pages (EXTRA) or another text has."""
     LINES.mkdir(parents=True, exist_ok=True)
     all_pages = pages()
     known = translated_lines(all_pages)
     by_len: dict[int, list[str]] = {}
     for k in known:
         by_len.setdefault(len(k), []).append(k)
+    older = json.loads(EXTRA.read_text(encoding="utf-8")) if EXTRA.exists() else {}
     texts = full = lines = found = swapped = moved = filled = 0
     for p in sorted(DUAS.glob("duasorg-*.json")):
         raw = json.loads(p.read_text(encoding="utf-8"))
@@ -235,15 +274,19 @@ def cmd_lines(args) -> None:
         did = raw["dua_id"]
         ours = [s["arabic"] for s in raw["segments"]]
         bl = blocks(page)
-        block = next((b for b in bl if b["segments"] == ours), None)
-        if block:
+        # Its block: the same lines, or all but a hand-mended one or two.
+        block = max((b for b in bl if len(b["segments"]) == len(ours)), default=None,
+                    key=lambda b: sum(x == y for x, y in zip(b["segments"], ours)))
+        if block and sum(x == y for x, y in zip(block["segments"], ours)) >= 0.9 * len(ours):
             extra = [dict(e) for e in block["extra"]]
         else:
             by_letters = {}
             for b in bl:
                 for s, e in zip(b["segments"], b["extra"]):
-                    by_letters.setdefault(_bare(s), e)
-            extra = [dict(by_letters.get(_bare(s), {"tl": "", "en": ""})) for s in ours]
+                    if _bare(s):
+                        by_letters.setdefault(_bare(s), e)
+            extra = [dict(by_letters.get(_bare(s), {"tl": "", "en": ""}) if _bare(s) else {"tl": "", "en": ""})
+                     for s in ours]
         if sum(looks_english(e["tl"]) and not looks_english(e["en"]) for e in extra) > len(extra) / 2:
             extra = [{"tl": e["en"], "en": e["tl"]} for e in extra]
             swapped += 1
@@ -253,6 +296,19 @@ def cmd_lines(args) -> None:
             moved += i < len(rows) and extra[i]["tl"] != rows[i]["tl"]
             if did in EN_WITH_READING:
                 extra[i]["en"] = rows[j]["en"] if j is not None else ""
+        if did in EN_SHIFT:
+            first, by = EN_SHIFT[did]
+            col = [e["en"] for e in extra]
+            note = col[first - 1] if by > 0 else ""
+            for i in range(first - 1, len(extra)):
+                extra[i]["en"] = col[i + by] if 0 <= i + by < len(col) else ""
+            if note:
+                extra[first - 1]["en"] = f"{note} {extra[first - 1]['en']}".strip()
+        from_older = older.get(did, {}).get("en", {})
+        for s, e in zip(raw["segments"], extra):
+            if not e["en"] and from_older.get(str(s["segment_id"])):
+                e["en"] = from_older[str(s["segment_id"])]
+                filled += 1
         for ar, e in zip(ours, extra):
             if not e["en"] and (en := _lookup(ar, known, by_len)):
                 e["en"] = en
@@ -264,7 +320,7 @@ def cmd_lines(args) -> None:
         lines += len(ours)
         found += sum(bool(e["en"]) for e in extra)
     print(f"{texts} texts, {full} with English on every line; {found}/{lines} lines "
-          f"({swapped} texts had reading and English swapped, {moved} readings realigned, {filled} English filled from other texts)")
+          f"({swapped} texts had reading and English swapped, {moved} readings realigned, {filled} blank English filled from older pages / other texts)")
 
 
 def cmd_prune(args) -> None:
