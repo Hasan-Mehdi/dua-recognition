@@ -11,11 +11,13 @@ only the ones we don't already have are fetched.
 
     python scripts/fetch_duaspro.py              # new texts + new recordings
     python scripts/fetch_duaspro.py --no-audio   # texts and timings only
+    python scripts/fetch_duaspro.py --lines      # translations + readings of our duas.pro texts
 
 Writes:
     data/duas/<id>.json                   Arabic segments (committed)
     data/duaspro/<id>/<uuid>.json         reciter, duration, line timings (local)
     data/duaspro/<id>/<uuid>.mp3          the recording (local)
+    data/lines/<id>.json                  English + transliteration per line (--lines, local)
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DUAS = ROOT / "data" / "duas"
 CACHE = ROOT / "data" / "duaspro"
 DUAPLAYER = ROOT / "data" / "duaplayer"
+LINES = ROOT / "data" / "lines"  # corpus.LINES_DIR
 NEW_TEXTS = DUAS
 BASE = "https://dhreftlcbkiqbsprhjqh.supabase.co/functions/v1"
 SITE = "https://duas.pro"
@@ -162,10 +165,25 @@ def fetch(slug: str, audio: bool, openings: dict[str, str]) -> tuple[int, int]:
     return new_text, new_recs
 
 
+def save_lines(slug: str) -> tuple[int, int]:
+    """English and transliteration for each line of one of our duas.pro texts."""
+    did = dua_id(slug)
+    d = _get(f"/duas/{slug}?languages=ar,en,translit")["data"]
+    out = {}
+    for l in d["lines"]:
+        by_lang = {t["language"]: (t.get("text") or "").strip() for t in l["translations"] or []}
+        if by_lang.get("en") or by_lang.get("translit"):
+            out[str(l["line_number"])] = {"tl": by_lang.get("translit", ""), "en": by_lang.get("en", "")}
+    LINES.mkdir(parents=True, exist_ok=True)
+    (LINES / f"{did}.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    return len(out), len(d["lines"])
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("slugs", nargs="*", help="only these duas.pro slugs")
     ap.add_argument("--no-audio", action="store_true")
+    ap.add_argument("--lines", action="store_true", help="only fetch translations + readings for texts we have")
     ap.add_argument("--texts-dir", type=Path, default=DUAS,
                     help="where new texts go (stage them elsewhere while other evaluations run)")
     args = ap.parse_args()
@@ -174,6 +192,23 @@ def main() -> None:
     NEW_TEXTS.mkdir(parents=True, exist_ok=True)
     texts = recs = 0
     openings = known_openings()
+    if args.lines:
+        # By each text's own source slug: the paginated listing drops a few entries.
+        sources = [json.loads(p.read_text(encoding="utf-8")).get("source", "") for p in DUAS.glob("*.json")]
+        ours = [src.removeprefix(SITE + "/") for src in sources if src.startswith(SITE + "/")]
+        n = found = lines = 0
+        for slug in ours:
+            if args.slugs and slug not in args.slugs:
+                continue
+            try:
+                f, t = save_lines(slug)
+            except Exception as e:  # noqa: BLE001
+                print(f"  {slug}: failed ({e})", file=sys.stderr)
+                continue
+            n, found, lines = n + 1, found + f, lines + t
+            time.sleep(0.3)
+        print(f"{n}/{len(ours)} texts, {found}/{lines} lines")
+        return
     for d in catalogue():
         if args.slugs and d["slug"] not in args.slugs:
             continue

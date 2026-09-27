@@ -10,6 +10,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "duas"
 CACHE_DIR = ROOT / "data" / "duaplayer"
+# Per-line translation and reading for the duas.org / duas.pro texts, keyed by
+# segment id like DuaPlayer's slides.json (not ours to redistribute either).
+LINES_DIR = ROOT / "data" / "lines"
 # More human-timed recordings in the same format (scripts/fetch_duaspro.py).
 # Opt-in (extra=True or DUA_EXTRA_SOURCES=1) so results stay comparable with
 # the DuaPlayer-only numbers until they're re-baselined.
@@ -54,10 +57,13 @@ def _segment(d: dict, extra: dict | None = None) -> Segment:
 
 
 def load_dua(path: str | Path, cache_dir: str | Path = CACHE_DIR) -> Dua:
-    """Load one du'a. Translations are merged in from the local DuaPlayer cache
-    when scripts/fetch_duaplayer.py has been run; they aren't committed."""
+    """Load one du'a. Translations and source readings are merged in from the local
+    DuaPlayer cache, or for the scraped texts from data/lines/ (fetch_duasorg.py
+    lines, fetch_duaspro.py --lines); neither is committed."""
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     extra_path = Path(cache_dir) / raw["dua_id"] / "slides.json"
+    if not extra_path.exists():
+        extra_path = LINES_DIR / f"{raw['dua_id']}.json"
     extra = json.loads(extra_path.read_text(encoding="utf-8")) if extra_path.exists() else {}
     return Dua(
         id=raw["dua_id"],

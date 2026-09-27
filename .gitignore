@@ -27,6 +27,8 @@ web/corpus.json
 web/models/
 data/duaspro/
 data/duasorg/
+# per-line translations/readings for the scraped texts (fetch_duasorg.py lines, fetch_duaspro.py --lines)
+data/lines/
 data/duasorg_timed/
 data/untimed/
 # personal test recordings (voice) stay local

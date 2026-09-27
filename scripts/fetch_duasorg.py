@@ -8,6 +8,7 @@ timings (data_v2/<page>-timing.json, one start time per rendered segment).
 
     python scripts/fetch_duasorg.py download            # page JSON + timing files
     python scripts/fetch_duasorg.py texts --out DIR      # new texts -> DIR
+    python scripts/fetch_duasorg.py lines               # their translations + readings -> data/lines/
     python scripts/fetch_duasorg.py timed               # timings -> data/duasorg_timed/
     python scripts/fetch_duasorg.py audio               # recordings, if the disk has room
     python scripts/fetch_duasorg.py untimed --texts DIR  # untimed recordings -> data/untimed/duasorg/
@@ -38,6 +39,7 @@ from fetch_duaspro import _bare, _opening  # noqa: E402
 DUAS = ROOT / "data" / "duas"
 PAGES = ROOT / "data" / "duasorg"
 TIMED = ROOT / "data" / "duasorg_timed"
+LINES = ROOT / "data" / "lines"  # corpus.LINES_DIR
 SITE = "https://www.duas.org"
 UA = {"User-Agent": "dua-recognition/0.2 (research)"}
 CONTINUED = re.compile(r"^\s*continue", re.I)
@@ -81,13 +83,17 @@ def blocks(page: dict) -> list[dict]:
     """The page's du'as, with "Continued..." blocks folded into the one before."""
     out: list[dict] = []
     for d in page.get("duas") or []:
-        segs = [s["arabic"].strip() for s in d.get("segments") or []
+        kept = [s for s in d.get("segments") or []
                 if s.get("type") != "instruction" and (s.get("arabic") or "").strip()]
+        segs = [s["arabic"].strip() for s in kept]
+        extra = [{"tl": (s.get("transliteration") or "").strip(), "en": (s.get("translation") or "").strip()}
+                 for s in kept]
         if out and CONTINUED.match(d.get("title") or ""):
             out[-1]["segments"] += segs
+            out[-1]["extra"] += extra
             continue
         out.append({"id": d.get("id"), "title": (d.get("title") or "").strip(), "segments": segs,
-                    "audio": d.get("audio") or "", "youtube": d.get("youtube") or ""})
+                    "extra": extra, "audio": d.get("audio") or "", "youtube": d.get("youtube") or ""})
     return out
 
 
@@ -163,6 +169,41 @@ def cmd_texts(args) -> None:
             added += 1
         short += sum(1 for b in blocks(page) if 0 < len(b["segments"]) < args.min_segments)
     print(f"{added} new texts, {dup} already in the corpus, {short} too short (< {args.min_segments} lines)")
+
+
+def cmd_lines(args) -> None:
+    """Each duas.org text's translation and reading, line by line, into data/lines/.
+
+    A text is one block of its page (texts stage), so the block with the same
+    lines gives them in order; a text edited since falls back to matching each
+    line's letters anywhere on the page."""
+    LINES.mkdir(parents=True, exist_ok=True)
+    all_pages = pages()
+    texts = full = lines = found = 0
+    for p in sorted(DUAS.glob("duasorg-*.json")):
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        page = all_pages.get(raw.get("source", "").rsplit("/", 1)[-1].removesuffix(".html"))
+        if page is None:
+            print(f"  {raw['dua_id']}: page not downloaded")
+            continue
+        ours = [s["arabic"] for s in raw["segments"]]
+        bl = blocks(page)
+        block = next((b for b in bl if b["segments"] == ours), None)
+        if block:
+            extra = block["extra"]
+        else:
+            by_letters = {}
+            for b in bl:
+                for s, e in zip(b["segments"], b["extra"]):
+                    by_letters.setdefault(_bare(s), e)
+            extra = [by_letters.get(_bare(s), {}) for s in ours]
+        out = {str(s["segment_id"]): e for s, e in zip(raw["segments"], extra) if e.get("en") or e.get("tl")}
+        (LINES / f"{raw['dua_id']}.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+        texts += 1
+        full += len(out) == len(ours)
+        lines += len(ours)
+        found += len(out)
+    print(f"{texts} texts, {full} with every line; {found}/{lines} lines")
 
 
 def cmd_prune(args) -> None:
@@ -366,7 +407,7 @@ def duration_ms(path: Path) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("stage", choices=["download", "texts", "prune", "timed", "audio", "untimed"])
+    ap.add_argument("stage", choices=["download", "texts", "lines", "prune", "timed", "audio", "untimed"])
     ap.add_argument("--out", default=str(DUAS), help="texts: where new texts go")
     ap.add_argument("--texts", nargs="*", default=[], help="timed: extra text dirs to match against")
     ap.add_argument("--min-segments", type=int, default=5)
@@ -375,7 +416,7 @@ def main() -> None:
     ap.add_argument("--overlap", type=float, default=0.8, help="prune: containment that counts as a copy")
     args = ap.parse_args()
     args.reciters = {}
-    {"download": cmd_download, "texts": cmd_texts, "prune": cmd_prune, "timed": cmd_timed, "audio": cmd_audio, "untimed": cmd_untimed}[args.stage](args)
+    {"download": cmd_download, "texts": cmd_texts, "lines": cmd_lines, "prune": cmd_prune, "timed": cmd_timed, "audio": cmd_audio, "untimed": cmd_untimed}[args.stage](args)
 
 
 if __name__ == "__main__":
