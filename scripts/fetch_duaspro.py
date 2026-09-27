@@ -30,6 +30,10 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from dua_recognition.translit import match_readings  # noqa: E402
+
 DUAS = ROOT / "data" / "duas"
 CACHE = ROOT / "data" / "duaspro"
 DUAPLAYER = ROOT / "data" / "duaplayer"
@@ -166,14 +170,19 @@ def fetch(slug: str, audio: bool, openings: dict[str, str]) -> tuple[int, int]:
 
 
 def save_lines(slug: str) -> tuple[int, int]:
-    """English and transliteration for each line of one of our duas.pro texts."""
+    """English and transliteration for each line of one of our duas.pro texts
+    (readings a row out of step put back: translit.match_readings)."""
     did = dua_id(slug)
     d = _get(f"/duas/{slug}?languages=ar,en,translit")["data"]
+    rows = [{t["language"]: (t.get("text") or "").strip() for t in l["translations"] or []} for l in d["lines"]]
+    ours = {s["segment_id"]: s["arabic"] for s in json.loads((DUAS / f"{did}.json").read_text(encoding="utf-8"))["segments"]}
+    arabic = [ours.get(l["line_number"], r.get("ar", "")) for l, r in zip(d["lines"], rows)]
+    tl = [r.get("translit", "") for r in rows]
     out = {}
-    for l in d["lines"]:
-        by_lang = {t["language"]: (t.get("text") or "").strip() for t in l["translations"] or []}
-        if by_lang.get("en") or by_lang.get("translit"):
-            out[str(l["line_number"])] = {"tl": by_lang.get("translit", ""), "en": by_lang.get("en", "")}
+    for l, r, j in zip(d["lines"], rows, match_readings(arabic, tl)):
+        e = {"tl": tl[j] if j is not None else "", "en": r.get("en", "")}
+        if e["en"] or e["tl"]:
+            out[str(l["line_number"])] = e
     LINES.mkdir(parents=True, exist_ok=True)
     (LINES / f"{did}.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     return len(out), len(d["lines"])

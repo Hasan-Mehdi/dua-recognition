@@ -33,8 +33,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "src"))
 
 from fetch_duaspro import _bare, _opening  # noqa: E402
+
+from dua_recognition.translit import looks_english, match_readings  # noqa: E402
 
 DUAS = ROOT / "data" / "duas"
 PAGES = ROOT / "data" / "duasorg"
@@ -43,6 +46,9 @@ LINES = ROOT / "data" / "lines"  # corpus.LINES_DIR
 SITE = "https://www.duas.org"
 UA = {"User-Agent": "dua-recognition/0.2 (research)"}
 CONTINUED = re.compile(r"^\s*continue", re.I)
+# Texts whose page shifts the Arabic column against reading + English (an
+# "Arabic" header row in it), so the English moves with the reading.
+EN_WITH_READING = {"duasorg-sahifa-fatimiya-short-dua-miscellaneous-3"}
 
 
 def _get(url: str) -> bytes:
@@ -171,39 +177,94 @@ def cmd_texts(args) -> None:
     print(f"{added} new texts, {dup} already in the corpus, {short} too short (< {args.min_segments} lines)")
 
 
+def translated_lines(all_pages: dict[str, dict]) -> dict[str, str]:
+    """English for every line we can find one for, by the line's letters: every
+    duas.org page plus the other sources' texts. Fills lines their own page left blank."""
+    from dua_recognition.corpus import load_all
+
+    out: dict[str, str] = {}
+    for page in all_pages.values():
+        for b in blocks(page):
+            for ar, e in zip(b["segments"], b["extra"]):
+                if _bare(ar) and e["en"] and not (looks_english(e["tl"]) and not looks_english(e["en"])):
+                    out.setdefault(_bare(ar).replace(" ", ""), e["en"])
+    for did, dua in load_all().items():
+        if not did.startswith("duasorg-"):
+            for seg in dua.segments:
+                if _bare(seg.arabic) and seg.translation.strip():
+                    out.setdefault(_bare(seg.arabic).replace(" ", ""), seg.translation)
+    return out
+
+
+def _lookup(ar: str, known: dict[str, str], by_len: dict[int, list[str]]) -> str:
+    """The English of the same line elsewhere: identical letters, or all but a
+    letter or two (another site's spelling), never a merely similar line."""
+    key = _bare(ar).replace(" ", "")
+    if key in known or len(key) < 12:
+        return known.get(key, "") if key else ""
+    best, ratio = "", 0.95
+    for n in range(int(len(key) * 0.95), int(len(key) / 0.95) + 1):
+        for other in by_len.get(n, []):
+            r = difflib.SequenceMatcher(None, key, other, autojunk=False).ratio()
+            if r >= ratio:
+                best, ratio = other, r
+    return known[best] if best else ""
+
+
 def cmd_lines(args) -> None:
     """Each duas.org text's translation and reading, line by line, into data/lines/.
 
     A text is one block of its page (texts stage), so the block with the same
     lines gives them in order; a text edited since falls back to matching each
-    line's letters anywhere on the page."""
+    line's letters anywhere on the page. Then the page's own slips are mended:
+    reading and English swapped over, readings a row or two out of step
+    (translit.match_readings), and English left blank that another text has."""
     LINES.mkdir(parents=True, exist_ok=True)
     all_pages = pages()
-    texts = full = lines = found = 0
+    known = translated_lines(all_pages)
+    by_len: dict[int, list[str]] = {}
+    for k in known:
+        by_len.setdefault(len(k), []).append(k)
+    texts = full = lines = found = swapped = moved = filled = 0
     for p in sorted(DUAS.glob("duasorg-*.json")):
         raw = json.loads(p.read_text(encoding="utf-8"))
         page = all_pages.get(raw.get("source", "").rsplit("/", 1)[-1].removesuffix(".html"))
         if page is None:
             print(f"  {raw['dua_id']}: page not downloaded")
             continue
+        did = raw["dua_id"]
         ours = [s["arabic"] for s in raw["segments"]]
         bl = blocks(page)
         block = next((b for b in bl if b["segments"] == ours), None)
         if block:
-            extra = block["extra"]
+            extra = [dict(e) for e in block["extra"]]
         else:
             by_letters = {}
             for b in bl:
                 for s, e in zip(b["segments"], b["extra"]):
                     by_letters.setdefault(_bare(s), e)
-            extra = [by_letters.get(_bare(s), {}) for s in ours]
+            extra = [dict(by_letters.get(_bare(s), {"tl": "", "en": ""})) for s in ours]
+        if sum(looks_english(e["tl"]) and not looks_english(e["en"]) for e in extra) > len(extra) / 2:
+            extra = [{"tl": e["en"], "en": e["tl"]} for e in extra]
+            swapped += 1
+        rows = [dict(e) for e in extra]
+        for i, j in enumerate(match_readings(ours, [e["tl"] for e in rows])):
+            extra[i]["tl"] = rows[j]["tl"] if j is not None else ""
+            moved += i < len(rows) and extra[i]["tl"] != rows[i]["tl"]
+            if did in EN_WITH_READING:
+                extra[i]["en"] = rows[j]["en"] if j is not None else ""
+        for ar, e in zip(ours, extra):
+            if not e["en"] and (en := _lookup(ar, known, by_len)):
+                e["en"] = en
+                filled += 1
         out = {str(s["segment_id"]): e for s, e in zip(raw["segments"], extra) if e.get("en") or e.get("tl")}
-        (LINES / f"{raw['dua_id']}.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+        (LINES / f"{did}.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
         texts += 1
-        full += len(out) == len(ours)
+        full += all(e["en"] for e in extra)
         lines += len(ours)
-        found += len(out)
-    print(f"{texts} texts, {full} with every line; {found}/{lines} lines")
+        found += sum(bool(e["en"]) for e in extra)
+    print(f"{texts} texts, {full} with English on every line; {found}/{lines} lines "
+          f"({swapped} texts had reading and English swapped, {moved} readings realigned, {filled} English filled from other texts)")
 
 
 def cmd_prune(args) -> None:

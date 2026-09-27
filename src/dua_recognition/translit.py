@@ -312,3 +312,49 @@ def for_display(arabic: str, source: str = "") -> str:
     if vowelled(arabic) or not source.strip():
         return transliterate(arabic)
     return source.strip()
+
+
+# English function words that never occur as words of a transliteration (no "an", "in", "la").
+_ENGLISH = {"the", "you", "your", "and", "of", "to", "me", "my", "i", "is", "who", "that", "for", "with",
+            "from", "which", "o", "not", "do", "we", "us", "our", "have", "be", "are", "all", "by", "it",
+            "he", "his", "him", "they", "them", "their", "what", "upon", "after", "every", "whom", "those"}
+
+
+def _letters(t: str) -> str:
+    """A reading reduced to plain letters, doubled letters single, for comparing styles."""
+    t = "".join(c for c in unicodedata.normalize("NFKD", t.lower()) if "a" <= c <= "z")
+    return re.sub(r"(.)\1+", r"\1", t)
+
+
+def looks_english(t: str) -> bool:
+    words = re.findall(r"[a-z]+", t.lower())
+    return bool(words) and sum(w in _ENGLISH for w in words) / len(words) >= 0.2
+
+
+def match_readings(arabic: list[str], readings: list[str], reach: int = 3) -> list[int | None]:
+    """Which source reading goes with each Arabic line. Scraped rows are sometimes a
+    line or two out of step (the reading drifts while the Arabic stays put), so a
+    line takes a nearby row when that row matches our own reading clearly better
+    than its own does. A vowelled line whose row doesn't match anything gets None;
+    an under-vowelled one keeps its row, since our reading of it isn't a fair test."""
+    from difflib import SequenceMatcher
+
+    ours = [_letters(transliterate(a)) for a in arabic]
+    theirs = [_letters(r) for r in readings]
+
+    def sim(i: int, j: int) -> float:
+        if not (0 <= j < len(theirs)) or not theirs[j] or not ours[i]:
+            return 0.0
+        return SequenceMatcher(None, ours[i], theirs[j], autojunk=False).ratio()
+
+    out: list[int | None] = []
+    for i, line in enumerate(arabic):
+        here = sim(i, i)
+        best = max(range(i - reach, i + reach + 1), key=lambda j: sim(i, j))
+        if best != i and sim(i, best) >= 0.5 and sim(i, best) - here >= 0.2:
+            out.append(best)
+        elif here < 0.3 and vowelled(line):
+            out.append(None)
+        else:
+            out.append(i if i < len(readings) else None)
+    return out
