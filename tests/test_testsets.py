@@ -102,3 +102,5 @@ def test_test_channel_video_is_skipped_by_harvesters():
     assert find_captioned.is_test_upload(v)
     assert not fetch_youtube.excluded({"id": "abcdefghijk", "title": "Dua Kumayl", "channel_id": "UCsomeoneelse"})
     assert splits.is_test_upload({"id": "x", "channel_url": f"https://www.youtube.com/channel/{venue}"})
+    # an old download's meta.json has the channel name but no channel_id
+    assert fetch_youtube.excluded({"id": "x", "title": "Dua Kumayl", "channel": splits.TEST_CHANNELS[venue]})

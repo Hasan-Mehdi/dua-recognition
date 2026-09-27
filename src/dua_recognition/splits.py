@@ -14,6 +14,7 @@ training harvester may download from.
 """
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
 
@@ -78,13 +79,14 @@ TEST_CHANNELS = {
 TESTSETS_DIR = Path(__file__).resolve().parents[2] / "data" / "testsets"
 
 
-def _holdout() -> tuple[set[str], set[str]]:
+@functools.cache  # read once per run: harvesters call is_test_upload per video
+def _holdout() -> tuple[frozenset[str], frozenset[str]]:
     channels, videos = set(TEST_CHANNELS), set()
     for f in sorted(TESTSETS_DIR.glob("*/holdout.json")):
         h = json.loads(f.read_text(encoding="utf-8"))
         channels |= set(h.get("channels", []))
         videos |= set(h.get("videos", []))
-    return channels, videos
+    return frozenset(channels), frozenset(videos)
 
 
 def is_test_upload(video: dict) -> bool:
@@ -92,6 +94,9 @@ def is_test_upload(video: dict) -> bool:
     channel_url) belongs to a test venue or a test uploader."""
     channels, videos = _holdout()
     if video.get("id") in videos:
+        return True
+    # By name too: metadata saved before downloads recorded channel_id has only it.
+    if video.get("channel") in TEST_CHANNELS.values() or video.get("uploader") in TEST_CHANNELS.values():
         return True
     keys = {video.get("channel_id"), video.get("uploader_id")}
     url = video.get("channel_url") or video.get("uploader_url") or ""
