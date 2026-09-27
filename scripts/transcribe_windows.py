@@ -136,7 +136,8 @@ def main() -> None:
         tag += "+lex"
     if args.room is not None:
         tag += f"+room{args.room:g}"
-    load_model(args.model, args.device)
+    if not args.model.startswith("ctc:"):  # CTC models load inside transcribe_batch
+        load_model(args.model, args.device)
 
     duas = load_all()
     groups = [(None, _streams(args.stream_dir))] if args.stream_dir else [(d, None) for d in duas.values()]
