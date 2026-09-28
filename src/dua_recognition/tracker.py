@@ -89,6 +89,20 @@ class TrackerConfig:
     # distinctive. 0 = off.
     same_text_words: int = 12
     same_text_ahead: int = 3
+    # Sources spell one text differently: duas.org's "Dua - repentance" opens with
+    # Ayat al-Kursi as "و لا", "بشي ء" where the Ayat al-Kursi text has "ولا", "بشيء"
+    # (and "يوده" / "ييوده"). Word for word its longest identical run was 13, so the
+    # two seldom counted as one passage, split the mass ~55/40 and neither was shown
+    # for 20 s of a phone session (docs/results/phone_sessions.md). So passages are
+    # compared with a lone و joined to the word after it and a lone ء to the word
+    # before, and words of 4+ letters one edit apart count as the same word; the two
+    # beliefs may peak one word apart. False = compare words exactly.
+    same_text_spelling: bool = True
+    # A shared passage counts as one du'a for the lock too (lock_confidence). With
+    # the mass split between two texts neither reached it, so the tracker stayed in
+    # search mode (kappa_search) and two misheard windows sent the "not in the
+    # corpus" state from 2% to 100%. False = the single likeliest du'a must hold it.
+    lock_on_passage: bool = True
     # The belief is about the end of the audio window, but it reaches the
     # screen later (ASR time), and the transcript's tail lags the voice. So
     # the live display shows the belief predicted forward by the measured
@@ -182,6 +196,7 @@ class Tracker:
         self._spans = np.array(ix.dua_word_span).reshape(-1, 2)
         self._edge_cache: dict[int, np.ndarray] = {}
         self._text = [w.text for w in ix.words]
+        self._keys, self._key_of, self._key_span = _passage_keys(self._text, ix.dua_word_span)
         self.reset()
 
     def reset(self) -> None:
@@ -198,7 +213,10 @@ class Tracker:
 
     # -- predict ---------------------------------------------------------
     def _locked(self) -> bool:
-        return bool(self._dua_mass().max() >= self.cfg.lock_confidence)
+        mass = self._dua_mass()
+        if mass.max() >= self.cfg.lock_confidence or not self.cfg.lock_on_passage:
+            return bool(mass.max() >= self.cfg.lock_confidence)
+        return bool(mass[self._same_text(mass, np.argsort(-mass))].sum() >= self.cfg.lock_confidence)
 
     def _dua_mass(self) -> np.ndarray:
         # post is over the corpus's words; `null` is the rest.
@@ -342,6 +360,26 @@ class Tracker:
         self._shown = replace(now, word=last, at_line_end=True)
         self._last_word = last
 
+    def seek(self, dua: str, segment: int) -> Position:
+        """The listener says where they are ("I'm here", a tap on line `segment` of
+        `dua`). The belief restarts spread over that line, known to be in the corpus;
+        the display starts at the line's first word and the next windows say how far
+        along it they are."""
+        d = self.ix.dua_ids.index(dua)
+        lo, hi = self.ix.dua_word_span[d]
+        words = lo + np.flatnonzero(self.ix.word_segment[lo:hi] == segment)
+        if not len(words):
+            raise ValueError(f"{dua} has no line {segment}")
+        self.post = np.zeros(self.ix.n_words)
+        self.post[words] = 1.0 / len(words)
+        self.null = 0.0
+        self._fwd_by_speed = None
+        self._reported, self._found_alone = d, True
+        first = int(words[0])
+        self._last_word = first
+        self._shown = replace(self.position(), word=first, at_line_end=len(words) == 1)
+        return self._shown
+
     @property
     def speed(self) -> float:
         """Current pace estimate in words/s (the tempo-weighted speed prior)."""
@@ -383,17 +421,14 @@ class Tracker:
     def _same_passage(self, a: int, b: int) -> bool:
         """Du'as a and b are both, most likely, inside one identical passage."""
         n, ahead = self.cfg.same_text_words, self.cfg.same_text_ahead
-        (lo_a, hi_a), (lo_b, hi_b) = self.ix.dua_word_span[a], self.ix.dua_word_span[b]
         wa, wb = self._likeliest(a), self._likeliest(b)
-        t = self._text
-        fwd = 0
-        while fwd < n and wa + fwd < hi_a and wb + fwd < hi_b and t[wa + fwd] == t[wb + fwd]:
-            fwd += 1
-        back = 0
-        while back < n and wa - back - 1 >= lo_a and wb - back - 1 >= lo_b and t[wa - back - 1] == t[wb - back - 1]:
-            back += 1
-        at_end = wa + fwd == hi_a or wb + fwd == hi_b  # one of them finishes here
-        return (fwd >= ahead or at_end) and fwd + back >= n
+        if not self.cfg.same_text_spelling:
+            spans = self.ix.dua_word_span[a], self.ix.dua_word_span[b]
+            return _passage_run(self._text, str.__eq__, wa, wb, *spans, n, ahead)
+        # Spelled differently, the two beliefs can peak a word apart (one text has a
+        # lone و the other doesn't): line them up within a word either way.
+        spans, ka, kb = (self._key_span[a], self._key_span[b]), self._key_of[wa], self._key_of[wb]
+        return any(_passage_run(self._keys, _same_word, ka, kb + o, *spans, n, ahead) for o in (0, -1, 1))
 
     def _same_text(self, dua_mass: np.ndarray, order: np.ndarray) -> list[int]:
         """The top du'a, and any of the next likeliest in the same passage as it."""
@@ -444,3 +479,60 @@ class Tracker:
         if pos.word is None or pos.dua_confidence < 0.9:
             return None
         return self.ix.text_before(pos.word, n_words)
+
+
+def _passage_keys(text: list[str], spans) -> tuple[list[str], np.ndarray, list[tuple[int, int]]]:
+    """Words as _same_passage compares them (TrackerConfig.same_text_spelling): a lone و
+    joined to the word after it, a lone ء to the word before. Returns the keys, each
+    word's key index, and each du'a's span of keys."""
+    keys: list[str] = []
+    key_of = np.zeros(len(text), dtype=np.int64)
+    key_span = []
+    for lo, hi in spans:
+        k0, w = len(keys), lo
+        while w < hi:
+            if text[w] == "ء" and len(keys) > k0:
+                keys[-1] += text[w]
+            elif text[w] == "و" and w + 1 < hi:
+                keys.append(text[w] + text[w + 1])
+                key_of[w] = len(keys) - 1
+                w += 1
+            else:
+                keys.append(text[w])
+            key_of[w] = len(keys) - 1
+            w += 1
+        key_span.append((k0, len(keys)))
+    return keys, key_of, key_span
+
+
+def _passage_run(t, same, wa, wb, span_a, span_b, n, ahead) -> bool:
+    """Word wa of one text and wb of another sit in a run of at least n matching
+    words (t[i] vs t[j] by `same`), at least `ahead` of them still to come unless
+    one text ends there."""
+    (lo_a, hi_a), (lo_b, hi_b) = span_a, span_b
+    if not lo_b <= wb < hi_b:
+        return False
+    fwd = 0
+    while fwd < n and wa + fwd < hi_a and wb + fwd < hi_b and same(t[wa + fwd], t[wb + fwd]):
+        fwd += 1
+    back = 0
+    while back < n and wa - back - 1 >= lo_a and wb - back - 1 >= lo_b and same(t[wa - back - 1], t[wb - back - 1]):
+        back += 1
+    at_end = wa + fwd == hi_a or wb + fwd == hi_b  # one of them finishes here
+    return (fwd >= ahead or at_end) and fwd + back >= n
+
+
+def _same_word(a: str, b: str) -> bool:
+    """Equal, or both 4+ letters and one edit apart (a spelling variant)."""
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 4 or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    if len(a) > len(b):
+        a, b = b, a
+    i = 0
+    while i < len(a) and a[i] == b[i]:
+        i += 1
+    return a[i:] == b[i + 1 :]

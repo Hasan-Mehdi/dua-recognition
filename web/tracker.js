@@ -123,6 +123,9 @@ export const DEFAULTS = {
   // Speed prior and tempo adaptation: see TrackerConfig.speeds / tempo_memory in tracker.py.
   speeds: [0.59, 0.99, 1.15, 1.3, 1.44, 1.55, 1.67, 1.84, 2.05, 2.39], tempoMemory: 0.98,
   pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, startWeight: 0.3, startWords: 12, minDuaConfidence: 0.7, sameTextWords: 12, sameTextAhead: 3,
+  // Shared passages spelled differently count as one, for the display and the lock
+  // (TrackerConfig.same_text_spelling / lock_on_passage in tracker.py).
+  sameTextSpelling: true, lockOnPassage: true,
   displayLead: 0.5, // seconds shown ahead of the measured delay (see tracker.py)
   enterLineAtStart: true, // moving on to the next line starts at its first word
   // Pauses (TrackerConfig.still_after ... retreat_after in tracker.py): `quiet` is how
@@ -164,6 +167,7 @@ export class Tracker {
     for (let w = n - 2; w >= 0; w--) {
       this.nextLine[w] = this.lineFirst[w + 1] === w + 1 ? w + 1 : this.nextLine[w + 1];
     }
+    Object.assign(this, passageKeys(index.words.map((w) => w.text), index.duaWordSpan));
     this.reset();
   }
 
@@ -230,7 +234,11 @@ export class Tracker {
   }
 
   _locked() {
-    return Math.max(...this._duaMass()) >= this.cfg.lockConfidence;
+    const mass = this._duaMass();
+    const top = Math.max(...mass);
+    if (top >= this.cfg.lockConfidence || !this.cfg.lockOnPassage) return top >= this.cfg.lockConfidence;
+    const order = Array.from(mass.keys()).sort((a, b) => mass[b] - mass[a]);
+    return this._sameText(mass, order).reduce((n, g) => n + mass[g], 0) >= this.cfg.lockConfidence;
   }
 
   _duaMass() {
@@ -307,6 +315,29 @@ export class Tracker {
     this.lastWord = this.shown.word;
   }
 
+  // The listener says where they are ("I'm here": a tap on line `segment` of du'a
+  // `duaId`). The belief restarts over that line, in the corpus; the display starts at
+  // its first word (tracker.py seek).
+  seek(duaId, segment) {
+    const ix = this.ix;
+    const d = ix.duaIds.indexOf(duaId);
+    if (d < 0) throw new Error(`${duaId} is not in the corpus`);
+    const [lo, hi] = ix.duaWordSpan[d];
+    const words = [];
+    for (let w = lo; w < hi; w++) if (ix.wordSegment[w] === segment) words.push(w);
+    if (!words.length) throw new Error(`${duaId} has no line ${segment}`);
+    this.post = new Float64Array(ix.nWords);
+    for (const w of words) this.post[w] = 1 / words.length;
+    this.null = 0;
+    this.fwdBySpeed = null;
+    this.reported = d;
+    this.foundAlone = true;
+    this.lastWord = words[0];
+    const p = this.position();
+    this.shown = { ...p, word: words[0], token: ix.words[words[0]].token, atLineEnd: words.length === 1 };
+    return this.shown;
+  }
+
   // Current pace estimate in words/s (the tempo-weighted speed prior).
   get speed() {
     const { speeds, maxSpeed } = this.cfg;
@@ -353,17 +384,16 @@ export class Tracker {
   // Du'as a and b are both, most likely, inside one identical passage (tracker.py).
   _samePassage(a, b) {
     const { sameTextWords: n, sameTextAhead: ahead } = this.cfg;
-    const [loA, hiA] = this.ix.duaWordSpan[a];
-    const [loB, hiB] = this.ix.duaWordSpan[b];
     const wa = this._likeliest(a);
     const wb = this._likeliest(b);
-    const t = (i) => this.ix.words[i].text;
-    let fwd = 0;
-    while (fwd < n && wa + fwd < hiA && wb + fwd < hiB && t(wa + fwd) === t(wb + fwd)) fwd++;
-    let back = 0;
-    while (back < n && wa - back - 1 >= loA && wb - back - 1 >= loB && t(wa - back - 1) === t(wb - back - 1)) back++;
-    const atEnd = wa + fwd === hiA || wb + fwd === hiB; // one of them finishes here
-    return (fwd >= ahead || atEnd) && fwd + back >= n;
+    if (!this.cfg.sameTextSpelling) {
+      const t = (i) => this.ix.words[i].text;
+      return passageRun(t, (x, y) => x === y, wa, wb, this.ix.duaWordSpan[a], this.ix.duaWordSpan[b], n, ahead);
+    }
+    // Spelled differently, the beliefs can peak a word apart: line them up within a word either way.
+    const t = (i) => this.keys[i];
+    const [ka, kb] = [this.keyOf[wa], this.keyOf[wb]];
+    return [0, -1, 1].some((o) => passageRun(t, sameWord, ka, kb + o, this.keySpan[a], this.keySpan[b], n, ahead));
   }
 
   // The top du'a, and any of the next likeliest in the same passage as it: a
@@ -430,4 +460,56 @@ export class Tracker {
     if (p.dua === null || p.duaConfidence < 0.9) return null;
     return this.ix.textBefore(p.word, nWords);
   }
+}
+
+// Words as _samePassage compares them (tracker.py _passage_keys): a lone و joined to
+// the word after it, a lone ء to the word before.
+function passageKeys(text, spans) {
+  const keys = [];
+  const keyOf = new Int32Array(text.length);
+  const keySpan = [];
+  for (const [lo, hi] of spans) {
+    const k0 = keys.length;
+    for (let w = lo; w < hi; w++) {
+      if (text[w] === "ء" && keys.length > k0) {
+        keys[keys.length - 1] += text[w];
+      } else if (text[w] === "و" && w + 1 < hi) {
+        keys.push(text[w] + text[w + 1]);
+        keyOf[w] = keys.length - 1;
+        w++;
+      } else {
+        keys.push(text[w]);
+      }
+      keyOf[w] = keys.length - 1;
+    }
+    keySpan.push([k0, keys.length]);
+  }
+  return { keys, keyOf, keySpan };
+}
+
+// Word wa of one text and wb of another sit in a run of at least n matching words,
+// `ahead` of them still to come unless one text ends there (tracker.py _passage_run).
+function passageRun(t, same, wa, wb, [loA, hiA], [loB, hiB], n, ahead) {
+  if (wb < loB || wb >= hiB) return false;
+  let fwd = 0;
+  while (fwd < n && wa + fwd < hiA && wb + fwd < hiB && same(t(wa + fwd), t(wb + fwd))) fwd++;
+  let back = 0;
+  while (back < n && wa - back - 1 >= loA && wb - back - 1 >= loB && same(t(wa - back - 1), t(wb - back - 1))) back++;
+  const atEnd = wa + fwd === hiA || wb + fwd === hiB; // one of them finishes here
+  return (fwd >= ahead || atEnd) && fwd + back >= n;
+}
+
+// Equal, or both 4+ letters and one edit apart (tracker.py _same_word).
+function sameWord(a, b) {
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 4 || Math.abs(a.length - b.length) > 1) return false;
+  if (a.length === b.length) {
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff += a[i] !== b[i];
+    return diff === 1;
+  }
+  if (a.length > b.length) [a, b] = [b, a];
+  let i = 0;
+  while (i < a.length && a[i] === b[i]) i++;
+  return a.slice(i) === b.slice(i + 1);
 }

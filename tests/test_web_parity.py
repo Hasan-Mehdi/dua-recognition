@@ -126,3 +126,49 @@ console.log(JSON.stringify(ticks.map((tick) => {{
     got = json.loads(out.stdout)
     bad = [(i, e, g) for i, (e, g) in enumerate(zip(expected, got)) if (e is None) != (g is None) or (e is not None and abs(e - g) > 1e-5)]
     assert not bad, bad[:5]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_js_tracker_matches_python_on_a_respelled_shared_passage_and_a_tap(tmp_path):
+    """Ayat al-Kursi and the texts that share it (one spelled differently), then an
+    "I'm here" tap into another du'a mid-stream (Tracker.seek)."""
+    all_duas = load_all()
+    shared = ["duasorg-namaz-e-wahshat", "duasorg-eid-e-mubahila-3", "sahifa-54"]
+    corpus = {k: all_duas[k] for k in shared + PARITY_DUAS[:6]}
+    texts = _stream([corpus["duasorg-namaz-e-wahshat"]], seed=5)
+    seek_at, target = len(texts) // 2, ("duasorg-eid-e-mubahila-3", corpus["duasorg-eid-e-mubahila-3"].segments[6].id)
+    texts += _stream([corpus["duasorg-eid-e-mubahila-3"]], seed=6)[40:70]
+
+    tracker = Tracker(CorpusIndex(corpus))
+    expected = []
+    for i, t in enumerate(texts):
+        if i == seek_at:
+            p = tracker.seek(*target)
+            expected.append(["seek", p.dua, p.segment, p.word])
+        p = tracker.update(t, 1.0, 1.3)
+        expected.append([p.dua, p.segment, p.word, sorted(p.same_as)])
+    assert sum(e[0] == "duasorg-namaz-e-wahshat" for e in expected) > seek_at // 2  # shown, not withheld
+
+    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar,
+                "segments": [{"id": s.id, "ar": s.arabic} for s in d.segments]} for d in corpus.values()]
+    (tmp_path / "corpus.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "texts.json").write_text(json.dumps(texts, ensure_ascii=False), encoding="utf-8")
+    script = f"""
+import {{ readFileSync }} from "node:fs";
+import {{ CorpusIndex, Tracker }} from "{(WEB / 'tracker.js').as_uri()}";
+const corpus = JSON.parse(readFileSync("{(tmp_path / 'corpus.json').as_posix()}", "utf8"));
+const texts = JSON.parse(readFileSync("{(tmp_path / 'texts.json').as_posix()}", "utf8"));
+const tr = new Tracker(new CorpusIndex(corpus));
+const out = [];
+texts.forEach((t, i) => {{
+  if (i === {seek_at}) {{ const p = tr.seek({json.dumps(target[0])}, {target[1]}); out.push(["seek", p.dua, p.segment, p.word]); }}
+  const p = tr.update(t, 1.0, 1.3);
+  out.push([p.dua, p.segment ?? null, p.word ?? null, [...(p.sameAs || [])].sort()]);
+}});
+console.log(JSON.stringify(out));
+"""
+    (tmp_path / "run.mjs").write_text(script, encoding="utf-8")
+    out = subprocess.run([NODE, str(tmp_path / "run.mjs")], capture_output=True, text=True, encoding="utf-8", check=True)
+    got = json.loads(out.stdout)
+    mismatches = [(i, e, g) for i, (e, g) in enumerate(zip(expected, got)) if e != g]
+    assert len(got) == len(expected) and not mismatches, mismatches[:5]

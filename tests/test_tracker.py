@@ -141,3 +141,63 @@ def test_the_passage_on_its_own_is_shown_as_itself():
     shown = [pos for _, pos in trace if pos.dua]
     assert len(shown) >= len(trace) - 2
     assert all(pos.dua == "kursi" and pos.same_as == ["sahifa"] for pos in shown)
+
+
+def _respelled(text):
+    """The same words as another source writes them: a lone و (duas.org)."""
+    return text.replace("ولا", "و لا").replace("وما", "و ما")
+
+
+def _respelled_corpus():
+    # "repent" opens with the verse as duas.org writes it, then goes its own way
+    # (as "Dua - repentance" opens with Ayat al-Kursi).
+    return {
+        "kursi": Dua("kursi", "K", "", [Segment(i + 1, t) for i, t in enumerate(KURSI)]),
+        "repent": Dua("repent", "R", "", [Segment(i + 1, _respelled(t)) for i, t in enumerate(KURSI)]
+                      + [Segment(len(KURSI) + 1, "شهد الله انه لا اله الا هو والملايكه واولوا العلم")]),
+        "other": Dua("other", "O", "", [Segment(1, OPENING), Segment(2, "الحمد لله رب العالمين")]),
+    }
+
+
+def test_a_shared_passage_spelled_differently_is_still_one():
+    corpus = _respelled_corpus()
+    # Word for word, the mass splits and nothing is shown until the last word.
+    exact = Tracker(CorpusIndex(corpus), TrackerConfig(same_text_spelling=False))
+    assert sum(pos.dua is not None for _, pos in _recite(exact, corpus["kursi"])) <= 1
+    trace = _recite(Tracker(CorpusIndex(corpus)), corpus["kursi"])
+    shown = [pos for _, pos in trace if pos.dua]
+    assert len(shown) >= len(trace) - 2
+    assert all(pos.dua == "kursi" and pos.same_as == ["repent"] for pos in shown)
+
+
+def test_misheard_windows_inside_a_shared_passage_do_not_drop_it():
+    # Locked on the passage (both texts together), two garbled windows don't send
+    # everything to "not in the corpus": the passage counts as one du'a for the lock.
+    corpus = _respelled_corpus()
+    words = " ".join(KURSI).split()
+    kept = {}
+    for on in (False, True):
+        tracker = Tracker(CorpusIndex(corpus), TrackerConfig(lock_on_passage=on))
+        for i in range(14):
+            tracker.update(" ".join(words[max(0, i - 4) : i + 1]), 1.0)
+        for garbled in ("شهور النامين يوم يام", "في ذنب يا لمم"):
+            pos = tracker.update(garbled, 1.0)
+        kept[on] = pos.dua
+    assert kept == {False: None, True: "kursi"}
+
+
+def test_a_tap_puts_the_display_on_that_line_and_following_goes_on_from_it():
+    corpus = _corpus()
+    tracker = Tracker(CorpusIndex(corpus))
+    tracker.update("كلام لا يشبه شيئا", 1.0)
+    pos = tracker.seek("tawassul", 5)  # the refrain after the second name
+    lo = CorpusIndex(corpus).dua_word_span[0][0]
+    assert (pos.dua, pos.segment) == ("tawassul", 5)
+    assert tracker.ix.word_segment[pos.word] == 5 and tracker.ix.word_segment[pos.word - 1] == 4 and pos.word > lo
+    # Silence holds the tapped line; the refrain heard next is this repetition of it,
+    # not the first or the third.
+    assert tracker.update("", 1.0, lead=0.5).segment == 5
+    refrain = REFRAIN.split()
+    for i in range(3, len(refrain)):
+        pos = tracker.update(" ".join(refrain[:i]), 1.0, lead=0.5)
+        assert (pos.dua, pos.segment) == ("tawassul", 5)
