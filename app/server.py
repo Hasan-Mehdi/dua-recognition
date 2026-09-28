@@ -195,6 +195,15 @@ async def follow(ws: WebSocket):
                 await idle()
                 rec.lock(text[5:])
                 continue
+            if text.startswith("seek:"):  # "I'm here": the listener tapped the line they're on
+                dua, _, seg = text[5:].rpartition(":")
+                if dua in rec.index.dua_ids and seg.lstrip("-").isdigit():
+                    await idle()
+                    try:
+                        rec.seek(dua, int(seg))
+                    except ValueError:  # no such line
+                        pass
+                continue
             if text.startswith("follow:"):  # the page switched between page and majlis mode
                 await idle()
                 rec.config = rec.tracker.cfg = _follow(text[7:])

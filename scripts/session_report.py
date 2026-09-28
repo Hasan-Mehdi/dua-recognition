@@ -262,6 +262,8 @@ def retrack(log: dict, duas, overrides: dict) -> list[tuple[str | None, int | No
         elif e["type"] == "follow":
             mode = e["mode"]
             tracker.cfg = cfg(mode)
+        elif e["type"] == "seek":  # "I'm here" moved the tracker (Tracker.seek)
+            tracker.seek(e["dua"], e["seg"])
         elif e["type"] == "hop":
             dt = e.get("dt", e["end"] - last_end)
             last_end = e["end"]

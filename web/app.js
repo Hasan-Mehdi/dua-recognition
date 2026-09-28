@@ -46,6 +46,9 @@ class ServerEngine {
   lock(duaId) {
     this.ws?.send(`lock:${duaId}`);
   }
+  seek(duaId, segment) {
+    if (this.ws?.readyState === 1) this.ws.send(`seek:${duaId}:${segment}`);
+  }
   follow(mode) {
     if (this.ws?.readyState === 1) this.ws.send(`follow:${mode}`);
   }
@@ -85,6 +88,9 @@ class DeviceEngine {
   lock(duaId) {
     // Follow only this du'a: identification is skipped entirely.
     this.tracker = new Tracker(new CorpusIndex(this.corpus.filter((d) => d.id === duaId)), followConfig());
+  }
+  seek(duaId, segment) {
+    return this.tracker.seek(duaId, segment);
   }
   async start(onUpdate) {
     this.onUpdate = onUpdate;
@@ -223,6 +229,7 @@ function watchForDebugging() {
     if (!ln || !state.dua) return;
     const i = Number(ln.dataset.i);
     log.event("tap", { seg: state.duas[state.dua].segments[i].id, shown: state.segment });
+    if (state.source && document.body.dataset.state === "following") seekTo(state.dua, state.duas[state.dua].segments[i].id);
     ln.classList.remove("tapped");
     void ln.offsetWidth; // restart the flash
     ln.classList.add("tapped");
@@ -580,6 +587,15 @@ function renderWord(u) {
   state.hl = null; // stops the glide loop
   if (u.segment !== state.segment) moveTo(state.duas[u.dua], u.segment);
   paintWords(u.token);
+}
+
+// "I'm here": the tapped line is where the reciter is. The tracker restarts there
+// (Tracker.seek) and the display goes there now, at the line's first word.
+function seekTo(duaId, segment) {
+  const p = state.engine.seek?.(duaId, segment);
+  log.event("seek", { dua: duaId, seg: segment });
+  render({ dua: duaId, segment, token: p?.token ?? 0, speed: 0, unknown: 0, pause: false, heard: "", ms: 0,
+    candidates: state.last?.candidates || [], sameAs: [] });
 }
 
 function render(u) {

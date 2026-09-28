@@ -101,6 +101,11 @@ class StreamingRecognizer:
         if self.follower is not None:
             self.follower = LocalFollower(self.index, self.follower_config)
 
+    def seek(self, dua_id: str, segment: int) -> None:
+        """The listener said where they are ("I'm here" on a line): follow on from there."""
+        self.tracker.seek(dua_id, segment)
+        self._anchor = self._lead_word = None
+
     def push(self, samples: np.ndarray) -> None:
         """Buffer 16 kHz float32 samples without running anything."""
         samples = np.asarray(samples, dtype=np.float32).reshape(-1)
