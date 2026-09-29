@@ -14,6 +14,18 @@ const SR = 16000;
 const log = new SessionLog({ enabled: params.get("log") !== "0" });
 const cands = (list) => list.map(([id, p]) => [id, Number(p.toFixed(3))]);
 
+// Epoch ms (performance.timeOrigin + now): comparable with the ASR worker's clock.
+const clock = () => performance.timeOrigin + performance.now();
+
+// When a chunk's last sample was captured, as epoch ms: its AudioContext time (the audio
+// sample clock, from capture-worklet.js) mapped through getOutputTimestamp(). Microphone
+// hardware latency before the AudioContext is not included. Falls back to arrival time.
+function captureTime(ctxTime) {
+  const ts = state.ctx?.getOutputTimestamp?.();
+  if (ctxTime == null || !ts?.performanceTime) return clock();
+  return performance.timeOrigin + ts.performanceTime + (ctxTime - ts.contextTime) * 1000;
+}
+
 // -- engines ----------------------------------------------------------------
 class ServerEngine {
   kind = "server";
@@ -66,6 +78,9 @@ class DeviceEngine {
     this.model = model;
     this.window = 6 * SR;
     this.buf = new Float32Array(this.window);
+    // Speech gate policy (web/gate.js; docs/results/browser_gate.md): legacy unless ?gate=...
+    this.gate = params.get("gate") || "legacy";
+    this.filter = params.get("filter") === "1"; // the hallucination filter, a separate ablation
   }
   prepare(onProgress) {
     if (this.ready) return this.ready;
@@ -95,9 +110,17 @@ class DeviceEngine {
   async start(onUpdate) {
     this.onUpdate = onUpdate;
     this.tracker = new Tracker(new CorpusIndex(this.corpus), followConfig());
-    Object.assign(this, { filled: 0, total: 0, lastSent: 0, lastUpdate: 0, busy: false, live: true });
+    Object.assign(this, { filled: 0, total: 0, lastSent: 0, lastUpdate: 0, busy: false, live: true, marks: [],
+      firstText: true });
   }
-  push(chunk) {
+  // Capture time (epoch ms) of sample `id` of the stream, from the chunk marks.
+  capturedAt(id) {
+    const m = this.marks.find(([n]) => n >= id);
+    return m ? m[1] - ((m[0] - id) / SR) * 1000 : null;
+  }
+  push(chunk, at = clock()) {
+    this.marks.push([this.total + chunk.length, at]);
+    if (this.marks.length > 64) this.marks.shift();
     const { buf, window: W } = this;
     if (chunk.length >= W) buf.set(chunk.subarray(chunk.length - W));
     else {
@@ -114,7 +137,9 @@ class DeviceEngine {
     this.busy = true;
     this.lastSent = this.total;
     const audio = this.buf.slice(this.window - this.filled);
-    this.worker.postMessage({ type: "transcribe", id: this.total, audio }, [audio.buffer]);
+    this.sentAt = clock();
+    this.worker.postMessage({ type: "transcribe", id: this.total, audio, gate: this.gate, filter: this.filter },
+      [audio.buffer]);
   }
   _onText(data) {
     this.busy = false;
@@ -131,11 +156,25 @@ class DeviceEngine {
       // `now_*`: where the evidence alone puts them (no lead, no holding through
       // pauses), to tell recognition errors from display ones.
       const now = this.tracker.position();
+      // Gate and timing (docs/results/browser_gate.md): why Whisper did or didn't run, and
+      // when the window's audio was captured, sent, received, done, and (event "visible") shown.
+      const captured = this.capturedAt(data.id);
+      const g = data.gate;
       log.event("hop", { end: data.id / SR, asr_ms: data.ms, text: data.text, quiet, dt, lead,
         dua: p.dua, seg: p.segment, token: p.token, eol: p.atLineEnd, dua_p: p.duaConfidence, seg_p: p.segmentConfidence,
         now_seg: now.segment, now_token: now.token, unknown: this.tracker.null, speed: this.tracker.speed,
-        cand: cands(p.candidates) });
+        cand: cands(p.candidates), gate: g?.policy ?? this.gate, ran: g ? g.run : null, skip: data.skip ?? null,
+        level: g?.level, vad_run: g?.vad?.run, vad_peak: g?.vad?.peak, energy_run: g?.energy?.run,
+        energy_floor: g?.energy?.floor, via: g?.via, halluc: data.hallucinated, infer_ms: data.infer_ms,
+        cold: this.firstText, captured_ms: captured, sent_ms: this.sentAt, recv_ms: data.recv, done_ms: data.done,
+        queue_ms: data.recv != null && this.sentAt != null ? data.recv - this.sentAt : null });
+      const id = data.id;
+      requestAnimationFrame(() => {
+        const shown = clock();
+        log.event("visible", { end: id / SR, shown_ms: shown, age_ms: captured != null ? shown - captured : null });
+      });
     }
+    this.firstText = false;
     this.onUpdate({ dua: p.dua, segment: p.segment, token: p.token, speed: still ? 0 : this.tracker.speed, unknown: this.tracker.null, pause: p.atLineEnd && (!data.text || still), heard: data.text, ms: data.ms,
       candidates: p.candidates.map(([id, prob]) => ({ id, p: prob })) });
     this._maybeSend();
@@ -494,8 +533,9 @@ async function begin(makeSource) {
   });
   const node = new AudioWorkletNode(state.ctx, "capture");
   node.port.onmessage = (e) => {
-    log.audio(e.data);
-    state.engine.push(e.data);
+    const x = e.data.x ?? e.data;
+    log.audio(x);
+    state.engine.push(x, captureTime(e.data.t));
   };
   source.connect(node);
   // Feeds the listening star (meter below); a dead end, like the capture node.

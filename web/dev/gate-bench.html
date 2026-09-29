@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gate bench</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; background: #fff; color: #111; }
+    @media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <!-- Developer benchmark, not part of the app (docs/results/browser_gate.md). Streams a clip
+       through the page's own ASR worker in real time and records, per hop, the gate decision
+       and the evidence age. Driven by scripts/gate_bench.mjs; ?gate=&audio=&seconds= by hand. -->
+  <h1>Gate bench</h1>
+  <pre id="out">loading…</pre>
+  <script type="module" src="gate-bench.js"></script>
+</body>
+</html>

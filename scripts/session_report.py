@@ -155,6 +155,35 @@ def summary(path: Path, audio: np.ndarray, log: dict, lines: Lines) -> list[str]
         out.append(f"  audio {e['state']} at {e['t']:.0f} s")
     for e in kinds("error"):
         out.append(f"  ERROR ({e.get('where')}) at {e['t']:.0f} s: {e.get('message', '')[:120]}")
+    out += gate_summary(log)
+    return out
+
+
+def gate_summary(log: dict) -> list[str]:
+    """Device sessions logged with the gate fields (web/app.js, 2026-09-26): why hops ran or
+    were skipped, and how old the evidence was when shown. Older sessions have none: skipped."""
+    hops = [e for e in log["events"] if e["type"] == "hop" and "gate" in e]
+    if not hops:
+        return []
+    from collections import Counter
+
+    reasons = Counter(h.get("skip") or "ran, text" for h in hops)
+    out = [f"  speech gate ({hops[0]['gate']}): " + ", ".join(f"{k} {v}" for k, v in reasons.most_common())]
+    levels = [h["level"] for h in hops if h.get("level") is not None]
+    if levels:
+        out.append(f"  input level (last 1.5 s): median {statistics.median(levels):.1f} dBFS, "
+                   f"{sum(x < -45 for x in levels) / len(levels):.0%} of hops under the -45 dBFS floor")
+    steady = [h for h in hops if not h.get("cold")]
+    inf = [h["infer_ms"] for h in steady if h.get("infer_ms")]
+    cold = [h["infer_ms"] for h in hops if h.get("cold") and h.get("infer_ms")]
+    if inf:
+        out.append(f"  Whisper: {percentile(inf, 50):.0f} ms p50, {percentile(inf, 90):.0f} ms p90 "
+                   f"(first hop {cold[0]:.0f} ms)" if cold else f"  Whisper: {percentile(inf, 50):.0f} ms p50")
+    ages = {e["end"]: e["age_ms"] for e in log["events"] if e["type"] == "visible" and e.get("age_ms") is not None}
+    age = [ages[h["end"]] for h in steady if h["end"] in ages]
+    if age:
+        out.append(f"  evidence age when shown (captured -> painted, steady state): p50 {percentile(age, 50):.0f} ms, "
+                   f"p90 {percentile(age, 90):.0f} ms, p95 {percentile(age, 95):.0f} ms")
     return out
 
 

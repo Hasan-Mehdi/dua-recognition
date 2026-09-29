@@ -1,5 +1,5 @@
 // Resample whatever the AudioContext runs at down to 16 kHz mono and post
-// ~250 ms Float32 chunks to the page, which forwards them over the WebSocket.
+// ~250 ms Float32 chunks ({x, t}) to the page, which forwards them over the WebSocket.
 class Capture extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -30,7 +30,9 @@ class Capture extends AudioWorkletProcessor {
       const b = x[i];
       this.out[this.n++] = a + (b - a) * f;
       if (this.n === this.out.length) {
-        this.port.postMessage(this.out.slice(0));
+        // t: AudioContext time of the chunk's last sample (the audio clock; the page maps
+        // it to performance time with ctx.getOutputTimestamp()).
+        this.port.postMessage({ x: this.out.slice(0), t: currentTime + (i + 1) / sampleRate });
         this.n = 0;
       }
       this.pos += this.ratio;
