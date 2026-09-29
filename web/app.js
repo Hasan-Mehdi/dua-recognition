@@ -47,7 +47,7 @@ class ServerEngine {
         token: m.token, eol: m.pause_at_line_end, dua_p: m.dua_confidence, seg_p: m.segment_confidence,
         unknown: m.unknown, speed: m.speed, cand: cands((m.candidates || []).map((c) => [c.id, c.p])) });
       onUpdate({ dua: m.dua, segment: m.segment, token: m.token, speed: m.speed, unknown: m.unknown, pause: m.pause_at_line_end, heard: m.heard, ms: m.step_ms,
-        candidates: (m.candidates || []).map((c) => ({ id: c.id, p: c.p })) });
+        candidates: (m.candidates || []).map((c) => ({ id: c.id, p: c.p })), sameAs: m.same_as || [] });
     };
     await new Promise((ok, err) => ((ws.onopen = ok), (ws.onerror = err)));
     this.ws = ws;
@@ -176,7 +176,7 @@ class DeviceEngine {
     }
     this.firstText = false;
     this.onUpdate({ dua: p.dua, segment: p.segment, token: p.token, speed: still ? 0 : this.tracker.speed, unknown: this.tracker.null, pause: p.atLineEnd && (!data.text || still), heard: data.text, ms: data.ms,
-      candidates: p.candidates.map(([id, prob]) => ({ id, p: prob })) });
+      candidates: p.candidates.map(([id, prob]) => ({ id, p: prob })), sameAs: p.sameAs || [] });
     this._maybeSend();
   }
   follow() {
@@ -238,9 +238,34 @@ async function init() {
     document.body.classList.toggle("no-tl", !e.target.checked);
     log.event("option", { transliteration: e.target.checked });
   };
+  $("opt-focus").checked = stored("focus") === "1";
+  document.body.classList.toggle("focus", $("opt-focus").checked);
+  $("opt-focus").onchange = (e) => {
+    document.body.classList.toggle("focus", e.target.checked);
+    stored("focus", e.target.checked ? "1" : "0");
+    log.event("option", { focus: e.target.checked });
+  };
+  $("opt-font").onchange = (e) => setFont(e.target.value);
+  setFont(stored("font") || "quran", false);
+  showToday();
+  watchForSharing();
   $("mode-page").onclick = () => setMajlis(false);
   $("mode-majlis").onclick = () => setMajlis(true);
   setMajlis(params.has("watch") || params.has("majlis") || stored("majlis") === "1", false);
+  $("size-down").onclick = () => setTextSize(state.textSize - 0.1);
+  $("size-up").onclick = () => setTextSize(state.textSize + 0.1);
+  setTextSize(Number(stored("text-size")) || 1, false);
+  $("back").onclick = () => {
+    $("back").hidden = true;
+    scrollToNow();
+  };
+  addEventListener("scroll", showBack, { passive: true });
+  $("resume").onclick = resume;
+  showResume();
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && keepAwake());
+  $("unit-phrase").onclick = () => setPerLine(false);
+  $("unit-line").onclick = () => setPerLine(true);
+  setPerLine(stored("per-line") === "1", false);
   // Majlis hides the top bar; bring it back briefly when someone moves or taps.
   let chromeTimer;
   const showChrome = () => {
@@ -265,6 +290,7 @@ function watchForDebugging() {
   // ground truth a live session can have.
   $("text").addEventListener("click", (e) => {
     const ln = e.target.closest(".ln");
+    if (state.pressed) return (state.pressed = false); // that was a long-press (sharing)
     if (!ln || !state.dua) return;
     const i = Number(ln.dataset.i);
     log.event("tap", { seg: state.duas[state.dua].segments[i].id, shown: state.segment });
@@ -344,6 +370,90 @@ function setMajlis(on, remember = true) {
   scrollToNow();
 }
 
+// Word by word: the recited words light up one by one as they're said. Line by line: the whole
+// line lights up at once and the words inside it aren't followed.
+function setPerLine(on, remember = true) {
+  state.perLine = on;
+  $("unit-phrase").setAttribute("aria-checked", String(!on));
+  $("unit-line").setAttribute("aria-checked", String(on));
+  if (remember) {
+    stored("per-line", on ? "1" : "0");
+    log.event("option", { perLine: on });
+  }
+  const ln = state.lines?.get(state.segment);
+  if (!ln) return;
+  state.hl = null; // stops the glide loop; the next update restarts it
+  state.token = null;
+  setWords(ln, !on);
+}
+
+const TEXT_SIZES = [0.8, 1.6];
+
+function setTextSize(size, remember = true) {
+  const [lo, hi] = TEXT_SIZES;
+  size = Math.round(Math.min(hi, Math.max(lo, size)) * 10) / 10;
+  state.textSize = size;
+  document.body.style.setProperty("--text", size);
+  $("size-down").disabled = size <= lo;
+  $("size-up").disabled = size >= hi;
+  if (!remember) return;
+  stored("text-size", String(size));
+  log.event("option", { textSize: size });
+  scrollToNow();
+}
+
+// Phones dim and lock in the middle of a long du'a; hold the screen on while
+// following. The browser drops the lock when the tab is hidden, so it's taken
+// again on coming back (init).
+async function keepAwake() {
+  if (!state.source || state.wake || !navigator.wakeLock) return;
+  try {
+    state.wake = await navigator.wakeLock.request("screen");
+    state.wake.onrelease = () => (state.wake = null);
+  } catch {} // refused (battery saver, no permission): carry on
+}
+
+// "Back to reciter" once the line being recited is out of sight.
+function showBack() {
+  const ln = state.lines?.get(state.segment);
+  const r = ln?.isConnected && ln.getBoundingClientRect();
+  $("back").hidden = !r || (r.bottom > 0 && r.top < innerHeight);
+}
+
+// Where the last recitation from the microphone reached, offered on the home
+// screen: long du'as are often finished in more than one sitting.
+const RESUME_DAYS = 7;
+
+function saveProgress(dua, idx) {
+  if (!state.stream) return; // a recording played back, or another screen's room
+  const done = idx >= dua.segments.length - 3;
+  stored("resume", done ? "" : JSON.stringify({ dua: dua.id, line: idx + 1, at: Date.now() }));
+}
+
+function savedProgress() {
+  try {
+    const p = JSON.parse(stored("resume") || "null");
+    return p && state.duas[p.dua] && Date.now() - p.at < RESUME_DAYS * 864e5 ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+function showResume() {
+  const p = savedProgress();
+  $("resume").hidden = !p;
+  if (p) $("resume").textContent = `continue ${state.duas[p.dua].name_en} from line ${p.line}`;
+}
+
+// Follows only that du'a; the tracker finds the line itself within a few seconds.
+function resume() {
+  const p = savedProgress();
+  if (!p) return showResume();
+  log.event("resume", { dua: p.dua, line: p.line });
+  state.chosen = p.dua;
+  begin(micSource);
+}
+
 // When and where each du'a is customarily recited, shown under its title.
 const NOTES = {
   "dua-kumayl": "Thursday nights · taught by Imam Ali (a) to Kumayl ibn Ziyad",
@@ -382,19 +492,26 @@ function update(u) {
   if (state.room?.readyState === 1) state.room.send(JSON.stringify(u));
 }
 
+// The host's phone sleeps and changes networks too: once a room is open, reopen
+// it under the same code whenever the socket drops, and catch viewers up.
+function openRoom(code) {
+  const ws = new WebSocket(`${wsBase()}/ws/room/${code}?role=host`);
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if ("viewers" in m) $("share-viewers").textContent = m.viewers ? `${m.viewers} following` : "No one following yet";
+  };
+  ws.onclose = () => state.roomCode === code && setTimeout(() => openRoom(code).catch(() => {}), 2000);
+  return new Promise((ok, err) => ((ws.onopen = ok), (ws.onerror = err))).then(() => {
+    Object.assign(state, { room: ws, roomCode: code });
+    if (state.last) ws.send(JSON.stringify(state.last));
+  });
+}
+
 async function share() {
   $("menu").hidden = true;
   if (!state.room) {
     // Unambiguous letters only: people read this aloud across a room.
-    const code = Array.from({ length: 5 }, () => "ACDEFHJKMNPRTUVWXY"[Math.floor(Math.random() * 18)]).join("");
-    const ws = new WebSocket(`${wsBase()}/ws/room/${code}?role=host`);
-    ws.onmessage = (e) => {
-      const m = JSON.parse(e.data);
-      if ("viewers" in m) $("share-viewers").textContent = m.viewers ? `${m.viewers} following` : "No one following yet";
-    };
-    await new Promise((ok, err) => ((ws.onopen = ok), (ws.onerror = err)));
-    Object.assign(state, { room: ws, roomCode: code });
-    if (state.last) ws.send(JSON.stringify(state.last));
+    await openRoom(Array.from({ length: 5 }, () => "ACDEFHJKMNPRTUVWXY"[Math.floor(Math.random() * 18)]).join(""));
   }
   const url = `${location.origin}${location.pathname}?watch=${state.roomCode}`;
   $("share-code").textContent = state.roomCode;
@@ -542,6 +659,7 @@ async function begin(makeSource) {
   state.analyser ??= new AnalyserNode(state.ctx, { fftSize: 2048, smoothingTimeConstant: 0 });
   source.connect(state.analyser);
   Object.assign(state, { node, source, dua: null, segment: null, token: null, listeningSince: Date.now() });
+  keepAwake();
   showListening();
   meter();
 }
@@ -597,6 +715,8 @@ function end(reason) {
   if (source === state.mediaSource) $("player").pause();
   stream?.getTracks().forEach((t) => t.stop());
   state.engine?.stop();
+  state.wake?.release().catch(() => {});
+  state.wake = null;
   if (state.room?.readyState === 1) state.room.send(JSON.stringify({ ended: true }));
   log.end(reason).then(showSessions);
   Object.assign(state, { node: null, source: null, stream: null, dua: null, segment: null, chosen: null, hl: null,
@@ -604,6 +724,9 @@ function end(reason) {
   $("guesses").hidden = true;
   $("menu").hidden = true;
   $("hint").textContent = "Tap to begin";
+  $("back").hidden = true;
+  showResume();
+  showToday();
   setState("idle");
 }
 
@@ -612,6 +735,7 @@ function showListening() {
   setState("listening");
   $("dua-ar").textContent = "";
   $("dua-en").textContent = "Listening";
+  $("dua-also").textContent = "";
   $("progress").style.width = "0";
   $("text").replaceChildren();
   $("folio-head").hidden = true;
@@ -657,11 +781,13 @@ function render(u) {
   const dua = state.duas[u.dua];
   if (u.dua !== state.dua) {
     log.event("dua", { dua: u.dua });
+    if (state.stream) addRecent(u.dua);
     state.dua = u.dua;
     state.segment = null;
     $("dua-ar").textContent = dua.name_ar;
     $("dua-en").textContent = dua.name_en;
     buildText(dua);
+    reveal(document.body.dataset.state === "listening");
     setState("following");
   }
   const words = state.wordLive && performance.now() - state.wordAt < 1000;
@@ -669,9 +795,32 @@ function render(u) {
     if (u.segment !== state.segment) moveTo(dua, u.segment);
     glide(u);
   }
+  showSameAs(u.sameAs || []);
   state.lines.get((words ? state.segment : u.segment) + 1)?.classList.toggle("coming", !!u.pause);
   if (!!u.pause !== !!state.preview) log.event("preview", { on: !!u.pause });
   state.preview = !!u.pause;
+}
+
+// The du'a is found: the listening star opens out while the text rises in
+// (style.css, body.revealing), and the first line is placed without a scroll.
+function reveal(fromListening) {
+  const body = document.body;
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  body.classList.add("revealing");
+  body.classList.toggle("from-listen", fromListening && !still);
+  state.placeNow = true;
+  clearTimeout(state.revealTimer);
+  state.revealTimer = setTimeout(() => body.classList.remove("revealing", "from-listen"), 1700);
+}
+
+// Inside a passage another text shares word for word (Ayat al-Kursi in Sahifa 54),
+// the recitation could be either: say so under the title until it's told apart.
+function showSameAs(ids) {
+  const names = ids.map((id) => state.duas[id]?.name_en).filter(Boolean);
+  const text = names.length ? `Also in ${names.slice(0, 2).join(", ")}${names.length > 2 ? "…" : ""}` : "";
+  if ($("dua-also").textContent === text) return;
+  $("dua-also").textContent = text;
+  log.event("same_as", { ids });
 }
 
 function listenMsg(text) {
@@ -692,32 +841,218 @@ function closePicker() {
   $("picker").hidden = true;
 }
 
+// Favourites (starred in the picker) and recents (du'as followed from the
+// microphone) head the list until a search is typed.
+const RECENTS = 5;
+
+function storedList(key) {
+  try {
+    const v = JSON.parse(stored(key) || "[]");
+    return Array.isArray(v) ? v.filter((id) => state.duas[id]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function addRecent(id) {
+  stored("recent", JSON.stringify([id, ...storedList("recent").filter((r) => r !== id)].slice(0, RECENTS)));
+}
+
+function toggleFavourite(id) {
+  const favs = storedList("favourites");
+  const on = !favs.includes(id);
+  stored("favourites", JSON.stringify(on ? [...favs, id] : favs.filter((f) => f !== id)));
+  log.event("favourite", { dua: id, on });
+  return on;
+}
+
+function pickerItem(d, favs) {
+  const li = document.createElement("li");
+  const b = document.createElement("button");
+  b.className = "pick";
+  const en = document.createElement("span");
+  en.textContent = d.name_en;
+  const note = noteFor(d.id);
+  if (note) en.append(Object.assign(document.createElement("span"), { className: "note", textContent: note }));
+  const ar = document.createElement("span");
+  ar.className = "ar";
+  ar.lang = "ar";
+  ar.textContent = d.name_ar;
+  b.append(en, ar);
+  b.onclick = () => {
+    closePicker();
+    state.chosen = d.id;
+    begin(micSource);
+  };
+  const star = Object.assign(document.createElement("button"), { className: "fav", textContent: "★" });
+  const mark = (on) => {
+    star.setAttribute("aria-pressed", String(on));
+    star.setAttribute("aria-label", on ? `Remove ${d.name_en} from favourites` : `Add ${d.name_en} to favourites`);
+  };
+  mark(favs.includes(d.id));
+  star.onclick = () => {
+    mark(toggleFavourite(d.id));
+    if (!$("search").value.trim()) fillPicker(""); // keep the Favourites section in step
+  };
+  li.append(b, star);
+  return li;
+}
+
 function fillPicker(query) {
   const q = query.trim().toLowerCase();
-  const items = Object.values(state.duas)
+  const favs = storedList("favourites");
+  const all = Object.values(state.duas)
     .filter((d) => !q || d.name_en.toLowerCase().includes(q) || d.name_ar.includes(query.trim()))
-    .sort((a, b) => a.name_en.localeCompare(b.name_en))
-    .map((d) => {
-      const li = document.createElement("li");
-      const b = document.createElement("button");
-      const en = document.createElement("span");
-      en.textContent = d.name_en;
-      const note = noteFor(d.id);
-      if (note) en.append(Object.assign(document.createElement("span"), { className: "note", textContent: note }));
-      const ar = document.createElement("span");
-      ar.className = "ar";
-      ar.lang = "ar";
-      ar.textContent = d.name_ar;
-      b.append(en, ar);
-      b.onclick = () => {
-        closePicker();
-        state.chosen = d.id;
-        begin(micSource);
-      };
-      li.append(b);
-      return li;
-    });
-  $("picker-list").replaceChildren(...items);
+    .sort((a, b) => a.name_en.localeCompare(b.name_en));
+  const items = [];
+  const section = (title, duas) => {
+    if (!duas.length) return;
+    items.push(Object.assign(document.createElement("li"), { className: "section", textContent: title }));
+    items.push(...duas.map((d) => pickerItem(d, favs)));
+  };
+  if (q) section("", all);
+  else {
+    const recent = storedList("recent").filter((id) => !favs.includes(id));
+    section("Favourites", favs.map((id) => state.duas[id]));
+    section("Recent", recent.map((id) => state.duas[id]));
+    section(favs.length || recent.length ? "All" : "", all);
+  }
+  $("picker-list").replaceChildren(...items.filter((li) => li.className !== "section" || li.textContent));
+}
+
+// -- what's customarily recited now (NOTES above), offered on the home screen ------
+// The Islamic day begins at sunset, taken here as 6 pm: a Thursday evening is
+// already the night of Friday.
+const hijri = (date) => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-u-ca-islamic-umalqura", { day: "numeric", month: "numeric" })
+      .formatToParts(date);
+    const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+    return { day: get("day"), month: get("month") };
+  } catch {
+    return null;
+  }
+};
+const DAY_IDS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+function duasForNow(now = new Date()) {
+  const h = now.getHours();
+  const evening = h >= 18;
+  const predawn = h < 5;
+  const wd = now.getDay();
+  const today = hijri(now);
+  const night = evening ? hijri(new Date(now.getTime() + 864e5)) : predawn ? today : null; // whose night it is
+  const ids = [];
+  if (night?.month === 9) {
+    ids.push(`dua-ramadan-${night.day}-night`, "dua-iftitah");
+    if ([19, 21, 23].includes(night.day)) ids.push("dua-jawshan-kabir");
+    if ([13, 14, 15].includes(night.day)) ids.push("dua-mujeer");
+  }
+  if (predawn && today?.month === 9) ids.push("dua-abu-hamza-thumali", "dua-baha", "dua-tasbih-suhoor");
+  if (!evening && !predawn && today?.month === 9) ids.push(`dua-ramadan-${today.day}`);
+  if (!evening && today?.month === 12 && today.day === 9) ids.push("dua-arafat");
+  if (!evening && today?.month === 1 && today.day === 10) ids.push("ziyarat-ashura");
+  const eid = (today?.month === 10 && today.day === 1) || (today?.month === 12 && today.day === 10);
+  if ((wd === 4 && evening) || (wd === 5 && predawn)) ids.push("dua-kumayl");
+  if ((wd === 2 && evening) || (wd === 3 && predawn)) ids.push("dua-tawassul");
+  if (!evening && !predawn && h < 12 && (wd === 5 || eid)) ids.push("dua-nudbah");
+  if (wd === 5 && h >= 15 && !evening) ids.push("dua-simaat");
+  if (!evening && !predawn && h < 12) ids.push("dua-aahad");
+  if (!evening && !predawn) ids.push(`dua-${DAY_IDS[wd]}`, `ziyarat-${DAY_IDS[wd]}`);
+  return [...new Set(ids)].filter((id) => state.duas[id]).slice(0, 3);
+}
+
+function showToday() {
+  const ids = duasForNow();
+  $("today").hidden = !ids.length;
+  const h = new Date().getHours();
+  $("today-label").textContent = h >= 18 || h < 5 ? "For tonight" : "For today";
+  $("today-chips").replaceChildren(...ids.map((id) => {
+    const d = state.duas[id];
+    const b = Object.assign(document.createElement("button"), { className: "chip", textContent: d.name_en });
+    b.onclick = () => {
+      log.event("today", { dua: id });
+      state.chosen = id;
+      begin(micSource);
+    };
+    return b;
+  }));
+}
+
+// -- sharing a line: press and hold it -----------------------------------------------
+function watchForSharing() {
+  let timer = null, start = null;
+  const cancel = () => clearTimeout(timer);
+  $("text").addEventListener("pointerdown", (e) => {
+    const ln = e.target.closest(".ln");
+    if (!ln || !state.dua) return;
+    start = [e.clientX, e.clientY];
+    timer = setTimeout(() => {
+      state.pressed = true; // the click that follows isn't a tap on the line
+      shareLine(Number(ln.dataset.i));
+    }, 550);
+  });
+  $("text").addEventListener("pointermove", (e) => {
+    if (start && Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 10) cancel();
+  });
+  for (const ev of ["pointerup", "pointercancel", "pointerleave"]) $("text").addEventListener(ev, cancel);
+  $("text").addEventListener("contextmenu", (e) => e.target.closest(".ln") && e.preventDefault());
+}
+
+async function shareLine(i) {
+  const dua = state.duas[state.dua];
+  const s = dua.segments[i];
+  const text = [s.ar, tidyTl(s.tl), tidyEn(s.en), `${dua.name_en}, line ${i + 1}`].filter(Boolean).join("\n\n");
+  log.event("share_line", { seg: s.id });
+  navigator.vibrate?.(15);
+  if (navigator.share) {
+    try {
+      return await navigator.share({ text });
+    } catch (e) {
+      if (e.name === "AbortError") return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Line copied");
+  } catch {
+    toast("Couldn't copy the line");
+  }
+}
+
+function toast(text) {
+  $("toast").textContent = text;
+  $("toast").hidden = false;
+  clearTimeout(state.toastTimer);
+  state.toastTimer = setTimeout(() => ($("toast").hidden = true), 2000);
+}
+
+// -- Arabic font -----------------------------------------------------------------------
+// Amiri Quran loads with the page; the others only once chosen.
+const FONTS = {
+  quran: { family: '"Amiri Quran", Amiri, serif' },
+  amiri: { family: "Amiri, serif" },
+  scheherazade: { family: '"Scheherazade New", Amiri, serif', css: "Scheherazade+New:wght@400;700" },
+  noto: { family: '"Noto Naskh Arabic", Amiri, serif', css: "Noto+Naskh+Arabic:wght@400;600" },
+  nastaliq: { family: '"Noto Nastaliq Urdu", Amiri, serif', css: "Noto+Nastaliq+Urdu:wght@400;600" },
+};
+
+function setFont(key, remember = true) {
+  const font = FONTS[key] || FONTS.quran;
+  key = FONTS[key] ? key : "quran";
+  if (font.css && !document.querySelector(`link[data-font="${key}"]`)) {
+    document.head.append(Object.assign(document.createElement("link"), {
+      rel: "stylesheet", href: `https://fonts.googleapis.com/css2?family=${font.css}&display=swap`,
+    }));
+    document.head.lastChild.dataset.font = key;
+  }
+  document.documentElement.style.setProperty("--naskh", font.family);
+  document.body.classList.toggle("nastaliq", key === "nastaliq");
+  $("opt-font").value = key;
+  if (!remember) return;
+  stored("font", key);
+  log.event("option", { font: key });
+  scrollToNow();
 }
 
 function showGuesses(candidates) {
@@ -776,8 +1111,8 @@ function buildText(dua) {
       ar.append(s.ar, " ", marker(i + 1));
       const inner = document.createElement("div");
       inner.append(
-        Object.assign(document.createElement("p"), { className: "tl", textContent: s.tl || "" }),
-        Object.assign(document.createElement("p"), { className: "en", textContent: s.en || "" }),
+        Object.assign(document.createElement("p"), { className: "tl", textContent: tidyTl(s.tl) }),
+        Object.assign(document.createElement("p"), { className: "en", textContent: tidyEn(s.en) }),
       );
       const gloss = Object.assign(document.createElement("div"), { className: "gloss" });
       gloss.append(inner);
@@ -786,6 +1121,24 @@ function buildText(dua) {
       return ln;
     }),
   );
+}
+
+// The sources' transliterations come in several styles (ALL CAPS, backticks
+// or curly quotes for the ayn, stray non-breaking spaces): one look for all.
+function tidy(text) {
+  return (text || "").replace(/ /g, " ").replace(/\s+/g, " ").replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([,;:])(?=[^\s\d])/g, "$1 ").trim();
+}
+const capital = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+
+function tidyTl(text) {
+  let t = tidy(text).replace(/[`‘]/g, "‘").replace(/['’´]/g, "’");
+  if (!/[a-z]/.test(t)) t = t.toLowerCase(); // shouted in capitals
+  return capital(t);
+}
+
+function tidyEn(text) {
+  return capital(tidy(text));
 }
 
 // Only the line being recited is split into words; the rest stay plain text.
@@ -810,13 +1163,14 @@ function moveTo(dua, segment) {
   const idx = dua.segments.findIndex((s) => s.id === segment);
   log.event("line", { seg: segment, idx });
   $("progress").style.width = `${((idx + 1) / dua.segments.length) * 100}%`;
+  saveProgress(dua, idx);
   for (const [id, ln] of state.lines) {
     ln.classList.toggle("now", id === segment);
     ln.classList.toggle("past", id < segment);
     ln.classList.toggle("next", id === segment + 1);
     ln.classList.remove("coming");
   }
-  setWords(state.lines.get(segment), true);
+  setWords(state.lines.get(segment), !state.perLine);
   scrollToNow();
 }
 
@@ -838,7 +1192,7 @@ function glide(u) {
 }
 
 function paintWords(token) {
-  if (token === state.token) return;
+  if (state.perLine || token === state.token) return;
   state.token = token;
   log.event("word", { token });
   for (const span of state.lines.get(state.segment).querySelectorAll(".wd")) {
@@ -848,15 +1202,42 @@ function paintWords(token) {
   }
 }
 
+// Keeps the recited line centred. The old line shrinks and the new one grows over
+// about half a second, moving the line down the page as it goes, so scrolling to
+// where it is now and correcting later jumps down then back up. Instead the spring
+// works on where the line sits on screen: every frame the page scrolls so the line's
+// centre is where a critically damped spring says it should be, and the line glides
+// to the middle however the text around it is resizing. A hand on the screen stops
+// it until the next line.
 function scrollToNow() {
-  // The line grows over half a second: centre on it now, then again once it has settled.
   const ln = state.lines?.get(state.segment);
   if (!ln) return;
-  const behavior = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
-  const centre = () => ln.scrollIntoView({ block: "center", inline: "nearest", behavior });
-  requestAnimationFrame(centre);
-  clearTimeout(state.recentre);
-  state.recentre = setTimeout(centre, 550);
+  const instant = state.placeNow || matchMedia("(prefers-reduced-motion: reduce)").matches;
+  state.placeNow = false;
+  const centre = () => {
+    const r = ln.getBoundingClientRect();
+    return r.top + r.height / 2;
+  };
+  const run = { p: centre(), v: 0, t0: performance.now(), last: performance.now() };
+  state.follow = run;
+  const w = 9; // rad/s: settles in about half a second
+  const frame = (now) => {
+    if (state.follow !== run || !ln.isConnected) return;
+    const dt = Math.min(0.05, (now - run.last) / 1000);
+    run.last = now;
+    const goal = innerHeight * 0.48;
+    if (instant) run.p = goal;
+    else {
+      run.v += (w * w * (goal - run.p) - 2 * w * run.v) * dt;
+      run.p += run.v * dt;
+    }
+    scrollTo({ top: scrollY + centre() - run.p, behavior: "instant" });
+    const settled = Math.abs(goal - run.p) < 0.5 && Math.abs(run.v) < 5;
+    if (now - run.t0 < 700 || !settled) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
 }
+// Scrolling by hand wins over the follower.
+for (const ev of ["wheel", "touchstart"]) addEventListener(ev, () => (state.follow = null), { passive: true });
 
 init();
