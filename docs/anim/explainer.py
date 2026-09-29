@@ -38,9 +38,9 @@ MEDIA = HERE.parents[1] / "data" / "cache" / "media"
 AUDIO = os.environ.get("DUA_EXPLAINER_AUDIO") == "1"
 PRIOR, EVID, POST = BLUE, YELLOW, TEAL
 SEGS = DATA["segs"]  # line ids 1..115
-N_TEXTS = META.get("n_texts", 506)
-# Test reciters, phone model (scripts/evaluate.py; docs/results/): v0.1's per-window matcher -> now.
-RESULTS = META.get("results", {"line": (47, 85), "refrain": (6, 89), "wrong": (13, 0.3)})
+N_TEXTS = META.get("n_texts", 505)
+# Test reciters, phone model (docs/evaluation.md): the per-window matcher baseline -> the tracker.
+RESULTS = META.get("results", {"line": (43, 85), "refrain": (6, 88), "wrong": (13, 0.5)})
 
 
 def arabic(s: str, size: float = 34, color=WHITE) -> Text:
