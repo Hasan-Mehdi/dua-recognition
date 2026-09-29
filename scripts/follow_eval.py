@@ -53,11 +53,44 @@ ITEMS = ROOT / "data" / "cache" / "follow_items"
 SMOOTH = {"ease": 1.0, "speed_scale": 1.2}  # page mode (web/app.js defaults)
 
 
+MIN_SCORE = -1.5  # word truth kept for scoring: line score at least this (flowing set)
+
+
+def _files_sig(*dirs: Path, pattern: str = "*") -> list:
+    """(name, size, mtime) of every input file: a changed or added input changes the key."""
+    out = []
+    for d in dirs:
+        if d.exists():
+            out += sorted((f"{d.name}/{p.name}", p.stat().st_size, p.stat().st_mtime_ns) for p in d.glob(pattern)
+                          if p.is_file())
+    return out
+
+
+def set_key(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool, cfg, delay) -> str:
+    """Everything a cached eval set depends on: the tracker config, the reference texts,
+    the window/CTC/word-truth/pause inputs, the scoring threshold and the assumed delay.
+    (Until 2026-09-26 the key was only asr/split/ctc/delay: a TrackerConfig or corpus
+    change silently reused old HMM replays.)"""
+    import hashlib
+
+    ref = hashlib.sha256(" ".join(w.text for w in ix.words).encode("utf-8")).hexdigest()
+    if pauses:
+        d = pe.OUT / (asr + ("" if split == "test" else f"@{split}"))
+        inputs = _files_sig(d, pattern="*.json") + _files_sig(d / f"ctc-{ctc_dir}")
+    else:
+        inputs = _files_sig(ev.WINDOWS / asr, ev.WORD_TRUTH, CTC / ctc_tag, ROOT / "data" / "cache" / "quiet",
+                            ROOT / "data" / "cache" / "stale")
+    parts = [repr(cfg), ref, asr, split, ctc_tag, ctc_dir, pauses, f"{delay:g}", MIN_SCORE, inputs]
+    return hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()[:12]
+
+
 def load_set(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool, cfg, delay,
              cache: bool = True) -> list[dict]:
-    """load_set_uncached, pickled under data/cache/follow_items (the HMM replay takes minutes)."""
+    """load_set_uncached, pickled under data/cache/follow_items (the HMM replay takes minutes),
+    keyed by set_key so a changed configuration or reference never reuses a stale set."""
     ctc = ctc_dir if pauses else ctc_tag
-    f = ITEMS / f"{asr}_{split}_{ctc}_{'pauses' if pauses else 'flowing'}_{delay:g}.pkl"
+    key = set_key(ix, asr, split, ctc_tag, ctc_dir, pauses, cfg, delay)
+    f = ITEMS / f"{asr}_{split}_{ctc}_{'pauses' if pauses else 'flowing'}_{delay:g}_{key}.pkl"
     if cache and f.exists():
         return pickle.loads(f.read_bytes())
     items = load_set_uncached(ix, asr, split, ctc_tag, ctc_dir, pauses, cfg, delay)
@@ -72,7 +105,7 @@ def load_set_uncached(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, paus
     if not pauses:
         _, data = we.load(asr, split)
         for rec, rows, costs, stale, truth, quiet in data:
-            good = [w for w in truth if w[3] >= -1.5]
+            good = [w for w in truth if w[3] >= MIN_SCORE]
             f = CTC / ctc_tag / f"{rec.audio_id}_w3_h0.2.npz"
             if not good or not f.exists():
                 continue

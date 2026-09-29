@@ -109,14 +109,19 @@ def line_starts(dua, rows) -> tuple[list[tuple[float, int]], float]:
     return starts_from([t for t, _ in rows], segs, placed), sum(voiced) / max(1, len(voiced))
 
 
-def word_timings(full: CorpusIndex, dua_id: str, audio: Path, starts, end_s: float) -> list[list]:
+def word_timings(full: CorpusIndex, dua_id: str, audio: Path, starts, end_s: float,
+                 line_prov: dict | None = None) -> list[list]:
+    """Forced-aligned words. Always automatic labels: a reviewed line SRT promotes the
+    *line* truth only (dua_recognition/provenance.py); words need their own review."""
     from faster_whisper.audio import decode_audio
-    from word_truth import align_words, load_aligner
+    from word_truth import aligner_provenance, align_words, load_aligner
 
     y = decode_audio(str(audio), sampling_rate=SR)
     words = align_words(load_aligner(), full, y, starts, end_s, full.dua_ids.index(dua_id))
+    prov = aligner_provenance(full.duas[full.dua_ids.index(dua_id)], line_prov or {"kind": "unknown"})
     ev.WORD_TRUTH.mkdir(parents=True, exist_ok=True)
-    (ev.WORD_TRUTH / f"{audio.stem}.json").write_text(json.dumps({"dua": dua_id, "words": words}), encoding="utf-8")
+    (ev.WORD_TRUTH / f"{audio.stem}.json").write_text(json.dumps({"dua": dua_id, "words": words, "provenance": prov}),
+                                                    encoding="utf-8")
     return words
 
 
@@ -135,13 +140,18 @@ def import_srt(srt: Path) -> None:
     if bad:
         sys.exit(f"line ids outside 1..{n}: {bad}")
     meta = set_starts(meta, starts, end, n)
-    meta.update(auto=False, needs_review=False, reviewed=datetime.date.today().isoformat(),
+    today = datetime.date.today().isoformat()
+    line_prov = {"kind": "human_reviewed", "reviewed": today, "from_auto": meta.get("teacher"), "tool": "srt"}
+    meta.update(auto=False, needs_review=False, reviewed=today,
                 auto_vs_reviewed=round(agreement(old, starts, end), 3))
+    # Line truth only: the words re-aligned below stay automatic (provenance.py).
+    meta.setdefault("provenance", {})["line"] = line_prov
+    meta["provenance"]["word"] = {"kind": "auto", "review": "none"}
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"{meta['audio_id']}: {len(starts)} lines, gold now; auto labels matched the review on "
           f"{meta['auto_vs_reviewed']:.0%} of seconds")
-    words = word_timings(CorpusIndex(duas), dua.id, srt.with_suffix(".mp3"), starts, end)
-    print(f"  word timings redone: {len(words)} words")
+    words = word_timings(CorpusIndex(duas), dua.id, srt.with_suffix(".mp3"), starts, end, line_prov)
+    print(f"  word timings redone: {len(words)} words (automatic; word review is separate)")
 
 
 def second_opinion(name: str, tag: str, min_agreement: float) -> None:
@@ -281,7 +291,7 @@ def main() -> None:
             "needs_review": agree is not None and agree < args.min_agreement}
     (d / f"{audio_id}.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     (d / f"{audio_id}.srt").write_text(to_srt(starts, dur, {s.id: s.arabic for s in dua.segments}), encoding="utf-8")
-    words = word_timings(full, dua_id, mp3, starts, dur)
+    words = word_timings(full, dua_id, mp3, starts, dur, {"kind": "auto", "model": args.tag})
     good = [w for w in words if w[3] >= -1.5]
     print(f"  {len(words)} words aligned, {len(good)} with a line score >= -1.5")
     print(f"  wrote {d / audio_id}.{{mp3,json,srt}} and word truth"

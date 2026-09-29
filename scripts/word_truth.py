@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from dump_ctc import LOG_FLOOR, fold_matrix  # noqa: E402
 
 import evaluate as ev  # noqa: E402
+from dua_recognition import provenance  # noqa: E402
 from dua_recognition.align import encode  # noqa: E402
 
 OUT = ROOT / "data" / "cache" / "word_truth"
@@ -46,6 +47,18 @@ def load_aligner(model_dir: str | None = None):
         model = model.half()
     fold = torch.tensor(fold_matrix(proc.tokenizer.get_vocab(), proc.tokenizer.pad_token_id), device=device)
     return model, proc, fold, device
+
+
+ALIGNER = "models/wav2vec2-quran-dua"
+
+
+def aligner_provenance(dua, line_prov: dict, model_dir: str | None = None) -> dict:
+    """Provenance for word timings this aligner writes: always automatic, whatever the line labels are."""
+    d = Path(model_dir) if model_dir else ROOT / ALIGNER
+    cfg = d / "config.json"
+    h = provenance.reference_hash([cfg.read_text(encoding="utf-8")]) if cfg.exists() else None
+    return provenance.auto_word_provenance(ALIGNER if not model_dir else str(model_dir), h,
+                                           provenance.reference_hash(dua.texts), line_prov)
 
 
 def align_words(aligner, ix, y: np.ndarray, starts: list[tuple[float, int]], end_s: float,
@@ -124,7 +137,8 @@ def main() -> None:
             words = align_words(aligner, ix, y, rec.starts, rec.end_s, di)
             OUT.mkdir(parents=True, exist_ok=True)
             # Word numbers count from the du'a's first word (evaluate.load_word_truth).
-            out.write_text(json.dumps({"dua": dua.id, "words": words}), encoding="utf-8")
+            out.write_text(json.dumps({"dua": dua.id, "words": words,
+                                       "provenance": aligner_provenance(dua, rec.line_provenance)}), encoding="utf-8")
             sc = np.array([w[3] for w in words])
             print(f"{dua.id:28s} {rec.reciter[:20]:20s} {len(words):5d} words  line score median {np.median(sc):.2f}", flush=True)
 

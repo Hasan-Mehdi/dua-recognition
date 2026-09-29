@@ -7,8 +7,12 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .provenance import line_provenance
+
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "data" / "duas"
+# DUA_CORPUS_DIR pins the texts to a frozen copy (a run manifest's corpus), so an evaluation
+# doesn't change with whatever branch the shared working tree has checked out.
+DATA_DIR = Path(os.environ["DUA_CORPUS_DIR"]) if os.environ.get("DUA_CORPUS_DIR") else ROOT / "data" / "duas"
 CACHE_DIR = ROOT / "data" / "duaplayer"
 # Per-line translation and reading for the duas.org / duas.pro texts, keyed by
 # segment id like DuaPlayer's slides.json (not ours to redistribute either).
@@ -112,6 +116,9 @@ class Recording:
     condition: str = "studio"  # studio / phone / headset / room / majlis
     venue: str = ""  # the centre or uploader a test recording came from
     needs_review: bool = False  # auto labels the two teachers disagree on: in neither tier
+    # Where the *line* starts came from (provenance.line_provenance). Word timings
+    # have their own provenance: a reviewed line tier never makes words human.
+    line_provenance: dict = field(default_factory=dict)
 
     @property
     def tier(self) -> str:
@@ -169,6 +176,7 @@ def load_recordings(dua: Dua, cache_dir: str | Path = CACHE_DIR, repaired: bool 
                 condition=m.get("condition", "studio"),
                 venue=m.get("venue", ""),
                 needs_review=bool(m.get("needs_review", False)),
+                line_provenance=line_provenance(m, meta_path.parent.parent),
             )
         )
     return out

@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import numpy as np  # noqa: E402
 
+from dua_recognition import provenance  # noqa: E402
 from dua_recognition.align import CorpusIndex  # noqa: E402
 from dua_recognition.asr import _looks_hallucinated, speech_in_tail  # noqa: E402
 from dua_recognition.classify import TextClassifier  # noqa: E402
@@ -80,16 +81,32 @@ def describe(recs: Sequence[Recording]) -> str:
             + ", ".join(f"{k} {v}" for k, v in sorted(conds.items())) + ")")
 
 
-def load_word_truth(rec: Recording, ix: CorpusIndex) -> list[list] | None:
+def load_word_truth(rec: Recording, ix: CorpusIndex, tier: str = "auto") -> list[list] | None:
     """Forced-aligned word timings (scripts/word_truth.py) as [word index in `ix`,
     start s, end s, line score]. Stored per du'a (word 0 = its first word), so
-    adding texts to the corpus doesn't invalidate them."""
+    adding texts to the corpus doesn't invalidate them.
+
+    tier "auto" (default, the legacy behaviour): the automatic alignments, whatever
+    their provenance. tier "human": only words a reviewer placed inside a reviewed
+    interval (provenance.human_words; extra columns: onset interval, status,
+    occurrence), None if the recording has no word review. Line review never
+    promotes words (dua_recognition/provenance.py)."""
+    if rec.dua_id not in ix.dua_ids:
+        return None
+    lo = ix.dua_word_span[ix.dua_ids.index(rec.dua_id)][0]
+    if tier == "human":
+        review = provenance.load_review(rec.audio_id)
+        return provenance.human_words(review, lo) if review else None
     f = WORD_TRUTH / f"{rec.audio_id}.json"
-    if not f.exists() or rec.dua_id not in ix.dua_ids:
+    if not f.exists():
         return None
     raw = json.loads(f.read_text(encoding="utf-8"))
-    lo = ix.dua_word_span[ix.dua_ids.index(rec.dua_id)][0]
     return [[lo + w[0], *w[1:]] for w in raw["words"]]
+
+
+def word_truth_provenance(rec: Recording) -> dict | None:
+    f = WORD_TRUTH / f"{rec.audio_id}.json"
+    return provenance.word_provenance(json.loads(f.read_text(encoding="utf-8"))) if f.exists() else None
 
 
 def load_rows(tag: str, rec: Recording, window: float, hop: float, vad: bool = False) -> list[tuple[float, str]]:
