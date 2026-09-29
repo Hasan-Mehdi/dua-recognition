@@ -16,7 +16,8 @@ mic = ["sounddevice>=0.4"]
 web = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
 eval = ["jiwer>=3.0"]
 train = ["torch>=2.2", "transformers>=4.46", "accelerate", "jiwer>=3.0"]
-dev = ["pytest"]
+data = ["yt-dlp"]  # fetch_youtube, fetch_testset, find_captioned and the noha scripts
+dev = ["pytest", "yt-dlp"]  # tests/test_testsets.py imports the YouTube harvesters
 
 [build-system]
 requires = ["setuptools>=68"]
