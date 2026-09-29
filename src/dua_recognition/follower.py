@@ -60,6 +60,7 @@ class LocalFollower:
     def __init__(self, index: CorpusIndex, config: FollowerConfig | None = None):
         self.ix = index
         self.cfg = config or FollowerConfig()
+        self.frame_s = FRAME_S  # the CTC model's frame hop (ctc_adapter.TokenFollower: 80 ms)
         ix = index
         # First letter of each word (ix.letters is the whole corpus, word by word).
         self._word_letter = np.r_[0, np.flatnonzero(np.diff(ix.letter_word) != 0) + 1, ix.letters.size]
@@ -83,14 +84,14 @@ class LocalFollower:
                                   or self._line_no[lead_word] <= self._line_no[w]):
             return False
         letter = lp[:, 1:].max(axis=1) > lp[:, 0]
-        tail = max(1, int(round(cfg.onset_window / FRAME_S)))
+        tail = max(1, int(round(cfg.onset_window / self.frame_s)))
         hits = np.flatnonzero(letter[-tail:])
         if not hits.size:
             return False
         k = lp.shape[0] - tail + int(hits[0])  # first letter frame in the tail
         before = np.flatnonzero(letter[:k])
         run = k - (int(before[-1]) + 1 if before.size else 0)  # blank frames just before it
-        return run * FRAME_S >= cfg.onset_gap - 1e-9
+        return run * self.frame_s >= cfg.onset_gap - 1e-9
 
     def _reference(self, anchor: int) -> tuple[np.ndarray, np.ndarray]:
         """Letters of words [anchor - back, anchor + ahead) in the anchor's du'a, and each letter's word."""
@@ -117,8 +118,8 @@ class LocalFollower:
                 self.word, self._disagree_since = hmm_word, None
         else:
             self._disagree_since = None
-        lp = lp[-max(1, int(round(cfg.window_s / FRAME_S))) :]
-        if not lp.size or (cfg.tail_s > 0 and not has_speech(lp[-max(1, int(round(cfg.tail_s / FRAME_S))) :], 1)):
+        lp = lp[-max(1, int(round(cfg.window_s / self.frame_s))) :]
+        if not lp.size or (cfg.tail_s > 0 and not has_speech(lp[-max(1, int(round(cfg.tail_s / self.frame_s))) :], 1)):
             return self.word  # silence: stay put
         if self._onset(lp, lead_word):
             self.word, self._pending, self._pending_n = self.word + 1, None, 0

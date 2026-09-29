@@ -144,6 +144,15 @@ def load_set_uncached(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, paus
     return items
 
 
+_TOKEN_META: dict = {}
+
+
+def token_meta(d: Path) -> dict:
+    if d not in _TOKEN_META:
+        _TOKEN_META[d] = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+    return _TOKEN_META[d]
+
+
 def follow_updates(ix, it: dict, fcfg: FollowerConfig, hmm_delay: float, f_delay: float, *, rc: int = 0,
                    oracle_anchor: bool = False, steps: list | None = None) -> list[tuple]:
     """The follow lane's screen updates for one recording.
@@ -155,11 +164,17 @@ def follow_updates(ix, it: dict, fcfg: FollowerConfig, hmm_delay: float, f_delay
     z = np.load(it["ctc"])
     lp, nf, ts = z["lp"], z["n_frames"], z["t"]
     fol = LocalFollower(ix, fcfg)
+    if "cols" in z.files:  # a token-CTC dump (scripts/small_ctc.py): the model's own pieces and hop
+        from dua_recognition.ctc_adapter import TokenFollower, expand
+
+        meta = token_meta(Path(it["ctc"]).parent)
+        lp = expand(lp, z["cols"], meta["width"])
+        fol = TokenFollower(ix, meta, fcfg, word_tokens=[t for d in ix.dua_ids for t in meta["word_tokens"][d]])
     anchors = it["anchors"]
     at = [a[0] + hmm_delay for a in anchors]  # when each tracker result is available
     lead_at = [u[0] for u in it["ups"]]  # page mode's (lead) position, as it reaches the screen
     starts = [w[1] for w in it["good"]]
-    hop_frames = int(round((ts[1] - ts[0]) / 0.02)) if len(ts) > 1 else 10
+    hop_frames = int(round((ts[1] - ts[0]) / fol.frame_s)) if len(ts) > 1 else 10
     ups = []
     for k, t in enumerate(ts):
         j = bisect.bisect_right(at, t) - 1
