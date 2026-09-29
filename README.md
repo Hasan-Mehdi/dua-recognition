@@ -1,291 +1,162 @@
-# dua-recognition
+<h1 align="center">dua-recognition</h1>
 
-Listen to someone recite a du'a, work out **which du'a it is**, and follow along
-**line by line and word by word** in real time, with the Arabic, transliteration and
-translation scrolling in sync.
+<p align="center">
+  <b>Recognize which du'a is being recited, and follow it line by line in real time.</b><br>
+  On a server, or entirely on-device in a phone's browser.
+</p>
 
-![A phone following Dua Tawassul by a reciter the system never trained on, and a projector following along in majlis mode](docs/demo.gif)
+<p align="center">
+  <a href="https://github.com/Hasan-Mehdi/dua-recognition/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/Hasan-Mehdi/dua-recognition/actions/workflows/tests.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue.svg">
+</p>
 
-It knows **505 du'as and ziyarat**. On reciters it was never trained or tuned on, it
-shows **the right line 85% of the time** (96% within one line), gets **88% of refrain
-lines** right (a line that recurs word for word, so text alone can't place it), and
-shows the wrong du'a 0.5% of the time. From a cold start mid-recitation it names the
-du'a within 5 s 88% of the time and within 10 s 92%. Those numbers are for a fine-tuned
-whisper-base (74 M parameters) small enough to run **in a phone's browser, on-device**;
-it also hears everyday voices well enough to follow someone reading along (30%
-character errors on crowd-sourced recitations, from 39% for the previous model).
-v0.1 of this repo managed 43% / 6% on the same test.
+<p align="center">
+  <a href="docs/how-it-works.md">How it works</a> ·
+  <a href="docs/evaluation.md">Evaluation</a> ·
+  <a href="docs/development.md">Development</a> ·
+  <a href="docs/results/">Research notes</a>
+</p>
 
-One phone can also follow for a whole room: **majlis mode** relays the position to any
-number of phones or a projector through a QR code.
+<p align="center">
+  <img src="docs/demo.gif" width="720" alt="A phone following Dua Tawassul by a reciter the system never trained on, and a projector following along in majlis mode">
+</p>
+<p align="center"><i>A phone following Dua Tawassul, recited by a reciter held out of training, with a projector following along in majlis mode.</i></p>
 
-## Why this is harder than it looks
+It listens to a recitation, works out which of 505 du'as and ziyarat is being recited, and
+shows the Arabic, transliteration and translation, highlighting the line and word being
+recited as it goes.
 
-- **Refrains.** Du'as repeat themselves. In Dua Tawassul, 70 of 115 lines are
-  refrains: *"yā wajīhan ʿinda-llāh, ishfaʿ lanā ʿinda-llāh"* comes back after every one of
-  the 14 names. A transcript of "the current window" matches all 14 repetitions
-  equally well, so matching text alone can't say which one you're on.
-- **Shared openings.** Nearly every du'a opens with *bismillāh* and a *ṣalawāt*, and
-  several share whole phrases (Dua Baha and Dua Tawassul both have a line starting
-  *"allāhumma innī asʾaluka…"*). Committing too early means showing the wrong du'a.
-- **Melodic recitation.** A single line can be drawn out for 15 seconds, so a 6-second
-  window often holds half a line or less. Off-the-shelf small Whisper models barely
-  transcribe it.
-- **Real time, and stopping.** The display has to move when the reciter moves, on
-  hardware people actually have, and stay put when they stop: the last 6 s of audio
-  still hold their last words for seconds after they fall silent.
+## Highlights
+
+- **Identifies the du'a** from anywhere in a recitation, among 505 du'as and ziyarat,
+  usually within 10 seconds.
+- **Follows line by line and word by word**, with the Arabic, transliteration and English
+  kept in view.
+- **Built for how du'as are recited:** refrains repeated word for word, passages shared
+  between texts, long melodic notes, and pauses.
+- **Runs on-device:** a fine-tuned Whisper model runs in the phone's browser, and no audio
+  leaves the phone. A GPU server can run large-v3-turbo instead.
+- **Majlis mode:** one phone drives any number of phones or a projector through a QR code.
+- **Comfortable to read:** five Arabic typefaces, adjustable text size, word or line
+  highlighting, favourites, and suggestions for the day and night.
+
+## Results
+
+Measured on reciters held out of all training and tuning (16 recordings, 4 hours),
+replaying each recording exactly as the live system hears it:
+
+| model | runs on | correct line | within one line | refrain lines | wrong du'a shown |
+|---|---|---:|---:|---:|---:|
+| **whisper-base, fine-tuned** | phone browser | **84.8%** | **96.2%** | **87.8%** | 0.5% |
+| large-v3-turbo, fine-tuned | server | 84.0% | 96.3% | 88.7% | 0.4% |
+| large-v3-turbo, stock | server | 81.5% | 96.1% | 82.6% | 0.4% |
+| per-window text matching (baseline) | server | 42.7% | 71.4% | 5.8% | 12.9% |
+
+Started mid-recitation, the phone model names the du'a within 10 seconds 92% of the time.
+On everyday, non-professional voices its character error rate is 29.9% (15.4% for
+fine-tuned large-v3-turbo). Methodology, per-du'a tables and every experiment are in
+[docs/evaluation.md](docs/evaluation.md).
+
+## Quick start
+
+```bash
+git clone https://github.com/Hasan-Mehdi/dua-recognition.git
+cd dua-recognition
+pip install -e ".[web]"
+python scripts/fetch_duaplayer.py    # translations and sample recordings (~210 MB, kept locally)
+python app/server.py                 # open http://localhost:8000
+```
+
+Recite, or play one of the sample recordings. The server uses Whisper large-v3-turbo
+(downloaded on first run) and a GPU when one is available. `python app/demo.py
+recitation.mp3` follows a file, or the microphone, in the terminal.
+
+To run with no server at all, fine-tune and export the small model:
+[docs/development.md](docs/development.md#the-phone-model).
+
+**Majlis mode:** while following, tap *Aa → Show on other screens*. Other phones or a
+projector scan the QR code and follow along without running any speech recognition.
 
 ## How it works
 
-![Animated explainer: evidence from one window matches all 14 repetitions of a refrain; multiplying by the tracker's prediction leaves only the right one](docs/explainer.gif)
-
-*The heart of a 4½-minute explainer that starts from what a du'a follower is for
-([full video](docs/explainer.mp4), [source](docs/anim/explainer.py), made with
-[Manim](https://www.manim.community/)). Every curve is the real tracker at one second of a
-held-out recording.*
-
 ```
 mic ─▶ 6 s window every 1 s ─▶ Whisper ─▶ align against every du'a ─▶ HMM follower ─▶ du'a · line · word
-                                  │         (semi-global edit        (position prior
-                                  │          distance, vectorized)    resolves refrains)
-                                  └─ fine-tuned whisper-base: CPU / in-browser
 ```
 
-**1. Transcribe.** Each hop transcribes the last 6 s (faster-whisper / CTranslate2,
-batched offline, batch-of-one live). Whisper's usual silence hallucinations
-(*"ترجمة نانسي قنقر"*, *"شكرا"*) and decoding loops are filtered out.
+1. **Transcribe** the last 6 seconds of audio every second with Whisper.
+2. **Align** the transcript against all 505 texts at once: a bit-parallel edit-distance
+   pass scores every word in the 136,503-word corpus in about 3 ms.
+3. **Follow** with a hidden Markov model, as score-following systems do for sheet music.
+   It predicts where the reciter has moved to, which separates repetitions of a refrain
+   that text alone can't tell apart. It adapts to the reciter's tempo and waits through
+   pauses.
 
-**2. Align against the whole corpus at once** ([`align.py`](src/dua_recognition/align.py)).
-All 505 texts become one normalized letter string (tashkeel stripped, alef/ya/ta-marbuta
-and Urdu-style variants folded, spaces dropped so Whisper's word splitting doesn't
-matter). For the window's transcript *h*, a semi-global edit-distance DP gives, for
-**every** word in the corpus, the cost of *h* ending exactly there. It runs as Myers'
-bit-parallel algorithm (each DP column held as one bit per letter of *h*, blocked for
-long fragments): one pass over the 136,503-word corpus takes ~3 ms in Python (numba)
-and ~11 ms in the browser, with exactly the DP's numbers.
+<p align="center">
+  <img src="docs/explainer.gif" width="640" alt="Animated explainer: evidence from one window matches all 14 repetitions of a refrain; multiplying by the tracker's prediction leaves only the right one">
+</p>
 
-**3. Follow with an HMM** ([`tracker.py`](src/dua_recognition/tracker.py)). This is
-*score following*, the technique used to turn sheet-music pages in time with a
-performance, applied to recitation. The hidden state is the word being recited,
-across all du'as.
+The full walk-through, including how a 74M-parameter model was fine-tuned to follow
+melodic recitation, is in [docs/how-it-works.md](docs/how-it-works.md).
 
-- *Predict:* the reciter moved forward a few words since the last hop, may have
-  gone back a few (reciters repeat lines), and with a small
-  "teleport" probability jumped anywhere, so it recovers if someone skips ahead or
-  switches du'a.
-- *Pauses:* each window also reports how long the reciter has been silent (a voice
-  detector, or loudness over the window's floor, which catches the long melodic notes
-  voice detectors miss). The belief moves only for time they were making sound, and the
-  display doesn't run on into the next line while they're silent. After a second of
-  silence it steps back if it already had. Majlis mode, for a professional who breathes
-  between lines, keeps running on ([pauses.md](docs/results/pauses.md)).
-- *Speed and tempo:* how far is "a few words" is learned from the human timings
-  (a Poisson mixture over the train reciters' speeds), and the tracker keeps a weight
-  per speed that adapts to the reciter in front of it: a slow, melodic reciter and a
-  brisk one get different predictions. The first version assumed about twice the real
-  speed and ran a line ahead on long lines; fixing that was worth +4 points
-  ([speed_prior.md](docs/results/speed_prior.md)).
-- *Correct:* weight each word by `exp(-κ · cost)` from step 2.
-- *Prior:* 30% on the opening words of each du'a and 70% anywhere, uniform over
-  du'as. A uniform prior over *words* would make long Kumayl ten times likelier than
-  short Faraj before a word is heard.
+## Documentation
 
-A refrain matches all its repetitions equally well, and the predicted position is what
-separates them. Identification comes for free: the posterior mass inside a du'a is the
-probability that it's the one being recited, and nothing is shown until one du'a holds
-70% of it. Until then, the likeliest du'as are offered as "Is it…?" chips.
-
-**4. Make it run on a CPU** ([`finetune_whisper.py`](scripts/finetune_whisper.py)).
-large-v3-turbo is accurate but needs ~3.3 s per window on CPU. Small models are fast
-enough but barely understand recitation out of the box (stock whisper-small: 88% window
-CER). So a small model is fine-tuned on train-reciter windows with **reference-snapped
-labels**:
-turbo transcribes each window, the human line timings bound where in the text it can
-be, and the label becomes the *reference* text the transcript aligns to. The teacher
-only decides where a window starts and ends in the text, so its spelling mistakes
-never reach the labels. Windows come from DuaPlayer's train reciters, YouTube, and
-duas.org recordings (the last two labelled by an offline forward-backward smoother),
-128 h in all; a speaker-embedding check keeps every test reciter's voice out, and
-caught one test recording re-uploaded to YouTube under another name. Audio is
-augmented with level changes and noise, speed and vocal-tract-length perturbation and
-SpecAugment, and half the windows get synthetic room reverb and noise. The best
-starting point was [tarteel-ai/whisper-base-ar-quran](https://huggingface.co/tarteel-ai/whisper-base-ar-quran)
-(already trained on Quran recitation), and the result runs in the browser via ONNX
-([`web/`](web/)).
-
-The voices matter as much as the model. Professional reciters were the only test set
-until a tester's own recitation fell apart, so ordinary voices are now scored too,
-on 409 verified clips from [RetaSy](https://huggingface.co/datasets/RetaSy/quranic_audio_dataset)'s
-crowd-sourced recitations ([`voice_eval.py`](scripts/voice_eval.py)):
-
-| model | character errors, everyday voices |
+| | |
 |---|---|
-| large-v3-turbo, fine-tuned (server) | 15.4% |
-| large-v3-turbo, stock | 22.8% |
-| whisper-small, fine-tuned | 27.2% |
-| **whisper-base, fine-tuned (phone)** | **29.9%** |
-| whisper-base, previous fine-tune (fewer voices, no speed/VTLP/SpecAugment) | 38.7% |
+| [How it works](docs/how-it-works.md) | the problem, the alignment, the tracker and the phone model |
+| [Evaluation](docs/evaluation.md) | methodology, full results, and an index of the research notes |
+| [Development](docs/development.md) | setup, configuration, training and export, debug sessions, code map |
+| [Research notes](docs/results/) | one write-up per experiment, including negative results |
 
-## Evaluation
-
-Ground truth comes from [DuaPlayer](https://www.duaplayer.org), where reciters upload
-recordings together with a hand-recorded start time for every line. That gives
-**39 recordings (10 h) of 22 du'as and ziyarat by 12 reciters**, each second labelled
-with the line being recited. The tracker searches all 505 texts (DuaPlayer's 91, plus
-414 from duas.pro and duas.org), so the 483 without test recordings act as distractors.
-
-Everything below is measured on **held-out reciters** (6 reciters, 16 recordings, 4 h): nobody in
-the test set was used to tune the tracker or to train an ASR model. The split is by
-reciter, not by recording ([`splits.py`](src/dua_recognition/splits.py)). The
-evaluation replays each recording exactly as the live system hears it (6 s windows,
-1 s hop) and compares the displayed line with the true line once per second.
-
-| front end | line | ±1 line | refrain lines | wrong du'a shown | median lag | du'a found @3 s | @10 s |
-|---|---|---|---|---|---|---|---|
-| v0.1: per-window matcher (turbo) | 42.7% | 71.4% | 5.8% | 12.9% | 3.6 s | 66% | 88% |
-| large-v3-turbo, stock | 81.5% | 96.1% | 82.6% | 0.4% | 1.4 s | 62% | 91% |
-| large-v3-turbo + prompt biasing | 84.8% | 96.2% | 88.1% | 0.4% | 1.2 s | 70% | 93% |
-| large-v3-turbo, fine-tuned (server) | 84.0% | 96.3% | 88.7% | 0.4% | 1.3 s | 76% | 92% |
-| whisper-small, fine-tuned | 84.4% | 96.3% | 88.4% | 0.3% | 1.3 s | 76% | 92% |
-| whisper-base (Quran), fine-tuned, previous | 85.2% | 96.2% | 89.1% | 0.3% | 1.2 s | 75% | 92% |
-| **whisper-base (Quran), fine-tuned on more voices (phone)** | **84.8%** | **96.2%** | **87.8%** | 0.5% | 1.3 s | 72% | 92% |
-
-The fine-tunes all follow professional reciters about equally well; where they differ is
-everyday voices (the table in step 4), which is why the phone runs the last one. With
-91 texts the du'a was found within 3 s about 89% of the time; 5.5 times as many
-candidates, many sharing whole phrases, slow that first guess, while the wrong-du'a rate
-fell. The front-end comparison ([comparison.md](docs/results/comparison.md)) and
-`test_small-ft.md` (the first whisper-small fine-tune) are from the 91-text corpus.
-
-Ziyarat Ashura is excluded from line accuracy (its human timings drift by several
-lines) but kept for identification. On the 91-text corpus, a simulated phone-in-a-room (reverb, 15 dB SNR)
-costs the clean-trained model 8.5 points (85.4% to 76.9%); training with room
-augmentation wins almost all of that back, 84.9% in the room
-([comparison.md](docs/results/comparison.md)).
-
-Full tables and per-du'a breakdowns are in [docs/results/](docs/results/): one file
-per ASR front end, plus the ASR benchmark, the front-end comparison, and
-[speed_prior.md](docs/results/speed_prior.md) (the error analysis behind the speed and
-tempo model, and a negative result on scoring text straight from CTC posteriors), and
-[display_lead.md](docs/results/display_lead.md) (keeping the live display on the word
-being said: predicting past the ASR delay and gliding the highlight, scored against
-forced-aligned word timings), [pauses.md](docs/results/pauses.md) (waiting when the
-reciter stops, on a benchmark with pauses inserted into the test recordings) and
-[unknown_dua.md](docs/results/unknown_dua.md) (saying "I don't know this one" for a
-du'a that isn't in the corpus).
-
-Following word by word from a CTC model's frames is an opt-in server experiment (`?words=ctc`,
-[follower.md](docs/results/follower.md)). A reliability run
-([plan](docs/research/claude-execution-plan-2026-09-26.md)) then checked the measurements
-themselves, each with its rules written down before the results:
-[browser_gate.md](docs/results/browser_gate.md) (how much speech the phone's speech gate
-throws away; `legacy` stays the default, `?gate=energy_assisted` is opt-in),
-[follower_reliability.md](docs/results/follower_reliability.md) (where the follower's
-line lag comes from) and [small_ctc.md](docs/results/small_ctc.md) (a smaller CTC model
-tried as the follower's front end; wav2vec2 stays).
-
-## Run it
-
-```bash
-pip install -e ".[web,eval,dev]"
-python scripts/fetch_duaplayer.py        # translations, timings, audio -> data/duaplayer/ (~210 MB)
-pytest
-
-python app/server.py                     # http://localhost:8000: recite, or replay a recording
-python app/demo.py recitation.mp3        # terminal version (no argument = microphone)
-```
-
-Pick the ASR model with `DUA_ASR_MODEL` (default `large-v3-turbo`; it runs on GPU when
-one is available). On a CPU-only machine, or for the in-browser version, use the
-fine-tuned base model:
-
-```bash
-python scripts/transcribe_windows.py                      # teacher transcripts of every window
-python scripts/build_finetune_set.py --youtube --untimed --version v4   # reference-snapped labels (train voices)
-python scripts/finetune_whisper.py --base tarteel-ai/whisper-base-ar-quran --name whisper-base-aug-v4     --data v4 --room 0.5 --epochs 3 --speed 0.5 --vtlp 0.5 --specaug
-DUA_ASR_MODEL=models/whisper-base-aug-v4-ct2 DUA_ASR_DEVICE=cpu python app/server.py
-
-# on-device: no server, nothing leaves the phone
-python scripts/export_web.py                              # web/corpus.json
-python scripts/export_onnx.py models/whisper-base-aug-v4   # web/models/ (see its docstring)
-python -m http.server -d web                              # any static host works
-```
-
-**Majlis mode:** with `app/server.py` running, tap *Aa → Show on other screens* while
-following. Other phones or a projector scan the QR code (or open `?watch=CODE`) and
-follow along. They run no speech recognition themselves.
-
-**Debug sessions** (on for now; `?log=0` turns them off): every listening session keeps
-the 16 kHz audio the recognizer heard and a log of what it made of it (each window's
-transcript and tracker state, each line and word shown, taps, scrolls, the phone going
-to sleep) as one `.wav`, with the log in a RIFF chunk that players ignore. Served by
-`app/server.py`, the page uploads them to `data/sessions/` when a session ends;
-`DUA_ENGINE=device python app/server.py` serves the on-device app the same way, with
-no speech model on the server. From a static host they stay on the phone until *send*
-on the home screen (share sheet or download). While following, tapping the line you're
-really on logs "I'm here".
-
-```bash
-python scripts/session_report.py               # newest session: device, mic, speed, what was shown when
-python scripts/session_report.py ID --timeline # every update, line move and tap
-python scripts/session_report.py ID --score    # vs fine-tuned turbo + offline smoother (GPU)
-python scripts/session_report.py ID --score --set kappa=0.2   # what a tracker change would have shown
-```
-
-The `--score` reference agreed with the human line timings on 88% of seconds (100% within
-a line) on a held-out Tawassul clip, and replaying a session's own transcripts through the
-Python tracker reproduces the phone's display exactly.
-
-Reproduce the numbers:
-
-```bash
-python scripts/transcribe_windows.py --model large-v3-turbo
-python scripts/evaluate.py                                # test reciters
-python scripts/evaluate.py --split train --tune           # tracker grid search (train only)
-```
-
-## Layout
+## Project structure
 
 ```
-src/dua_recognition/
-  text.py        Arabic normalization (tashkeel, alef/ya/ta-marbuta, alef wasla, Persian letters)
-  corpus.py      du'a texts; labelled recordings
-  align.py       corpus index + semi-global alignment (bit-parallel Myers, numba)
-  tracker.py     the HMM follower (speed prior + tempo adaptation, pauses, "not a known du'a")
-  display.py     the gliding word highlight between updates
-  follower.py    word-by-word following from CTC frames between tracker updates (opt-in)
-  ctc.py         wav2vec2 CTC posteriors folded onto the corpus alphabet
-  ctc_adapter.py sub-word (BPE) CTC models for the follower, pieces kept (small_ctc.md)
-  ctc_align.py   scoring text straight from CTC posteriors (experimental; see speed_prior.md)
-  offline.py     forward-backward smoother: labels untimed audio (YouTube training data)
-  asr.py         batched faster-whisper decoding, hallucination filters, silence timing
-  pipeline.py    StreamingRecognizer: audio chunks in, positions out
-  splits.py      reciter-disjoint train/test split; held-out test venues
-  labels.py      line labels as subtitles for review; agreement between label sets
-  provenance.py  where line and word labels came from (automatic or human-reviewed)
-  translit.py    one transliteration style, made from the vowelled Arabic
-  classify.py, match.py   v0.1 baselines (per-window matching), kept for comparison
-scripts/         data: fetch_duaplayer, fetch_duaspro, fetch_duasorg, fetch_youtube, fetch_testset, find_captioned, speaker_check
-                 training: transcribe_windows, align_offline, build_finetune_set, finetune_whisper, export_onnx
-                 evaluation: evaluate, word_truth, word_eval, follow_eval, pause_eval, ooc_eval, voice_eval, asr_benchmark, ...
-                 reliability: reliability_manifest, testset_split, label_coverage, review_bundle, follow_latency,
-                              gate_eval (+ gate_replay.mjs, gate_bench.mjs), small_ctc
-                 live sessions: session_report (the phone's debug sessions, data/sessions/)
-                 noha research: noha_lid, noha_match, noha_finetune, ...
-app/             server.py (FastAPI + WebSocket; majlis-mode rooms); demo.py (CLI)
-web/             the one front end: server or on-device engine (transformers.js + tracker.js port);
-                 gate.js (the phone's speech gate), session-log.js (debug sessions), dev/ (benchmark pages)
-data/duas/       505 Arabic reference texts, one JSON per du'a
+src/dua_recognition/   core library: text normalization, corpus alignment, the HMM tracker, streaming pipeline
+app/                   FastAPI server (live streaming, majlis rooms) and a terminal demo
+web/                   the app: server or on-device engine (Transformers.js, ONNX Runtime Web)
+scripts/               data collection, training, export and evaluation
+data/duas/             505 reference texts, one JSON file per du'a
+docs/                  walk-through, evaluation and research notes
+tests/                 pytest suite
 ```
 
-## Data and licensing
+## Contributing
 
-The Arabic texts in `data/duas/` are the traditional texts of these supplications,
-as published by [DuaPlayer](https://www.duaplayer.org) (a non-profit),
-[duas.pro](https://duas.pro) and [duas.org](https://www.duas.org); each file names its
-source. Translations, transliterations, line timings and audio belong to those sites and
-their reciters. They aren't redistributed here: the `fetch_*.py` scripts download them
-into an ignored local cache for evaluation and training. Please support them if you
-find this useful.
+Issues and pull requests are welcome. Reports of du'as or recitation styles that the app
+follows poorly are especially useful; a debug session recorded by the app
+([how](docs/development.md#debug-sessions)) shows exactly what it heard and displayed.
+Run the tests with `pip install -e ".[dev]"` and `pytest`.
 
-Code is MIT-licensed.
+## Acknowledgements
+
+This work builds on the generosity of others:
+
+- **[DuaPlayer](https://www.duaplayer.org)**, a non-profit, and its reciters, whose
+  recordings with hand-marked line timings make evaluation possible, along with the texts
+  and translations; **[duas.org](https://www.duas.org)** and **[duas.pro](https://duas.pro)**
+  ([open API](https://github.com/duas-pro/shia-duas-api)) for further texts, translations
+  and recordings.
+- [Whisper](https://github.com/openai/whisper), run through
+  [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and
+  [CTranslate2](https://github.com/OpenNMT/CTranslate2) on the server and through
+  [Transformers.js](https://github.com/huggingface/transformers.js) and
+  [ONNX Runtime Web](https://onnxruntime.ai) in the browser.
+- [tarteel-ai/whisper-base-ar-quran](https://huggingface.co/tarteel-ai/whisper-base-ar-quran),
+  the starting point of the phone model, and
+  [wav2vec2-large-xlsr-53-arabic-quran](https://huggingface.co/rabah2026/wav2vec2-large-xlsr-53-arabic-quran-v_final),
+  the base of the word aligner.
+- [Silero VAD](https://github.com/snakers4/silero-vad) for voice activity detection.
+- [RetaSy's Quranic audio dataset](https://huggingface.co/datasets/RetaSy/quranic_audio_dataset)
+  for evaluating everyday voices.
+- [Manim Community](https://www.manim.community/) for the explainer animation, and the
+  Amiri, Aref Ruqaa, Scheherazade New, Noto and EB Garamond typefaces.
+
+## Data and license
+
+The Arabic texts in `data/duas/` are the traditional texts of these supplications, as
+published by DuaPlayer, duas.pro and duas.org; each file names its source. Translations,
+transliterations, line timings and audio belong to those sites and their reciters. They
+aren't redistributed here: the `fetch_*.py` scripts download them into an ignored local
+cache for evaluation and training. Please support them if you find this useful.
+
+The code is released under the [MIT License](LICENSE).
