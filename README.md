@@ -6,7 +6,7 @@ translation scrolling in sync.
 
 ![A phone following Dua Tawassul by a reciter the system never trained on, and a projector following along in majlis mode](docs/demo.gif)
 
-It knows **506 du'as and ziyarat**. On reciters it was never trained or tuned on, it
+It knows **505 du'as and ziyarat**. On reciters it was never trained or tuned on, it
 shows **the right line 85% of the time** (96% within one line), gets **88% of refrain
 lines** right (a line that recurs word for word, so text alone can't place it), and
 shows the wrong du'a 0.5% of the time. From a cold start mid-recitation it names the
@@ -56,12 +56,12 @@ batched offline, batch-of-one live). Whisper's usual silence hallucinations
 (*"ترجمة نانسي قنقر"*, *"شكرا"*) and decoding loops are filtered out.
 
 **2. Align against the whole corpus at once** ([`align.py`](src/dua_recognition/align.py)).
-All 506 texts become one normalized letter string (tashkeel stripped, alef/ya/ta-marbuta
+All 505 texts become one normalized letter string (tashkeel stripped, alef/ya/ta-marbuta
 and Urdu-style variants folded, spaces dropped so Whisper's word splitting doesn't
 matter). For the window's transcript *h*, a semi-global edit-distance DP gives, for
 **every** word in the corpus, the cost of *h* ending exactly there. It runs as Myers'
 bit-parallel algorithm (each DP column held as one bit per letter of *h*, blocked for
-long fragments): one pass over the 136,527-word corpus takes ~3 ms in Python (numba)
+long fragments): one pass over the 136,503-word corpus takes ~3 ms in Python (numba)
 and ~11 ms in the browser, with exactly the DP's numbers.
 
 **3. Follow with an HMM** ([`tracker.py`](src/dua_recognition/tracker.py)). This is
@@ -131,8 +131,8 @@ crowd-sourced recitations ([`voice_eval.py`](scripts/voice_eval.py)):
 Ground truth comes from [DuaPlayer](https://www.duaplayer.org), where reciters upload
 recordings together with a hand-recorded start time for every line. That gives
 **39 recordings (10 h) of 22 du'as and ziyarat by 12 reciters**, each second labelled
-with the line being recited. The tracker searches all 506 texts (DuaPlayer's 91, plus
-415 from duas.pro and duas.org), so the 484 without test recordings act as distractors.
+with the line being recited. The tracker searches all 505 texts (DuaPlayer's 91, plus
+414 from duas.pro and duas.org), so the 483 without test recordings act as distractors.
 
 Everything below is measured on **held-out reciters** (6 reciters, 16 recordings, 4 h): nobody in
 the test set was used to tune the tracker or to train an ASR model. The split is by
@@ -173,6 +173,16 @@ forced-aligned word timings), [pauses.md](docs/results/pauses.md) (waiting when 
 reciter stops, on a benchmark with pauses inserted into the test recordings) and
 [unknown_dua.md](docs/results/unknown_dua.md) (saying "I don't know this one" for a
 du'a that isn't in the corpus).
+
+Following word by word from a CTC model's frames is an opt-in server experiment (`?words=ctc`,
+[follower.md](docs/results/follower.md)). A reliability run
+([plan](docs/research/claude-execution-plan-2026-09-26.md)) then checked the measurements
+themselves, each with its rules written down before the results:
+[browser_gate.md](docs/results/browser_gate.md) (how much speech the phone's speech gate
+throws away; `legacy` stays the default, `?gate=energy_assisted` is opt-in),
+[follower_reliability.md](docs/results/follower_reliability.md) (where the follower's
+line lag comes from) and [small_ctc.md](docs/results/small_ctc.md) (a smaller CTC model
+tried as the follower's front end; wav2vec2 stays).
 
 ## Run it
 
@@ -243,20 +253,29 @@ src/dua_recognition/
   align.py       corpus index + semi-global alignment (bit-parallel Myers, numba)
   tracker.py     the HMM follower (speed prior + tempo adaptation, pauses, "not a known du'a")
   display.py     the gliding word highlight between updates
+  follower.py    word-by-word following from CTC frames between tracker updates (opt-in)
+  ctc.py         wav2vec2 CTC posteriors folded onto the corpus alphabet
+  ctc_adapter.py sub-word (BPE) CTC models for the follower, pieces kept (small_ctc.md)
   ctc_align.py   scoring text straight from CTC posteriors (experimental; see speed_prior.md)
   offline.py     forward-backward smoother: labels untimed audio (YouTube training data)
   asr.py         batched faster-whisper decoding, hallucination filters, silence timing
   pipeline.py    StreamingRecognizer: audio chunks in, positions out
-  splits.py      reciter-disjoint train/test split
+  splits.py      reciter-disjoint train/test split; held-out test venues
+  labels.py      line labels as subtitles for review; agreement between label sets
+  provenance.py  where line and word labels came from (automatic or human-reviewed)
+  translit.py    one transliteration style, made from the vowelled Arabic
   classify.py, match.py   v0.1 baselines (per-window matching), kept for comparison
-scripts/         data: fetch_duaplayer, fetch_duaspro, fetch_duasorg, fetch_youtube, find_captioned, speaker_check
+scripts/         data: fetch_duaplayer, fetch_duaspro, fetch_duasorg, fetch_youtube, fetch_testset, find_captioned, speaker_check
                  training: transcribe_windows, align_offline, build_finetune_set, finetune_whisper, export_onnx
-                 evaluation: evaluate, word_truth, word_eval, pause_eval, ooc_eval, voice_eval, asr_benchmark, ...
+                 evaluation: evaluate, word_truth, word_eval, follow_eval, pause_eval, ooc_eval, voice_eval, asr_benchmark, ...
+                 reliability: reliability_manifest, testset_split, label_coverage, review_bundle, follow_latency,
+                              gate_eval (+ gate_replay.mjs, gate_bench.mjs), small_ctc
                  live sessions: session_report (the phone's debug sessions, data/sessions/)
                  noha research: noha_lid, noha_match, noha_finetune, ...
 app/             server.py (FastAPI + WebSocket; majlis-mode rooms); demo.py (CLI)
-web/             the one front end: server or on-device engine (transformers.js + tracker.js port)
-data/duas/       506 Arabic reference texts, one JSON per du'a
+web/             the one front end: server or on-device engine (transformers.js + tracker.js port);
+                 gate.js (the phone's speech gate), session-log.js (debug sessions), dev/ (benchmark pages)
+data/duas/       505 Arabic reference texts, one JSON per du'a
 ```
 
 ## Data and licensing
