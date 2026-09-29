@@ -1,0 +1,178 @@
+<!doctype html>
+<!-- The demo's stage (record.mjs films it): the real app in a phone, and beside it what a GIF
+     can't carry: the sound as it plays, and what Whisper heard in it each second. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Demo stage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Amiri&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #0b1020; --ink: #efe6d0; --S: .8626; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1100px; height: 800px; overflow: hidden; color: var(--ink); }
+  body { background: radial-gradient(85% 100% at 30% 45%, #151e37, var(--bg) 72%); }
+
+  .phone {
+    position: absolute; left: 84px; top: 25px; width: calc(390px * var(--S) + 22px); height: calc(844px * var(--S) + 22px);
+    padding: 11px; border-radius: 50px; background: #05070d;
+    box-shadow: 0 0 0 1.5px #262c3d, 0 30px 80px rgba(0, 0, 0, .55);
+  }
+  .screen { position: relative; width: 100%; height: 100%; border-radius: 40px; overflow: hidden; background: #0e1320; }
+  .screen iframe { position: absolute; left: 0; top: 0; width: 390px; height: 844px; border: 0; transform: scale(var(--S)); transform-origin: 0 0; }
+  .tap {
+    position: absolute; z-index: 3; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%;
+    background: radial-gradient(rgba(255, 255, 255, .5), rgba(255, 255, 255, .12) 60%, transparent 70%);
+    border: 2px solid rgba(255, 255, 255, .7); opacity: 0; pointer-events: none;
+  }
+
+  .under { position: absolute; left: 530px; top: 290px; width: 500px; }
+  #wave { display: block; width: 500px; height: 84px; }
+  .heard { position: relative; height: 128px; margin-top: 26px; direction: rtl; font-family: Amiri, serif; }
+  .heard p { position: absolute; right: 0; left: 0; margin: 0; text-align: right; white-space: nowrap; overflow: hidden; }
+  .fade { position: absolute; inset: 0; z-index: 10; background: var(--bg); opacity: 0; }
+</style>
+</head>
+<body>
+<div class="phone"><div class="screen">
+  <iframe id="app" src="/app/index.html?log=0" title="The app"></iframe>
+</div></div>
+<div class="tap" id="tap"></div>
+<div class="under">
+  <canvas id="wave" width="1000" height="168"></canvas>
+  <div class="heard" id="heard"></div>
+</div>
+<div class="fade" id="fade"></div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const S = 0.8626;
+const TAP = 2.1; // s after filming starts: the tap on the microphone
+const AFTER = 44.2; // s of recitation shown; then a short fade, and the GIF loops
+const tl = await fetch("timeline.json").then((r) => r.json());
+const peak = [...tl.rms].sort((a, b) => a - b)[Math.floor(tl.rms.length * 0.985)] || 1;
+const quietDb = Math.min(...tl.band_db);
+const ease = (k) => (k <= 0 ? 0 : k >= 1 ? 1 : 1 - (1 - k) ** 3);
+
+const demo = (window.__demo = {
+  c0: null, t0: null,
+  begin() {
+    demo.c0 = performance.now();
+    setTimeout(tap, TAP * 1000 - 250);
+  },
+  // The app opened its /ws stream: from here the recognizer's messages arrive on time.
+  connected(ws) {
+    demo.t0 = performance.now();
+    for (const st of tl.steps) setTimeout(() => ws.onmessage?.({ data: JSON.stringify(st.msg) }), st.at * 1000);
+  },
+  bandDb() {
+    if (demo.t0 == null) return null;
+    const k = Math.floor(((performance.now() - demo.t0) / 1000) * 60);
+    return k >= 0 && k < tl.band_db.length ? tl.band_db[k] : quietDb;
+  },
+  get done() {
+    return demo.t0 != null && (performance.now() - demo.t0) / 1000 >= AFTER + 0.8;
+  },
+});
+
+// A ripple over the app's microphone button, then the real click.
+function tap() {
+  const doc = $("app").contentDocument;
+  const b = doc.getElementById("start").getBoundingClientRect();
+  const screen = document.querySelector(".screen").getBoundingClientRect();
+  $("tap").style.left = `${screen.left + (b.left + b.width / 2) * S}px`;
+  $("tap").style.top = `${screen.top + (b.top + b.height / 2) * S}px`;
+  demo.tapAt = performance.now();
+  setTimeout(() => doc.getElementById("start").click(), 250);
+}
+
+// The step the recognizer last sent at audio time ta, and how long ago.
+function stepAt(ta) {
+  let k = -1;
+  while (k + 1 < tl.steps.length && tl.steps[k + 1].at <= ta) k++;
+  return k;
+}
+
+// -- the sound: the recording drawn as it's heard, and the 6 s the recognizer listens to --
+const wg = $("wave").getContext("2d");
+const W = 500, WH = 84, BAR = 3, SHOWN = AFTER + 0.8;
+const rmsAt = (t) => tl.rms[Math.floor(t * 100)] ?? 0;
+const bars = Array.from({ length: Math.floor(W / BAR) }, (_, i) => {
+  const t0 = (i * BAR) / W * SHOWN, t1 = ((i + 1) * BAR) / W * SHOWN;
+  let v = 0;
+  for (let t = t0; t < t1; t += 0.01) v = Math.max(v, rmsAt(t));
+  return { t0, h: Math.max(1, Math.min(1, Math.sqrt(v / peak)) * (WH / 2 - 4)) };
+});
+function drawWave(ta, k) {
+  wg.setTransform(2, 0, 0, 2, 0, 0);
+  wg.clearRect(0, 0, W, WH);
+  wg.fillStyle = "rgba(154, 146, 127, .25)";
+  wg.fillRect(0, WH / 2 - 0.5, W, 1);
+  if (ta == null) return;
+  const x = (t) => (t / SHOWN) * W;
+  if (k >= 0) {
+    // The window of the last step, lit for a moment when it's transcribed.
+    const end = tl.steps[k].msg.t, age = ta - tl.steps[k].at;
+    const glow = Math.max(0, 1 - age / 0.6);
+    wg.fillStyle = `rgba(217, 180, 106, ${(0.05 + 0.1 * glow).toFixed(3)})`;
+    wg.strokeStyle = `rgba(240, 213, 150, ${(0.25 + 0.55 * glow).toFixed(3)})`;
+    wg.lineWidth = 1;
+    wg.beginPath();
+    wg.roundRect(x(Math.max(0, end - 6)), 1, x(end) - x(Math.max(0, end - 6)), WH - 2, 6);
+    wg.fill();
+    wg.stroke();
+  }
+  for (const [i, b] of bars.entries()) {
+    if (b.t0 > ta) break;
+    wg.fillStyle = "#c9a560";
+    wg.fillRect(i * BAR, WH / 2 - b.h, BAR - 1, b.h * 2);
+  }
+}
+
+// -- what Whisper heard: the newest transcript, and the one before it fading away ------
+const heard = $("heard");
+let shownK = -2;
+function drawHeard(ta, k) {
+  if (k !== shownK) {
+    // Silent windows transcribe to nothing: keep the last words up.
+    let j = k;
+    while (j >= 0 && !tl.steps[j].msg.heard) j--;
+    if (j !== shownK) {
+      const prev = heard.querySelector(".new");
+      heard.replaceChildren(...[prev, j >= 0 ? Object.assign(document.createElement("p"), { textContent: tl.steps[j].msg.heard, className: "new" }) : null].filter(Boolean));
+      if (prev) prev.className = "old";
+      demo.heardAt = ta;
+      shownK = j;
+    }
+  }
+  const e = ease(((ta ?? 0) - (demo.heardAt ?? 0)) / 0.45);
+  for (const p of heard.children) {
+    const old = p.className === "old";
+    const size = old ? 36 - 12 * e : 36;
+    p.style.fontSize = `${size}px`;
+    p.style.lineHeight = "1.7";
+    p.style.top = old ? `${50 - 50 * e}px` : `${50 + 24 * (1 - e)}px`;
+    p.style.opacity = old ? (0.9 - 0.62 * e).toFixed(3) : (0.95 * e).toFixed(3);
+    p.style.color = old ? "#9a927f" : "#efe6d0";
+  }
+}
+
+function frame(now) {
+  const ta = demo.t0 == null ? null : (now - demo.t0) / 1000;
+  const k = ta == null ? -1 : stepAt(ta);
+  drawWave(ta, k);
+  drawHeard(ta, k);
+  if (demo.tapAt != null) {
+    const t = (now - demo.tapAt) / 700;
+    $("tap").style.opacity = t < 0 || t > 1 ? 0 : (t < 0.3 ? 1 : 1 - (t - 0.3) / 0.7).toFixed(3);
+    $("tap").style.transform = `scale(${(0.7 + 0.6 * Math.min(1, t)).toFixed(3)})`;
+  }
+  if (ta != null) $("fade").style.opacity = Math.max(0, Math.min(1, (ta - AFTER) / 0.8)).toFixed(3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.__stageReady = true;
+</script>
+</body>
+</html>
