@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="326" viewBox="0 0 720 326" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
+<title id="t">Same windows, with and without the tracker</title>
+<desc id="d">Correct line: 46.3% per-window matching, 84.8% HMM tracker; Within one line: 70.9% per-window matching, 96.2% HMM tracker; Refrain lines: 6.5% per-window matching, 87.8% HMM tracker; Wrong du'a shown: 13.5% per-window matching, 0.5% HMM tracker</desc>
+<text x="0" y="22" font-size="16" font-weight="600" fill="#f0f6fc">Same audio, same model: what the tracker adds</text>
+<text x="0" y="44" font-size="13" fill="#9198a1">Phone model on held-out reciters (16 recordings, 4 h), scored once per second</text>
+<circle cx="6" cy="74" r="6" fill="#3987e5"/>
+<text x="18" y="78.5" font-size="13" fill="#f0f6fc">HMM tracker</text>
+<circle cx="156" cy="74" r="6" fill="#d95926"/>
+<text x="168" y="78.5" font-size="13" fill="#f0f6fc">Per-window text matching, no tracker</text>
+<line x1="230.0" y1="102" x2="230.0" y2="302" stroke="#21262d" stroke-width="1"/>
+<text x="230.0" y="318" font-size="12" fill="#9198a1" text-anchor="middle" style="font-variant-numeric:tabular-nums">0%</text>
+<line x1="345.0" y1="102" x2="345.0" y2="302" stroke="#21262d" stroke-width="1"/>
+<text x="345.0" y="318" font-size="12" fill="#9198a1" text-anchor="middle" style="font-variant-numeric:tabular-nums">25%</text>
+<line x1="460.0" y1="102" x2="460.0" y2="302" stroke="#21262d" stroke-width="1"/>
+<text x="460.0" y="318" font-size="12" fill="#9198a1" text-anchor="middle" style="font-variant-numeric:tabular-nums">50%</text>
+<line x1="575.0" y1="102" x2="575.0" y2="302" stroke="#21262d" stroke-width="1"/>
+<text x="575.0" y="318" font-size="12" fill="#9198a1" text-anchor="middle" style="font-variant-numeric:tabular-nums">75%</text>
+<line x1="690.0" y1="102" x2="690.0" y2="302" stroke="#21262d" stroke-width="1"/>
+<text x="690.0" y="318" font-size="12" fill="#9198a1" text-anchor="middle" style="font-variant-numeric:tabular-nums">100%</text>
+<text x="208" y="137" font-size="14" fill="#f0f6fc" text-anchor="end">Correct line</text>
+<line x1="442.8" y1="132" x2="620.2" y2="132" stroke="#3d444d" stroke-width="2" stroke-linecap="round"/>
+<circle cx="442.8" cy="132" r="7" fill="#d95926" stroke="#0d1117" stroke-width="2"/>
+<text x="442.8" y="119" font-size="13" font-weight="400" fill="#9198a1" text-anchor="middle" style="font-variant-numeric:tabular-nums">46.3%</text>
+<circle cx="620.2" cy="132" r="7" fill="#3987e5" stroke="#0d1117" stroke-width="2"/>
+<text x="620.2" y="119" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="middle" style="font-variant-numeric:tabular-nums">84.8%</text>
+<text x="208" y="187" font-size="14" fill="#f0f6fc" text-anchor="end">Within one line</text>
+<line x1="556.2" y1="182" x2="672.4" y2="182" stroke="#3d444d" stroke-width="2" stroke-linecap="round"/>
+<circle cx="556.2" cy="182" r="7" fill="#d95926" stroke="#0d1117" stroke-width="2"/>
+<text x="556.2" y="169" font-size="13" font-weight="400" fill="#9198a1" text-anchor="middle" style="font-variant-numeric:tabular-nums">70.9%</text>
+<circle cx="672.4" cy="182" r="7" fill="#3987e5" stroke="#0d1117" stroke-width="2"/>
+<text x="672.4" y="169" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="middle" style="font-variant-numeric:tabular-nums">96.2%</text>
+<text x="208" y="232" font-size="14" fill="#f0f6fc" text-anchor="end">Refrain lines</text>
+<text x="208" y="249" font-size="12" fill="#9198a1" text-anchor="end">repeated word for word</text>
+<line x1="259.7" y1="232" x2="633.7" y2="232" stroke="#3d444d" stroke-width="2" stroke-linecap="round"/>
+<circle cx="259.7" cy="232" r="7" fill="#d95926" stroke="#0d1117" stroke-width="2"/>
+<text x="259.7" y="219" font-size="13" font-weight="400" fill="#9198a1" text-anchor="middle" style="font-variant-numeric:tabular-nums">6.5%</text>
+<circle cx="633.7" cy="232" r="7" fill="#3987e5" stroke="#0d1117" stroke-width="2"/>
+<text x="633.7" y="219" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="middle" style="font-variant-numeric:tabular-nums">87.8%</text>
+<text x="208" y="282" font-size="14" fill="#f0f6fc" text-anchor="end">Wrong du'a shown</text>
+<text x="208" y="299" font-size="12" fill="#9198a1" text-anchor="end">lower is better</text>
+<line x1="291.9" y1="282" x2="232.2" y2="282" stroke="#3d444d" stroke-width="2" stroke-linecap="round"/>
+<circle cx="291.9" cy="282" r="7" fill="#d95926" stroke="#0d1117" stroke-width="2"/>
+<text x="291.9" y="269" font-size="13" font-weight="400" fill="#9198a1" text-anchor="middle" style="font-variant-numeric:tabular-nums">13.5%</text>
+<circle cx="232.2" cy="282" r="7" fill="#3987e5" stroke="#0d1117" stroke-width="2"/>
+<text x="232.2" y="269" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="middle" style="font-variant-numeric:tabular-nums">0.5%</text>
+</svg>

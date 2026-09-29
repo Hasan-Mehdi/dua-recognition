@@ -10,7 +10,7 @@ python scripts/fetch_duaspro.py --lines                                         
 pytest
 ```
 
-The fetched data lives in ignored local caches (see [Data](../README.md#data-and-license)).
+The fetched data lives in ignored local caches (see [Data](../README.md#license)).
 The tests need none of it; the four browser-gate tests run only when Node and
 `onnxruntime-node` are installed under `data/cache/reliability/node`.
 
