@@ -49,6 +49,7 @@ WEB = ROOT / "web"  # the one front end; it detects this server via /api/mode
 MODEL = os.environ.get("DUA_ASR_MODEL", DEFAULT_MODEL)
 ENGINE = os.environ.get("DUA_ENGINE", "server")  # "device": the browser runs speech recognition itself
 SESSIONS = ROOT / "data" / "sessions"
+MAX_SESSION_BYTES = 256 << 20  # 16 kHz int16 mono: over two hours
 CTC_MODEL = os.environ.get("DUA_CTC_MODEL", str(ROOT / "models" / "wav2vec2-quran-dua"))
 _ctc = None
 _ctc_lock = threading.Lock()
@@ -87,12 +88,21 @@ async def save_session(name: str, request: Request):
     """A debug session from the page: its audio, with the log in a RIFF chunk."""
     if not re.fullmatch(r"[\w-]{1,80}\.wav", name):
         raise HTTPException(400)
+    if int(request.headers.get("content-length") or 0) > MAX_SESSION_BYTES:
+        raise HTTPException(413)
     SESSIONS.mkdir(parents=True, exist_ok=True)
     part = SESSIONS / (name + ".part")
-    with part.open("wb") as f:
-        async for chunk in request.stream():
-            f.write(chunk)
-    part.replace(SESSIONS / name)
+    try:
+        size = 0
+        with part.open("wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_SESSION_BYTES:
+                    raise HTTPException(413)  # no or a false Content-Length: cap what's written
+                f.write(chunk)
+        part.replace(SESSIONS / name)
+    finally:
+        part.unlink(missing_ok=True)  # a dropped or refused upload leaves nothing behind
     return {"saved": name}
 
 
