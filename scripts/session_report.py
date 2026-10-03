@@ -188,9 +188,12 @@ def gate_summary(log: dict) -> list[str]:
     ctc = [e for e in log["events"] if e["type"] == "ctc"]
     if ctc:
         gaps = np.diff([e["t"] for e in ctc])
-        out.append(f"  word follower: {len(ctc)} steps, one every {percentile(gaps, 50):.2f} s  ·  "
+        kind = ((log.get("words") or {}).get("follower")) or "rules"
+        fms = [e["follow_ms"] for e in ctc if e.get("follow_ms") is not None]
+        out.append(f"  word follower ({kind}): {len(ctc)} steps, one every {percentile(gaps, 50):.2f} s  ·  "
                    f"model {percentile([e['ms'] for e in ctc], 50):.0f} ms p50, {percentile([e['ms'] for e in ctc], 90):.0f} p90"
-                   f"  ·  shown {percentile([e['delay'] for e in ctc], 50):.2f} s after its audio")
+                   + (f"  ·  follower {percentile(fms, 50):.1f} ms p50, {percentile(fms, 90):.1f} p90" if fms else "")
+                   + f"  ·  shown {percentile([e['delay'] for e in ctc], 50):.2f} s after its audio")
     ages = {e["end"]: e["age_ms"] for e in log["events"] if e["type"] == "visible" and e.get("age_ms") is not None}
     age = [ages[h["end"]] for h in steady if h["end"] in ages]
     if age:

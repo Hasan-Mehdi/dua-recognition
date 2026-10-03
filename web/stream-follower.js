@@ -237,6 +237,7 @@ export class StreamFollower {
     const midSrc = new Float64Array(nl).fill(NEG);
     const lineSrc = new Float64Array(nl).fill(NEG);
     const anySrc = new Float64Array(nl).fill(NEG);
+    const jsrc = new Float64Array(nl).fill(NEG);
     const into = new Float64Array(nl).fill(NEG);
     const Fn = new Float64Array(nl).fill(NEG);
     const X = new Float64Array(nl).fill(NEG);
@@ -248,9 +249,10 @@ export class StreamFollower {
         // a broken window (fp16 overflow on silence): no evidence, as stream_follower.py
         em[c] = Number.isFinite(v) ? (c > 0 ? v - qpen : v - cfg.blankBias) / temp : (c > 0 ? 0 : -cfg.blankBias) / temp;
       }
-      let best = NEG;
-      for (let c = 0; c < C; c++) if (em[c] > best) best = em[c];
+      let bestl = NEG; // the frame's best letter
+      for (let c = 1; c < C; c++) if (em[c] > bestl) bestl = em[c];
       const bl = em[0];
+      const fe = Math.max(bl, bestl - cfg.fillCost); // the filler: any letter at fillCost, a blank free
       for (let ai = 0; ai < nAct; ai++) {
         const k = act[ai];
         let acc = NEG;
@@ -263,13 +265,14 @@ export class StreamFollower {
         midSrc[k] = acc;
         anySrc[k] = acc2;
         lineSrc[k] = lae(we[lineLastWord[k]], acc);
+        jsrc[k] = lae(lineSrc[k], F[k]); // back from talk, a reader resumes anywhere a finished line could
       }
       let m = NEG;
-      for (let ai = 0; ai < nAct; ai++) if (lineSrc[act[ai]] > m) m = lineSrc[act[ai]];
+      for (let ai = 0; ai < nAct; ai++) if (jsrc[act[ai]] > m) m = jsrc[act[ai]];
       let far = NEG;
       if (m > NEG / 2) {
         let s = 0;
-        for (let ai = 0; ai < nAct; ai++) s += Math.exp(lineSrc[act[ai]] - m);
+        for (let ai = 0; ai < nAct; ai++) s += Math.exp(jsrc[act[ai]] - m);
         far = m + Math.log(s) + cfg.cFar - Math.log(nl);
       }
       for (let ai = 0; ai < nAct; ai++) {
@@ -280,12 +283,12 @@ export class StreamFollower {
       }
       for (let ai = 0; ai < nAct; ai++) {
         const k = act[ai];
-        let v = lineSrc[k] + cfg.cRestart;
+        let v = jsrc[k] + cfg.cRestart;
         for (let q = 0; q < 3; q++) {
           let src = k + q + 1;
-          if (src < nl) v = lae(v, lineSrc[src] + cfg.cBack[q]);
+          if (src < nl) v = lae(v, jsrc[src] + cfg.cBack[q]);
           src = k - (q + 2);
-          if (src >= 0) v = lae(v, lineSrc[src] + cfg.cSkip[q]);
+          if (src >= 0) v = lae(v, jsrc[src] + cfg.cSkip[q]);
         }
         if (k >= 1) {
           v = lae(v, midSrc[k - 1] + cRest);
@@ -296,7 +299,7 @@ export class StreamFollower {
       }
       for (let ai = 0; ai < nAct; ai++) {
         const k = act[ai];
-        Fn[k] = lae(F[k], lineSrc[k] + cfg.cFillIn) + (best - cfg.fillCost);
+        Fn[k] = lae(F[k], lineSrc[k] + cfg.cFillIn) + fe;
       }
       for (let ai = 0; ai < nAct; ai++) {
         const k = act[ai];

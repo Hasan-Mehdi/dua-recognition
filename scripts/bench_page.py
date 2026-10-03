@@ -130,7 +130,7 @@ def main() -> None:
                      dua=it["dua"], offset=off)
             page[it["id"]] = m
         res[name] = page
-        (OUT / f"{name}.json").write_text(json.dumps({"page": page}, ensure_ascii=False))
+        (OUT / f"{name}.json").write_text(json.dumps({"page": page}, ensure_ascii=False), encoding="utf-8")
     both = set.intersection(*(set(r) for r in res.values())) if res else set()
     for name, page in res.items():
         print(f"\n== {name} (real page, headless Chrome): {len(both)} items played by every variant")

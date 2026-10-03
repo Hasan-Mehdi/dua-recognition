@@ -102,6 +102,8 @@ What each piece bought, on dev voices (all scored on the grid, not on the case t
 | hold through a tracker lapse only while silent | an unknown du'a kept the last one on screen | unknown du'a shown 24 -> 14% (dev) |
 | 1 nat off the blank column | ordinary voices and echo give faint letters; the belief rested in the blank after the last word | hall +14 pts, far +11, his voice: line lag 0.93 -> 0.55 s; salawat -17 pts (still +7 over today's phone) |
 | a du'a change counts after 2 s | texts sharing a passage (Ayat al-Kursi in Namaz-e-Wahshat and Eid-e-Mubahila) flipped the tracker's du'a for a moment | his sessions: wrong du'a 3.5 -> 2.0%, on line 76 -> 78%; a real switch followed 2 s later |
+| the filler takes blanks free, pays only on letters | most frames of any speech are blanks: at a flat cost per frame the du'a's own blank states beat the filler all through someone else's talk (it never held more than 2% of the belief) | talk: early moves 10.6 -> 7.7 /10 min, stays put 66 -> 77%; his sessions: jumps 3.8 -> 2.4, early 8.0 -> 5.9 /10 min, stays put 87 -> 98% |
+| ...and leaves for anywhere a finished line could (restart, back, skip, far) | back from talk a reader may start anywhere; leaving only for the next line made jumped-to speech look like talk | jumping around: on line 55 -> 58% of the 65% before the filler change; kept at fill cost 1 (2.0 gives that back and loses the talk gains) |
 
 Tried and dropped: weighing the tracker more (0.6, 1.0: no gain, more lost time); a "push" from the
 tracker when the decoder stalls (no gain in echo, +3.6 jumps/10 min when readers go back); a lower
@@ -118,23 +120,25 @@ Decoder (the defaults above) against today's phone, the same 405 items (799 minu
 | | today's phone | stream decoder |
 |---|---:|---:|
 | on the reader's line | 83% | **87%** |
-| right word | 60% | **67%** |
-| jumps where the reader isn't /10 min | 3.4 | **2.7** |
-| early moves /10 min | 3.5 | **2.8** |
-| lost (4+ s off the line) /10 min | 4.2 | **1.6** |
-| go-back / skip / jump followed within 3 s | 58% | **74%** |
-| stays put through pause / talk / salawat | 69% | **85%** |
+| right word | 61% | **67%** |
+| jumps where the reader isn't /10 min | 3.4 | **2.4** |
+| early moves /10 min | 3.5 | **2.5** |
+| lost (4+ s off the line) /10 min | 4.2 | **1.8** |
+| go-back / skip / jump followed within 3 s | 58% | **72%** |
+| stays put through pause / talk / salawat | 69% | **88%** |
 | line-change lag | 0.43 s | **0.41 s** |
 | du'a found within 10 s | 80% | 79% |
 | unknown du'a: some du'a shown | 21% | 28% |
 
-By cell (23 with readings to score): time on the line is better in 17, equal in 5 and a point lower in
-1 (starting mid-du'a, 89 vs 90%); lost time is lower or equal in all of them. Where it isn't better: a few more false jumps in plain reading and pauses (+0.2 and +1.1 /10 min),
-early moves in talk (+1.8 /10 min), the unknown-du'a case (+7 pts), finding the du'a in some conditions
-(the 2 s du'a-change rule: stumble -6, hall -6, phone call -7 pts), and jumping around the du'a, where
-following within 3 s dropped 6 pts. Dev voices agree (on line +4, lost -2.1 /10 min, follows +17, stays
-put +20). On Hasan's own sessions (35 items): on line 68 -> 78%, lost 7.7 -> 3.8, follows 47 -> 85%,
-stays put 78 -> 87%, line lag 0.55 -> 0.51 s; jumps 2.8 -> 3.8 /10 min.
+By cell (23 with readings to score): time on the line is better in 16, equal in 5 and lower in 2
+(starting mid-du'a, -1; jumping around the du'a, -7); lost time is lower or equal everywhere except
+jumping around (+2.5 /10 min). Where it isn't better: jumping around the du'a (following within 3 s
+-13 pts: the filler that keeps talk from moving the highlight also holds a far jump back a moment),
+a few more false jumps in pauses (+0.7 /10 min), the unknown-du'a case (+7 pts), and finding the du'a
+in some conditions (the 2 s du'a-change rule: stumble -6, hall -6, phone call -7 pts). Dev voices agree
+(on line +4, lost -1.9 /10 min, follows +14, stays put +23, jumps -0.7). On Hasan's own sessions (35
+items): on line 67 -> 78%, early moves 11.1 -> 5.9 /10 min, lost 7.7 -> 3.8, jumps 2.8 -> 2.4, follows
+47 -> 85%, stays put 78 -> 98%, line lag 0.55 -> 0.51 s.
 
 ## Outside the follower
 

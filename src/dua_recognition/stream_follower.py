@@ -13,7 +13,7 @@ This keeps a belief over every position in the du'a instead and updates it frame
     go back k = 1..3 lines (line start)    c_back[k-1]
     skip ahead to line +2..+4              c_skip[k-2]; the rest of a line, from mid-line: + c_mid
     anywhere else in the du'a              c_far (spread over its lines)
-    talk / salawat / anything not in it    filler: enter c_fill_in, any frame at (best column - fill_cost),
+    talk / salawat / anything not in it    filler: enter c_fill_in, any letter at fill_cost (a blank free),
                                            leave to a word of the line it left, or the next line's start
 
 A pause is free (blank after the last letter). A refrain keeps every repetition alive until the
@@ -55,7 +55,9 @@ class StreamConfig:
     c_rest: float = -3.0  # ...for the next line's start (on top of c_mid)
     c_far: float = -13.0  # all other line starts together
     c_fill_in: float = -8.0
-    fill_cost: float = 1.0  # nats per frame below the frame's best column
+    fill_cost: float = 1.0  # nats per letter frame below the frame's best letter (a blank frame is free:
+    # most frames of any speech are blanks, and a flat cost per frame let the du'a's own blank states win
+    # over the filler all through someone else's talk)
     c_fill_word: float = -2.0  # filler back to a word of its line (spread over the line's words)
     c_fill_next: float = -1.0  # filler to the next line's start
     # Interjections: the salawat said between lines or after the Prophet's name (optionally with
@@ -148,7 +150,7 @@ def _frame_numpy(L, B, F, IL, IB, lp_t, d: _Dua, cfg_arr, ri, diffi, exiti):
      c_fill_next, c_int_in, c_int_next, c_int_word) = cfg_arr
     nl = d.line_first_word.size
     emit = lp_t[d.r]
-    best = float(np.max(lp_t))
+    fe = max(float(lp_t[0]), float(np.max(lp_t[1:])) - fill_cost)  # the filler: any letter at fill_cost, a blank free
     # departures: from each word's end (its last letter, or the blank after it)
     we = np.logaddexp(L[d.word_last], B[d.word_last])
     end_src = we[d.line_last_word]  # the line finished
@@ -156,19 +158,21 @@ def _frame_numpy(L, B, F, IL, IB, lp_t, d: _Dua, cfg_arr, ri, diffi, exiti):
     mid_src = np.logaddexp.reduceat(mid, d.line_first_word)
     line_src = np.logaddexp(end_src, mid_src)
     any_src = np.logaddexp.reduceat(we, d.line_first_word)  # any word end of the line, no c_mid
+    # a reader back from talk can resume anywhere a finished line could: the filler joins the sources
+    jsrc = np.logaddexp(line_src, F)
     # into line starts
-    into = line_src + c_restart
+    into = jsrc + c_restart
     for off, c in ((1, b1), (2, b2), (3, b3)):  # back: line k from line k+off
-        into[: nl - off] = np.logaddexp(into[: nl - off], line_src[off:] + c)
+        into[: nl - off] = np.logaddexp(into[: nl - off], jsrc[off:] + c)
     for off, c in ((2, s2), (3, s3), (4, s4)):  # skip: line k from line k-off
-        into[off:] = np.logaddexp(into[off:], line_src[: nl - off] + c)
+        into[off:] = np.logaddexp(into[off:], jsrc[: nl - off] + c)
     into[1:] = np.logaddexp(into[1:], mid_src[:-1] + c_rest)  # the rest of a line skipped
-    m = float(np.max(line_src))
+    m = float(np.max(jsrc))
     if m > NEG / 2:
-        far = m + float(np.log(np.sum(np.exp(line_src - m)))) + c_far - np.log(nl)
+        far = m + float(np.log(np.sum(np.exp(jsrc - m)))) + c_far - np.log(nl)
         into = np.logaddexp(into, far)
     # filler: entered from the line, held at the frame's best column less fill_cost, left again
-    F_new = np.logaddexp(F, line_src + c_fill_in) + (best - fill_cost)
+    F_new = np.logaddexp(F, line_src + c_fill_in) + fe
     into[1:] = np.logaddexp(into[1:], F[:-1] + c_fill_next)
     # interjection (salawat): entered from any word end of the line, read letter by letter, left again
     K = ri.size
@@ -221,6 +225,7 @@ def _advance_loop(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
     mid_src = np.empty(nl)
     line_src = np.empty(nl)
     any_src = np.empty(nl)
+    jsrc = np.empty(nl)
     into = np.empty(nl)
     entry = np.empty(J)
     Fn = np.empty(nl)
@@ -228,11 +233,14 @@ def _advance_loop(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
     backs = (b1, b2, b3)
     skips = (s2, s3, s4)
     for t in range(frames.shape[0]):
-        best = NEG
-        for c in range(frames.shape[1]):
+        bestl = NEG  # the frame's best letter
+        for c in range(1, frames.shape[1]):
             v = frames[t, c] / temp
-            if v > best:
-                best = v
+            if v > bestl:
+                bestl = v
+        fe = bestl - fill_cost  # the filler: any letter at fill_cost, a blank free
+        if frames[t, 0] / temp > fe:
+            fe = frames[t, 0] / temp
         bl = frames[t, 0] / temp
         for w in range(nw):
             j = word_last[w]
@@ -246,15 +254,16 @@ def _advance_loop(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
             mid_src[li] = acc
             any_src[li] = acc2
             line_src[li] = _lae(we[line_last_word[li]], acc)
+            jsrc[li] = _lae(line_src[li], F[li])
         m = NEG
         for li in range(nl):
-            if line_src[li] > m:
-                m = line_src[li]
+            if jsrc[li] > m:
+                m = jsrc[li]
         far = NEG
         if m > NEG / 2:
             ssum = 0.0
             for li in range(nl):
-                ssum += np.exp(line_src[li] - m)
+                ssum += np.exp(jsrc[li] - m)
             far = m + np.log(ssum) + c_far - np.log(nl)
         for li in range(nl):
             x = NEG
@@ -263,14 +272,14 @@ def _advance_loop(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
                     x = _lae(x, _lae(IL[li, k], IB[li, k]))
             X[li] = x
         for k in range(nl):
-            v = line_src[k] + c_restart
+            v = jsrc[k] + c_restart
             for o in range(3):
                 src = k + o + 1
                 if src < nl:
-                    v = _lae(v, line_src[src] + backs[o])
+                    v = _lae(v, jsrc[src] + backs[o])
                 src = k - (o + 2)
                 if src >= 0:
-                    v = _lae(v, line_src[src] + skips[o])
+                    v = _lae(v, jsrc[src] + skips[o])
             if k >= 1:
                 v = _lae(v, mid_src[k - 1] + c_rest)
                 v = _lae(v, F[k - 1] + c_fill_next)
@@ -279,7 +288,7 @@ def _advance_loop(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
             v = _lae(v, far)
             into[k] = v
         for li in range(nl):
-            Fn[li] = _lae(F[li], line_src[li] + c_fill_in) + (best - fill_cost)
+            Fn[li] = _lae(F[li], line_src[li] + c_fill_in) + fe
         # interjection letters, right to left (k - 1 is still the previous frame's)
         for li in range(nl):
             for k in range(K - 1, -1, -1):
@@ -352,6 +361,7 @@ def _advance_beam(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
     mid_src = np.full(nl, NEG)
     line_src = np.full(nl, NEG)
     any_src = np.full(nl, NEG)
+    jsrc = np.full(nl, NEG)
     into = np.full(nl, NEG)
     Fn = np.full(nl, NEG)
     X = np.full(nl, NEG)
@@ -360,11 +370,14 @@ def _advance_beam(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
     act = np.flatnonzero(active)
     n_act = act.size
     for t in range(frames.shape[0]):
-        best = NEG
-        for c in range(frames.shape[1]):
+        bestl = NEG  # the frame's best letter
+        for c in range(1, frames.shape[1]):
             v = frames[t, c] / temp
-            if v > best:
-                best = v
+            if v > bestl:
+                bestl = v
+        fe = bestl - fill_cost  # the filler: any letter at fill_cost, a blank free
+        if frames[t, 0] / temp > fe:
+            fe = frames[t, 0] / temp
         bl = frames[t, 0] / temp
         for ai in range(n_act):
             li = act[ai]
@@ -378,15 +391,16 @@ def _advance_beam(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
             mid_src[li] = acc
             any_src[li] = acc2
             line_src[li] = _lae(we[line_last_word[li]], acc)
+            jsrc[li] = _lae(line_src[li], F[li])
         m = NEG
         for ai in range(n_act):
-            if line_src[act[ai]] > m:
-                m = line_src[act[ai]]
+            if jsrc[act[ai]] > m:
+                m = jsrc[act[ai]]
         far = NEG
         if m > NEG / 2:
             ssum = 0.0
             for ai in range(n_act):
-                ssum += np.exp(line_src[act[ai]] - m)
+                ssum += np.exp(jsrc[act[ai]] - m)
             far = m + np.log(ssum) + c_far - np.log(nl)
         for ai in range(n_act):
             li = act[ai]
@@ -397,14 +411,14 @@ def _advance_beam(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
             X[li] = x
         for ai in range(n_act):
             k = act[ai]
-            v = line_src[k] + c_restart
+            v = jsrc[k] + c_restart
             for o in range(3):
                 src = k + o + 1
                 if src < nl:
-                    v = _lae(v, line_src[src] + backs[o])
+                    v = _lae(v, jsrc[src] + backs[o])
                 src = k - (o + 2)
                 if src >= 0:
-                    v = _lae(v, line_src[src] + skips[o])
+                    v = _lae(v, jsrc[src] + skips[o])
             if k >= 1:
                 v = _lae(v, mid_src[k - 1] + c_rest)
                 v = _lae(v, F[k - 1] + c_fill_next)
@@ -414,7 +428,7 @@ def _advance_beam(L, B, F, IL, IB, frames, temp, r, diff, word_first, word_last,
             into[k] = v
         for ai in range(n_act):
             li = act[ai]
-            Fn[li] = _lae(F[li], line_src[li] + c_fill_in) + (best - fill_cost)
+            Fn[li] = _lae(F[li], line_src[li] + c_fill_in) + fe
         for ai in range(n_act):
             li = act[ai]
             for k in range(K - 1, -1, -1):

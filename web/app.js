@@ -236,12 +236,14 @@ class DeviceEngine {
     const lineMass = (word) => this.tracker.lineMass(word);
     // The stop detector hears now; the window ended (total - id) ago: its quiet then, if still quiet now.
     const quietAtEnd = this.ear.quiet == null ? null : Math.max(0, this.ear.quiet - (this.total - data.id) / SR);
+    const f0 = performance.now();
     const w = stream
       ? this.follower.step(data.frames, data.T, data.C, data.id / SR, this.anchor, quietAtEnd, lineMass, this.anchorAt)
       : this.follower.step(data.frames, data.T, data.C, data.id / SR, this.anchor, this.ear.quiet, lineMass);
+    const followMs = performance.now() - f0; // on the page's own thread: the phone's budget is ~100 ms a step
     if (w != null) this.framesAt = data.id;
     if (log.live) log.event("ctc", { end: data.id / SR, ms: data.ms, delay: (this.total - data.id) / SR,
-      word: w, anchor: this.anchor });
+      word: w, anchor: this.anchor, follow_ms: Number(followMs.toFixed(1)) });
     if (w != null) {
       const wd = ix.words[w];
       // On a line's last word with the reciter silent: the next line is previewed, and stays
