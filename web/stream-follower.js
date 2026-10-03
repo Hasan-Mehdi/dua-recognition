@@ -46,6 +46,11 @@ export const STREAM_DEFAULTS = {
   lineSteps: 2,
   nextP: 0.6,
   nextSteps: 2,
+  // Into the next line on evidence (nextMargin 0 = off): see StreamConfig.next_margin.
+  nextMargin: 0,
+  nextHold: 0.5,
+  gateWords: 2,
+  gateTentative: true,
   lapseS: 20.0,
   // ...but while the reader is making sound (stop detector under lapseQuiet s), only lapseVoice s:
   // recitation the tracker can't place is likely a text it doesn't know, not a lull.
@@ -105,6 +110,7 @@ export class StreamFollower {
     this.word = null;
     this.cand = null;
     this.candN = 0;
+    this.gateN = 0; // steps in a row a move into the next line has leant on the frames
     this.tStream = null;
     this.lastAnchorT = null;
     this.lapseSince = null;
@@ -626,6 +632,7 @@ export class StreamFollower {
     if (pf > 0.5) {
       this.cand = null;
       this.candN = 0;
+      this.gateN = 0;
       return this.word;
     }
     let best = 0;
@@ -639,12 +646,14 @@ export class StreamFollower {
     if (w === cur) {
       this.cand = null;
       this.candN = 0;
+      this.gateN = 0;
       return cur;
     }
     const lineB = dd.lineOfWord[best];
     const lineC = dd.lineOfWord[cur - dd.lo];
     const sameLine = lineB === lineC;
-    const nextLine = lineB === lineC + 1 && best === dd.lineFirstWord[lineB];
+    const intoNext = lineB === lineC + 1;
+    const nextLine = intoNext && best === dd.lineFirstWord[lineB];
     let needP;
     let needN;
     if (sameLine) {
@@ -660,15 +669,51 @@ export class StreamFollower {
     if (pw[best] < needP) {
       this.cand = null;
       this.candN = 0;
+      this.gateN = 0;
       return cur;
     }
     this.candN = this.cand === w ? this.candN + 1 : 1;
     this.cand = w;
-    if (this.candN >= needN) {
+    let gate = true;
+    if (intoNext && cfg.nextMargin > 0) {
+      const pg = cfg.gateTentative ? pw : this.posterior(this.st).pw;
+      const m = this._nextMargin(dd, lineC, pg);
+      this.gateN = m >= 0 ? this.gateN + 1 : 0;
+      gate = m >= cfg.nextMargin || (m >= 0 && this.gateN >= Math.floor(cfg.nextHold / cfg.hop + 0.5));
+    } else {
+      this.gateN = 0;
+    }
+    if (this.candN >= needN && gate) {
       this.word = w;
       this.cand = null;
       this.candN = 0;
+      this.gateN = 0;
     }
     return this.word;
+  }
+
+  // Nats by which the frames prefer the start of line k+1 over restarting line k, going back or
+  // skipping (stream_follower.py _next_margin); 0 when no alternative is in the beam.
+  _nextMargin(dd, k, pw) {
+    const cfg = this.cfg;
+    const start = (li) => {
+      const a = dd.lineFirstWord[li];
+      const b = Math.min(a + cfg.gateWords, dd.lineLastWord[li] + 1);
+      let s = 0;
+      for (let w = a; w < b; w++) s += pw[w];
+      return s;
+    };
+    const alts = [[k, cfg.cRestart]];
+    cfg.cBack.forEach((c, i) => alts.push([k - 1 - i, c]));
+    cfg.cSkip.forEach((c, i) => alts.push([k + 2 + i, c]));
+    let best = -Infinity;
+    for (const [li, c] of alts) {
+      if (li >= 0 && li < dd.nl) {
+        const mass = start(li);
+        if (mass > 1e-300) best = Math.max(best, Math.log(mass) - c);
+      }
+    }
+    if (best === -Infinity) return 0;
+    return Math.log(Math.max(start(k + 1), 1e-300)) - best;
   }
 }

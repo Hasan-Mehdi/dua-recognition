@@ -82,7 +82,9 @@ def test_numba_equals_numpy():
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
-@pytest.mark.parametrize("extra", [{}, {"trackerWeight": 0.0, "nextSteps": 1}, {"quietPen": 0.0, "interjection": ""}])
+@pytest.mark.parametrize("extra", [{}, {"trackerWeight": 0.0, "nextSteps": 1}, {"quietPen": 0.0, "interjection": ""},
+                                   {"nextMargin": 3.0, "nextHold": 0.5, "gateWords": 2},
+                                   {"nextMargin": 2.0, "nextHold": 0.3, "gateTentative": False}])
 def test_js_stream_matches_python(tmp_path, extra):
     all_duas = load_all()
     corpus = {k: all_duas[k] for k in DUAS}
@@ -109,7 +111,9 @@ def test_js_stream_matches_python(tmp_path, extra):
               "interjection": "اللهم صل على محمد وآل محمد|وعجل فرجهم", **extra}
     py_cfg = StreamConfig(tracker_weight=js_cfg["trackerWeight"], next_steps=js_cfg["nextSteps"],
                           quiet_pen=js_cfg["quietPen"],
-                          interjections=(js_cfg["interjection"],) if js_cfg["interjection"] else ())
+                          interjections=(js_cfg["interjection"],) if js_cfg["interjection"] else (),
+                          next_margin=js_cfg.get("nextMargin", 0.0), next_hold=js_cfg.get("nextHold", 0.5),
+                          gate_words=js_cfg.get("gateWords", 2), gate_tentative=js_cfg.get("gateTentative", True))
 
     def mass_fn(anchor):
         if anchor is None:

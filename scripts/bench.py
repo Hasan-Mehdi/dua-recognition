@@ -1453,7 +1453,12 @@ def cmd_score(args) -> None:
     sc_kw = {}
     for a in (x for x in args.sc.split(",") if x):
         k, v = a.split("=")
-        sc_kw[k] = tuple(float(x) for x in v.split(";")) if ";" in v else             (int(v) if k in ("line_steps", "next_steps") else float(v))
+        if v.lower() in ("true", "false"):
+            sc_kw[k] = v.lower() == "true"
+        elif ";" in v:
+            sc_kw[k] = tuple(float(x) for x in v.split(";"))
+        else:
+            sc_kw[k] = int(v) if k in ("line_steps", "next_steps", "gate_words") else float(v)
     init = (cfg_kw, fw_kw, asr_tag, ctc_tag, args.delay, args.follow_delay, args.display, sc_kw, args.same_text)
     results = {}
     with Pool(args.workers, initializer=_worker_init, initargs=init) as pool:
@@ -1495,6 +1500,110 @@ def cmd_report(args) -> None:
     report(res, args.compare, args.split)
 
 
+# Pre-registered bars for the jump work (data/cache/jumps/prereg.md): moves the reader makes, and
+# the cells where the reader stays on the text.
+MOVE_CELLS = {"back", "skip", "jumps", "combo", "repeat", "switch", "midstart", "stumble", "ooc"}
+REFRAIN = ["dua-baha", "dua-jawshan-kabir", "mafatih-dua-asharat", "dua-mujeer"]
+LANES = ["studio", "majlis", "harvest", "mafatih", "user"]
+
+
+def cmd_guard(args) -> None:
+    """Every pre-registered bar, candidate vs baseline on the items both scored: PASS/FAIL each."""
+    def load(n):
+        return json.loads((BENCH / "results" / f"{n}.json").read_text(encoding="utf-8"))["items"]
+
+    new, old = load(args.name), load(args.compare)
+    keys = [k for k in new if k in old]
+    new, old = {k: new[k] for k in keys}, {k: old[k] for k in keys}
+    rows, ok_all = [], {"gain": True, "guard": True}
+
+    def bar(group, label, b, c, ok, fmt="{:.2f}"):
+        ok_all[group] &= bool(ok)
+        rows.append((group, label, fmt.format(b) if b == b else "-", fmt.format(c) if c == c else "-", ok))
+
+    def agg(ms, k):
+        return aggregate(ms).get(k, float("nan")) if ms else float("nan")
+
+    def cells(r, pred):
+        return [m for m in r.values() if pred(m)]
+
+    def scen(sc):
+        return lambda m: m["scenario"] == sc
+
+    for metric, rel_cells in (("jumps_10", {"back": -0.4, "skip": -0.4, "combo": -0.4}),
+                              ("early_10", {"repeat": -0.4, "talk": -0.4})):
+        b, c = agg(list(old.values()), metric), agg(list(new.values()), metric)
+        bar("gain", f"{metric} all -30%", b, c, c <= b * 0.7)
+        for sc, rel in rel_cells.items():
+            b, c = agg(cells(old, scen(sc)), metric), agg(cells(new, scen(sc)), metric)
+            bar("gain", f"{metric} {sc} {rel:+.0%}", b, c, c <= b * (1 + rel))
+
+    def stat(m):
+        return m["scenario"] not in MOVE_CELLS
+
+    for metric in ("jumps_10", "early_10"):
+        b, c = agg(cells(old, stat), metric), agg(cells(new, stat), metric)
+        bar("guard", f"{metric} stationary cells pooled <= +0.2", b, c, c <= b + 0.2)
+    for kind in ("back", "skip", "jump", "repeat", "restart", "switch"):
+        def f3(r):
+            xs = [lag for m in r.values() for k, lag in m.get("events", []) if k == kind]
+            return float(np.mean([x is not None and x <= 3.0 for x in xs])) if xs else float("nan")
+        b, c = f3(old), f3(new)
+        bar("guard", f"follows<=3s {kind} >= -2 pts", b, c, c != c or c >= b - 0.02, "{:.1%}")
+
+    def med(r):
+        return float(np.median([x for m in r.values() for _, x in m.get("events", []) if x is not None]))
+
+    bar("guard", "follow median <= +0.2 s", med(old), med(new), med(new) <= med(old) + 0.2)
+    for who in ["all"] + REFRAIN:
+        lb = [x for m in old.values() if who == "all" or m["dua"] == who for x in m.get("entry_lags", [])]
+        lc = [x for m in new.values() if who == "all" or m["dua"] == who for x in m.get("entry_lags", [])]
+        if len(lb) < 30 or not lc:
+            continue
+        bar("guard", f"line lag median {who} <= +0.05 s", float(np.median(lb)), float(np.median(lc)),
+            np.median(lc) <= np.median(lb) + 0.05)
+        bar("guard", f"line lag p90 {who} <= +0.15 s", float(np.percentile(lb, 90)), float(np.percentile(lc, 90)),
+            np.percentile(lc, 90) <= np.percentile(lb, 90) + 0.15)
+    for lane in LANES:
+        ob, nb = cells(old, lambda m: m["lane"] == lane), cells(new, lambda m: m["lane"] == lane)
+        if not ob:
+            continue
+        for metric, lim, fmt in (("on_line", -0.005, "{:.1%}"), ("lost_10", 0.1, "{:.2f}"), ("stay", -0.01, "{:.1%}"),
+                                 ("wrong_dua", 0.001, "{:.2%}"), ("word_exact", -0.01, "{:.1%}")):
+            b, c = agg(ob, metric), agg(nb, metric)
+            if b != b:
+                continue
+            bar("guard", f"{lane}: {metric} {lim:+g}", b, c, c >= b + lim if lim < 0 else c <= b + lim, fmt)
+    b, c = agg(list(old.values()), "found_d10s"), agg(list(new.values()), "found_d10s")
+    bar("guard", "found<=10s* all >= -0.5 pt", b, c, c >= b - 0.005, "{:.1%}")
+    b, c = agg(cells(old, scen("ooc")), "ooc_shown"), agg(cells(new, scen("ooc")), "ooc_shown")
+    bar("guard", f"ooc shown <= +{args.ooc:g} pts", b, c, c != c or c <= b + args.ooc / 100, "{:.1%}")
+    uo, un = cells(old, lambda m: m["lane"] == "user"), cells(new, lambda m: m["lane"] == "user")
+    if un:
+        bar("guard", "user lane on line >= 78% (absolute)", agg(uo, "on_line"), agg(un, "on_line"),
+            agg(un, "on_line") >= 0.78, "{:.1%}")
+        bar("guard", "user lane stays put >= 97% (absolute)", agg(uo, "stay"), agg(un, "stay"),
+            agg(un, "stay") >= 0.97, "{:.1%}")
+    print(f"{args.name} vs {args.compare}: {len(keys)} items")
+    print("| bar | baseline | candidate | |")
+    print("|---|---:|---:|---|")
+    for group, label, b, c, ok in rows:
+        print(f"| {group}: {label} | {b} | {c} | {'PASS' if ok else '**FAIL**'} |")
+    if un:  # Hasan's sessions per source recording (scenario items reuse the same moments)
+        src = {}
+        for k, m in new.items():
+            if m["lane"] == "user":
+                src.setdefault(k.split("-", 1)[1], []).append((m, old[k]))
+        print()
+        print("user lane per source recording (jumps, early: baseline -> candidate, over its items)")
+        for sid, pairs in sorted(src.items()):
+            print(f"  {sid}: jumps {sum(o['jumps'] for _, o in pairs)} -> {sum(n['jumps'] for n, _ in pairs)}, "
+                  f"early {sum(o['early'] for _, o in pairs)} -> {sum(n['early'] for n, _ in pairs)}"
+                  f"  ({pairs[0][0]['dua']})")
+    print()
+    print(f"gains {'PASS' if ok_all['gain'] else 'FAIL'}, guards {'PASS' if ok_all['guard'] else 'FAIL'}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1534,10 +1643,14 @@ def main() -> None:
     r.add_argument("--name", required=True)
     r.add_argument("--compare")
     r.add_argument("--split", choices=["dev", "test", "all"], default="all")
+    g = sub.add_parser("guard", help="the pre-registered bars of data/cache/jumps/prereg.md, PASS/FAIL")
+    g.add_argument("--name", required=True)
+    g.add_argument("--compare", required=True)
+    g.add_argument("--ooc", type=float, default=0.0, help="allowed rise of ooc shown, pts (fix B: 2)")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     {"sources": cmd_sources, "build": cmd_build, "asr": cmd_asr, "score": cmd_score,
-     "report": cmd_report}[args.cmd](args)
+     "report": cmd_report, "guard": cmd_guard}[args.cmd](args)
 
 
 if __name__ == "__main__":

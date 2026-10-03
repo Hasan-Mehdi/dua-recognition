@@ -121,7 +121,11 @@ class DeviceEngine {
     // The stream decoder (stream-follower.js: one belief over the whole du'a, reading moves as its
     // transitions; docs/results/bench.md) since 2026-10-03; ?follower=rules: the rule-based follower.js.
     this.followerKind = params.get("follower") === "rules" ? "rules" : "stream";
-    this.streamCfg = {};
+    // ?sc=nextMargin:3,nextHold:0.5 (a;b;c for lists): StreamConfig overrides for page runs
+    // (scripts/bench_page.py variants); the session log's follower config echoes what ran.
+    const scVal = (x) => (x === "true" ? true : x === "false" ? false : Number.isNaN(Number(x)) ? x : Number(x));
+    this.streamCfg = Object.fromEntries((params.get("sc") || "").split(",").filter((kv) => kv.includes(":"))
+      .map((kv) => { const [k, v] = kv.split(":"); return [k, v.includes(";") ? v.split(";").map(scVal) : scVal(v)]; }));
   }
   // The follower is placing the words (its last result under a second old).
   get following() {

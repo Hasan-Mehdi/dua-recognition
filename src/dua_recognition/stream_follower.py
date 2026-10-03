@@ -83,6 +83,18 @@ class StreamConfig:
     line_steps: int = 2  # ...for this many steps in a row
     next_p: float = 0.6  # the next line's first word: this much of the belief...
     next_steps: int = 2  # ...for this many steps
+    # Into the next line on evidence (next_margin 0 = off). With the prior "the next line comes next"
+    # a crossing committed on one or two frames of letters, so a reader going back, repeating a line
+    # or talking saw the next line first (docs/results/jumps.md). A move into line k+1 (any of its
+    # words) is shown only when the frames prefer its first `gate_words` words over restarting line k,
+    # going back to k-1..k-3 or skipping to k+2..k+4 by `next_margin` nats (each alternative's belief
+    # with its own transition cost taken back off, so the prior doesn't decide), or, while they merely
+    # lean that way (margin >= 0), after `next_hold` s of such steps in a row. Alternatives out of
+    # the beam count as absent; with none left only the hold can commit.
+    next_margin: float = 0.0
+    next_hold: float = 0.5
+    gate_words: int = 2
+    gate_tentative: bool = True  # judge on the newest, tentative frames too (False: committed only)
     lapse_s: float = 20.0  # the tracker without a du'a this long (a long pause, a lull): start over
     # ...but while the reader is making sound (stop detector under lapse_quiet s), only lapse_voice s:
     # recitation the tracker can't place is likely a text it doesn't know, not a lull.
@@ -515,6 +527,7 @@ class StreamFollower:
         self.word: int | None = None
         self._cand: int | None = None
         self._cand_n = 0
+        self._gate_n = 0  # steps in a row a move into the next line has leant on the frames
         self._t_stream = None  # end time of the last committed frame
         self._last_anchor_t = None
         self._lapse_since = None
@@ -837,7 +850,7 @@ class StreamFollower:
         pw, pf = self.posterior(L, B, F, IL, IB)
         dd = self._dua(self.dua)
         if pf > 0.5:  # talking, or something else: hold
-            self._cand, self._cand_n = None, 0
+            self._cand, self._cand_n, self._gate_n = None, 0, 0
             return self.word
         best = int(np.argmax(pw))
         w = dd.lo + best
@@ -846,10 +859,12 @@ class StreamFollower:
             self.word = w
             return w
         if w == cur:
-            self._cand, self._cand_n = None, 0
+            self._cand, self._cand_n, self._gate_n = None, 0, 0
             return cur
-        same_line = dd.line_of_word[best] == dd.line_of_word[cur - dd.lo]
-        next_line = dd.line_of_word[best] == dd.line_of_word[cur - dd.lo] + 1 and best == dd.line_first_word[dd.line_of_word[best]]
+        k = int(dd.line_of_word[cur - dd.lo])
+        same_line = dd.line_of_word[best] == k
+        into_next = dd.line_of_word[best] == k + 1
+        next_line = into_next and best == dd.line_first_word[dd.line_of_word[best]]
         if same_line:
             need_p, need_n = cfg.show_p, 1 if best > cur - dd.lo else cfg.line_steps
         elif next_line:
@@ -857,13 +872,46 @@ class StreamFollower:
         else:
             need_p, need_n = cfg.line_p, cfg.line_steps
         if pw[best] < need_p:
-            self._cand, self._cand_n = None, 0
+            self._cand, self._cand_n, self._gate_n = None, 0, 0
             return cur
         self._cand_n = self._cand_n + 1 if self._cand == w else 1
         self._cand = w
-        if self._cand_n >= need_n:
-            self.word, self._cand, self._cand_n = w, None, 0
+        gate = True
+        if into_next and cfg.next_margin > 0:
+            pg = pw if cfg.gate_tentative else self.posterior(self.L, self.B, self.F, self.IL, self.IB)[0]
+            m = self._next_margin(dd, k, pg)
+            self._gate_n = self._gate_n + 1 if m >= 0 else 0
+            gate = m >= cfg.next_margin or (m >= 0 and self._gate_n >= int(cfg.next_hold / cfg.hop + 0.5))
+        else:
+            self._gate_n = 0
+        if self._cand_n >= need_n and gate:
+            self.word, self._cand, self._cand_n, self._gate_n = w, None, 0, 0
         return self.word
+
+    def _next_margin(self, dd: _Dua, k: int, pw: np.ndarray) -> float:
+        """Nats by which the frames prefer the start of line k+1 over restarting line k, going back
+        or skipping (each alternative's belief with its transition cost taken back off). 0 when no
+        alternative is in the beam: then only the hold can commit."""
+        cfg = self.cfg
+
+        def start(li: int) -> float:  # summed in order, as web/stream-follower.js does
+            a, s = int(dd.line_first_word[li]), 0.0
+            for w in range(a, min(a + cfg.gate_words, int(dd.line_last_word[li]) + 1)):
+                s += float(pw[w])
+            return s
+
+        nl = dd.line_first_word.size
+        alts = [(k, cfg.c_restart)] + [(k - 1 - i, c) for i, c in enumerate(cfg.c_back)]
+        alts += [(k + 2 + i, c) for i, c in enumerate(cfg.c_skip)]
+        best = -np.inf
+        for li, c in alts:
+            if 0 <= li < nl:
+                mass = start(li)
+                if mass > 1e-300:
+                    best = max(best, float(np.log(mass)) - c)
+        if best == -np.inf:
+            return 0.0
+        return float(np.log(max(start(k + 1), 1e-300))) - best
 
     def _note_shown(self, t: float) -> None:
         if self.word != self._shown_w:
