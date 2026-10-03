@@ -14,19 +14,31 @@ recording (held-out bench voices left out), and a dynamic programme breaks where
 reciters stop, at 3-9 words a line. Where no recording was aligned confidently (each
 text's first book line, two stretches of 'Asharat and one of 'Adeelah), and where the
 stops split a phrase (a construct, a run of parallel clauses), the lines are set by hand
-(MANUAL), read through line by line. No English: none of our sources (DuaPlayer,
-duas.org, duas.pro) have these texts.
+(MANUAL), read through line by line.
+
+English: duas.org's current site doesn't have these texts, but its older mobile pages do
+(web.archive.org copies: Arabic, reading and English per line). --english fetches them
+into data/duasorg_extra/mafatih/, aligns their Arabic to ours word by word and gives each
+of our lines the English of the duas.org lines that fall in it (one that straddles two of
+ours goes to the one holding most of its words) -> data/lines/<id>.json, which
+corpus.load_dua reads; like the rest of duas.org's English it stays local.
 
     python scripts/mafatih_corpus.py            # -> data/duas/<id>.json, prints the lines
     python scripts/mafatih_corpus.py --dry-run  # print only
+    python scripts/mafatih_corpus.py --english  # -> data/lines/<id>.json
 """
 from __future__ import annotations
 
 import argparse
+import difflib
+import gzip
+import html
 import json
 import re
 import sys
+import time
 import unicodedata
+import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -39,6 +51,22 @@ EXTRA = ROOT / "data" / "harvest" / "extra_texts.json"
 LABELS = ROOT / "data" / "harvest" / "labels"
 TEST_VOICES = ROOT / "data" / "testbed" / "test_voices.json"
 DUAS = ROOT / "data" / "duas"
+LINES = ROOT / "data" / "lines"  # corpus.LINES_DIR
+PAGES = ROOT / "data" / "duasorg_extra" / "mafatih"
+# duas.org's older mobile pages with these texts (archived), by our id.
+EN_PAGES = {
+    "mafatih-dua-sabah": "www.duas.org:80/mobile/dua-sabah.html",
+    "mafatih-dua-adeelah": "www.duas.org:80/mobile/dua-adeelah.html",
+    "mafatih-dua-asharat": "www.duas.org:80/mobile/dua-asharaat.html",
+    **{f"mafatih-munajat-{ours}": f"www.duas.org{port}/mobile/sahifa-sajjadiya-munajat{i:02d}-{theirs}.html"
+       for i, ours, theirs, port in [
+           (2, "shakeen", "shakeen", ":80"), (3, "khaifeen", "khaifeen", ":80"), (4, "rajeen", "rajeen", ":80"),
+           (5, "ragibeen", "raghibeen", ":80"), (6, "shakireen", "shakireen", ":80"), (7, "muteeen", "mutieen", ":80"),
+           (8, "mureedeen", "murideen", ":80"), (9, "muhibbeen", "muhibbeen", ""),
+           (10, "mutawassileen", "mutawassileen", ":80"), (11, "muftaqireen", "muftaqireen", ":80"),
+           (12, "arifeen", "arifeen", ":80"), (13, "dhakireen", "dhakireen", ":80"),
+           (14, "mutasimeen", "mutasimeen", ""), (15, "zahideen", "zahideen", ":80")]},
+}
 
 # (Mafatih block, our id, English name, Arabic name). Each block's opening was checked
 # against its title: the decoded book's titles sit one block off in places.
@@ -546,10 +574,63 @@ def book_words() -> dict[str, dict]:
     return out
 
 
+def _page(dua_id: str) -> str:
+    """duas.org's page for a text, from the local copy or web.archive.org."""
+    f = PAGES / f"{dua_id}.html"
+    if not f.exists():
+        PAGES.mkdir(parents=True, exist_ok=True)
+        url = "https://web.archive.org/web/2024id_/http://" + EN_PAGES[dua_id]
+        req = urllib.request.Request(url, headers={"User-Agent": "dua-recognition/0.2 (research)",
+                                                   "Accept-Encoding": "identity"})
+        raw = urllib.request.urlopen(req, timeout=120).read()
+        f.write_bytes(gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw)
+        time.sleep(3)  # archive.org rate-limits
+    return f.read_text(encoding="utf-8", errors="replace")
+
+
+def _rows(page: str) -> list[dict]:
+    """The page's lines: Arabic, reading, English."""
+    out: list[dict] = []
+    for cls, body in re.findall(r'<div class="(Ara|Trl|Tra)">(.*?)</div>', page, re.S):
+        text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", body))).strip()
+        if cls == "Ara":
+            out.append({"ar": text, "tl": "", "en": ""})
+        elif out:
+            out[-1]["tl" if cls == "Trl" else "en"] = text
+    return out
+
+
+def english() -> None:
+    for _, dua_id, en_name, _ in TEXTS:
+        segs = json.loads((DUAS / f"{dua_id}.json").read_text(encoding="utf-8"))["segments"]
+        ours = [(k, w) for k, s in enumerate(segs) for w in normalize(s["arabic"]).split()]
+        rows = _rows(_page(dua_id))
+        theirs = [(r, w) for r, row in enumerate(rows) for w in normalize(row["ar"]).split()]
+        sm = difflib.SequenceMatcher(None, [w for _, w in theirs], [w for _, w in ours], autojunk=False)
+        line_of_row: dict[int, list[int]] = defaultdict(list)
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "equal" or (tag == "replace" and i2 - i1 == j2 - j1):
+                for k in range(i2 - i1):
+                    line_of_row[theirs[i1 + k][0]].append(ours[j1 + k][0])
+        n_words = Counter(r for r, _ in theirs)
+        en: dict[int, list[str]] = defaultdict(list)
+        for r, lines in sorted(line_of_row.items()):
+            if rows[r]["en"] and len(lines) >= 0.5 * n_words[r]:  # most of the row is in our text
+                en[max(set(lines), key=lines.count)].append(rows[r]["en"])
+        out = {str(s["segment_id"]): {"en": " ".join(en[k])} for k, s in enumerate(segs) if en.get(k)}
+        LINES.mkdir(parents=True, exist_ok=True)
+        (LINES / f"{dua_id}.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"{dua_id:32s} {len(out):3d} of {len(segs):3d} lines with English ({len(rows)} duas.org lines)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--english", action="store_true", help="duas.org's English for the lines -> data/lines/")
     args = ap.parse_args()
+    if args.english:
+        english()
+        return
     build(*pauses([t[0] for t in TEXTS]), write=not args.dry_run)
 
 

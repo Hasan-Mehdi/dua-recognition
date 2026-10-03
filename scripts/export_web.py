@@ -23,6 +23,8 @@ def corpus_json() -> list[dict]:
 
 if __name__ == "__main__":
     out = ROOT / "web" / "corpus.json"
-    out.write_text(json.dumps(corpus_json(), ensure_ascii=False), encoding="utf-8")
+    tmp = out.with_suffix(".json.tmp")  # then a rename: a page loading meanwhile never reads half a file
+    tmp.write_text(json.dumps(corpus_json(), ensure_ascii=False), encoding="utf-8")
+    tmp.replace(out)
     print(f"wrote {out.relative_to(ROOT)} ({out.stat().st_size / 1e6:.1f} MB)")
     print("then: python -m http.server -d web 8080  (models go in web/models/, see scripts/export_onnx.py)")
