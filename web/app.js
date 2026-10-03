@@ -6,6 +6,7 @@ import { CorpusIndex, DEFAULTS, RECITER, Tracker } from "./tracker.js";
 import { Highlight } from "./display.js";
 import { LiveQuiet } from "./gate.js";
 import { FOLLOW_DEFAULTS, LocalFollower } from "./follower.js";
+import { STREAM_DEFAULTS, StreamFollower } from "./stream-follower.js";
 import { VoiceLevel, voiceBandDb } from "./voice.js";
 import { SessionLog, clearSessions, listSessions, sessionFile, shareFiles } from "./session-log.js";
 import { kids } from "./kids.js";
@@ -117,6 +118,10 @@ class DeviceEngine {
     // CPU to the CTC model.
     this.anchorHop = Number(params.get("anchorhop") || 2) * SR;
     this.followCfg = { lapseHold: Number(params.get("lapse") ?? 0) };
+    // ?follower=stream: the stream decoder (stream-follower.js: one belief over the whole du'a, reading
+    // moves as its transitions; docs/results/bench.md) instead of the rule-based follower.js.
+    this.followerKind = params.get("follower") === "stream" ? "stream" : "rules";
+    this.streamCfg = {};
   }
   // The follower is placing the words (its last result under a second old).
   get following() {
@@ -224,9 +229,16 @@ class DeviceEngine {
       }
     }
     const ix = this.tracker.ix;
-    if (this.follower?.ix !== ix) this.follower = new LocalFollower(ix, this.followCfg);
-    const w = this.follower.step(data.frames, data.T, data.C, data.id / SR, this.anchor, this.ear.quiet,
-      (word) => this.tracker.lineMass(word));
+    const stream = this.followerKind === "stream";
+    if (this.follower?.ix !== ix) {
+      this.follower = stream ? new StreamFollower(ix, this.streamCfg) : new LocalFollower(ix, this.followCfg);
+    }
+    const lineMass = (word) => this.tracker.lineMass(word);
+    // The stop detector hears now; the window ended (total - id) ago: its quiet then, if still quiet now.
+    const quietAtEnd = this.ear.quiet == null ? null : Math.max(0, this.ear.quiet - (this.total - data.id) / SR);
+    const w = stream
+      ? this.follower.step(data.frames, data.T, data.C, data.id / SR, this.anchor, quietAtEnd, lineMass, this.anchorAt)
+      : this.follower.step(data.frames, data.T, data.C, data.id / SR, this.anchor, this.ear.quiet, lineMass);
     if (w != null) this.framesAt = data.id;
     if (log.live) log.event("ctc", { end: data.id / SR, ms: data.ms, delay: (this.total - data.id) / SR,
       word: w, anchor: this.anchor });
@@ -283,6 +295,7 @@ class DeviceEngine {
       // The follower's anchor: where the evidence alone puts them (no lead), once the du'a is found.
       const now = this.tracker.position();
       this.anchor = now.dua != null ? now.word : null;
+      this.anchorAt = data.id / SR; // a new tracker result: the stream decoder takes its belief once
     }
     // They've stopped: so does the gliding highlight; a while ago: it may go back to where they stopped.
     const still = quiet > cfg.stillAfter || quietNow > cfg.stillAfter;
@@ -605,6 +618,30 @@ function resume() {
   begin(micSource);
 }
 
+// Audio seconds received per second of real time. A microphone whose sound arrives at the wrong
+// speed breaks everything after it: on 2026-10-02 a USB headset in Firefox 157 delivered 2.00 s of
+// audio per second (chunks heard twice), and the page followed a slowed-down, stuttering recitation.
+// Logged every 30 s; past 15% off, the reader is told instead of left with a page that wanders.
+function checkClock(n) {
+  const now = performance.now();
+  const c = (state.clock ??= { t0: now, samples: -n, logged: 0, warned: false });
+  c.samples += n; // counted from the first chunk's arrival
+  const wall = (now - c.t0) / 1000;
+  if (wall < 5) return;
+  const ratio = c.samples / SR / wall;
+  if (wall - c.logged >= 30) {
+    c.logged = wall;
+    log.event("clock", { ratio: Number(ratio.toFixed(3)) });
+  }
+  if (!c.warned && wall >= 8 && Math.abs(ratio - 1) > 0.15) {
+    c.warned = true;
+    log.event("clock_bad", { ratio: Number(ratio.toFixed(3)) });
+    const text = `This microphone's sound is arriving at ${ratio.toFixed(1)}× speed, so I can't follow it. Try another browser or microphone.`;
+    listenMsg(text);
+    $("dua-also").textContent = text;
+  }
+}
+
 // When and where each du'a is customarily recited, shown under its title.
 const NOTES = {
   "dua-kumayl": "Thursday nights · taught by Imam Ali (a) to Kumayl ibn Ziyad",
@@ -800,12 +837,15 @@ async function begin(makeSource) {
     tracker: state.engine.tracker?.cfg, chunk: CHUNK,
     cores: navigator.hardwareConcurrency, isolated: self.crossOriginIsolated,
     words: state.engine.words ? { model: state.engine.ctcModel, hop: state.engine.ctcHop / SR,
-      anchor_hop: state.engine.anchorHop / SR, ...FOLLOW_DEFAULTS, ...state.engine.followCfg } : null,
+      anchor_hop: state.engine.anchorHop / SR, follower: state.engine.followerKind,
+      ...(state.engine.followerKind === "stream" ? { ...STREAM_DEFAULTS, ...state.engine.streamCfg }
+        : { ...FOLLOW_DEFAULTS, ...state.engine.followCfg }) } : null,
   });
   const node = new AudioWorkletNode(state.ctx, "capture", { processorOptions: { chunk: CHUNK } });
   node.port.onmessage = (e) => {
     const x = e.data.x ?? e.data;
     log.audio(x);
+    checkClock(x.length);
     state.engine.push(x, captureTime(e.data.t));
   };
   source.connect(node);
@@ -881,7 +921,7 @@ function end(reason) {
   state.wake = null;
   if (state.room?.readyState === 1) state.room.send(JSON.stringify({ ended: true }));
   log.end(reason).then(showSessions);
-  Object.assign(state, { node: null, source: null, stream: null, dua: null, segment: null, chosen: null, hl: null,
+  Object.assign(state, { node: null, source: null, stream: null, clock: null, dua: null, segment: null, chosen: null, hl: null,
     preview: false, guessesShown: "", guessSeen: new Map(), lapse: 0 });
   document.body.classList.remove("holding");
   kids.reset();

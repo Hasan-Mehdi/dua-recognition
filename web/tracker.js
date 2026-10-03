@@ -16,7 +16,7 @@ export function normalize(text) {
   return t.replace(NON_ARABIC, " ").replace(/\s+/g, " ").trim();
 }
 
-function encode(text) {
+export function encode(text) {
   const out = [];
   for (const c of normalize(text)) {
     const code = c.codePointAt(0);

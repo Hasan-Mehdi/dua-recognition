@@ -112,6 +112,12 @@ def summary(path: Path, audio: np.ndarray, log: dict, lines: Lines) -> list[str]
         f"echo={mic.get('echo')}  noise={mic.get('noise')}  ·  audio context {log.get('audio_rate')} Hz"
         + (f"  ·  model loaded in {log['load_ms'] / 1000:.1f} s" if log.get("load_ms") else ""),
     ]
+    vis = [e for e in ev if e["type"] == "visible" and e.get("shown_ms")]
+    if len(vis) > 3 and vis[-1]["shown_ms"] > vis[0]["shown_ms"]:
+        # Audio seconds per real second (web/app.js checkClock): 1.00, or the microphone is broken.
+        ratio = (vis[-1]["end"] - vis[0]["end"]) / ((vis[-1]["shown_ms"] - vis[0]["shown_ms"]) / 1000)
+        out.append(f"  audio clock {ratio:.2f} s per real second"
+                   + ("" if abs(ratio - 1) < 0.1 else "  <-- AUDIO ARRIVES AT THE WRONG SPEED: nothing after this is trustworthy"))
     if hops:
         gaps = np.diff([h["t"] for h in hops])
         delay = [h["t"] - h["end"] for h in hops if h.get("end") is not None]

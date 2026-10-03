@@ -683,7 +683,9 @@ def cmd_export(args) -> None:
     held = _held_out_grams(duas)
     held_ids = {d for d in duas if _held_share(_dua_words(duas[d]), held) >= 0.5}  # same text, other ids
     dupes = _duplicates(metas)
-    skipped = {"test voice": 0, "duplicate": 0, "held-out text": 0}
+    held_voice, hv_stats = _voice_holdout(metas, args.val_pct)
+    print(f"voice hold-out: {hv_stats}", flush=True)
+    skipped = {"test voice": 0, "duplicate": 0, "held-out text": 0, "held-out voice": 0}
     for lab_path in sorted(LABELS.glob("*/*.json")):
         res = json.loads(lab_path.read_text(encoding="utf-8"))
         key = (res["platform"], res["id"])
@@ -695,6 +697,9 @@ def cmd_export(args) -> None:
             continue
         if key in dupes:
             skipped["duplicate"] += 1
+            continue
+        if key in held_voice:
+            skipped["held-out voice"] += 1
             continue
         reciter = _reciter(res["platform"], meta)
         if lab_path.name.endswith(".captions.json"):
@@ -828,6 +833,63 @@ def _duplicates(metas) -> set[tuple[str, str]]:
                 if k2 not in dupes and e1 is not None and e2 is not None and float(e1 @ e2) >= 0.9:
                     dupes.add(k2)
     return dupes
+
+
+def _is_val(reciter: str, val_pct: int) -> bool:
+    import hashlib
+
+    return int(hashlib.sha1(reciter.encode()).hexdigest()[:8], 16) % 100 < val_pct
+
+
+def _voice_holdout(metas, val_pct: int, thr: float = 0.85) -> tuple[set, dict]:
+    """Train-side recordings to drop so the val uploaders (and data/testbed/test_voices.json,
+    the scenario bench's test pool) are held out by VOICE, not just by uploader name: the
+    same reciter is often uploaded by several channels. Voices are harvest_voices.py's
+    ECAPA embeddings (speaker_check's cache).
+
+    thr 0.85, not speaker_check.LEAK's 0.7: on this in-the-wild audio (crowds, reverb,
+    music) 1 in 1,000 pairs of different uploaders already scores 0.8, so 0.7 against a
+    ~300-voice pool dropped 40% of training recordings, mostly by chance. 0.85 drops the
+    strong matches (one reciter on several channels, re-uploads); for a strictly unseen
+    test set, data/harvest/heldout_voice_overlap.jsonl gives each held-out recording's
+    closest training voice, so the test side can keep only those below 0.7."""
+    import hashlib
+
+    spk = ROOT / "data" / "cache" / "speaker"
+    emb = {}
+    for key, (meta, audio) in metas.items():
+        f = spk / (hashlib.sha1(str(audio.resolve()).encode()).hexdigest()[:16] + ".npy")
+        if f.exists():
+            emb[key] = np.load(f)
+    held = {k for k, (m, _) in metas.items() if _is_val(_reciter(k[0], m), val_pct)}
+    tb = ROOT / "data" / "testbed" / "test_voices.json"
+    bench = set()
+    if tb.exists():
+        d = json.loads(tb.read_text(encoding="utf-8"))
+        rows = d.get("recordings", []) if isinstance(d, dict) else d
+        bench = {(r["source"], r["rec"]) for r in rows if isinstance(r, dict) and "source" in r and "rec" in r}
+    pool_keys = [k for k in held | bench if k in emb]
+    drop = set(bench - held)
+    if pool_keys:
+        P = np.stack([emb[k] for k in pool_keys])
+        for k, e in emb.items():
+            if k not in held and k not in bench and float((P @ e).max()) >= thr:
+                drop.add(k)
+    # The other direction, for the test side: each held-out recording's closest voice among
+    # the training recordings that remain.
+    train_keys = [k for k in emb if k not in held and k not in bench and k not in drop]
+    if pool_keys and train_keys:
+        T = np.stack([emb[k] for k in train_keys])
+        with (HARVEST / "heldout_voice_overlap.jsonl").open("w", encoding="utf-8") as f:
+            for k in pool_keys:
+                s = T @ emb[k]
+                j = int(np.argmax(s))
+                f.write(json.dumps({"source": k[0], "rec": k[1], "max_train_voice": round(float(s[j]), 3),
+                                    "nearest_train": list(train_keys[j]),
+                                    "reciter": _reciter(k[0], metas[k][0])}, ensure_ascii=False) + "\n")
+    stats = {"held-out voices": len(pool_keys), "held-out recordings without a voice": len((held | bench) - set(emb)),
+             "train recordings dropped for a held-out voice": len(drop - bench)}
+    return drop, stats
 
 
 def _voice_flags() -> dict[tuple[str, str], str]:

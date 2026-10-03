@@ -78,8 +78,20 @@ page.on("response", (r) => r.status() >= 400 && !r.url().endsWith("/api/mode") /
   && errors.push(`${r.status()} ${r.url()}`));
 page.on("console", (m) => m.type() === "error" && !m.text().includes("404") && errors.push(m.text()));
 await page.goto(`http://127.0.0.1:${port}/${query ? `?${query}` : ""}`);
-await page.waitForFunction(() => document.body.dataset.state === "idle", { timeout: 60_000 });
-const before = await page.evaluate(async () => (await (await import("/session-log.js")).listSessions()).length);
+// coi-serviceworker.js reloads the page once to make it cross-origin isolated (threads): wait
+// for the page that comes back, or the next evaluate dies with the old one.
+let before;
+for (let attempt = 0; ; attempt++) {
+  try {
+    await page.waitForFunction(() => document.body.dataset.state === "idle", { timeout: 60_000 });
+    await new Promise((r) => setTimeout(r, 1500));
+    await page.waitForFunction(() => document.body.dataset.state === "idle", { timeout: 60_000 });
+    before = await page.evaluate(async () => (await (await import("/session-log.js")).listSessions()).length);
+    break;
+  } catch (e) {
+    if (attempt >= 3 || !String(e).includes("context was destroyed")) throw e;
+  }
+}
 
 const t0 = Date.now();
 await (await page.$("#file")).uploadFile(resolve(input));

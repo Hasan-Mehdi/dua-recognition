@@ -7,17 +7,20 @@ Before tonight the du'a training audio was 364 recordings, about 38 hours: DuaPl
 never a limit of what exists. The old YouTube harvester took the first three hits for
 the ~25 du'as that already had a DuaPlayer recording, and nothing else looked further.
 
-| | before (`train_v4`) | harvest (2026-10-02 20:30) |
+| | before (`train_v4`) | harvest (2026-10-02 22:30) |
 |---|---:|---:|
-| recordings | 364 | 18,781 downloaded, 13,730 labelled |
-| audio | ~38 h of windows | 5,323 h downloaded; **1,417 h** of force-aligned du'a lines |
-| voices (uploaders / reciters) | 309 | **3,570** with usable audio (1,690 with 10+ min) |
-| corpus texts with audio | 263 | 298 of 505, plus 90 h of Mafatih texts the corpus lacks |
+| recordings | 364 | 21,172 downloaded (5,829 h), 13,967 labelled |
+| labelled audio | ~38 h of windows | **1,405 h** of force-aligned lines; export `harvest_v2`: 1.25M windows, ~1,040 h distinct |
+| voices (uploaders / reciters) | 309 | **3,558** with usable audio (1,685 with 10+ min); 2,643 in the export |
+| texts with audio | 263 | 297 of 505 corpus texts (380 in the export incl. short spans), + 90 h of Mafatih texts the corpus lacks |
 | human line timings | 39 DuaPlayer recordings | + 13.2 h of YouTube caption lines (106 recordings) |
-| ordinary-voice sets (clips) | Common Voice, RetaSy crowd | + people reciting Quran (14.2 h, 30 voices), recitation errors set, vowelled MSA, FLEURS |
+| ordinary-voice clip sets | Common Voice, RetaSy crowd | + `quranspeech` (14.2 h, 30 people reciting Quran), `recerrors` (944), `nahw` (1,093 vowelled MSA), `fleurs` (2,311), `sawtarabi` (655) |
 
-By platform, usable hours: shiavoice 661, YouTube 391, SoundCloud 211, Aparat 153 (archive.org
-not yet processed). Full tables: [data_harvest_numbers.md](data_harvest_numbers.md).
+Usable hours by platform: shiavoice 661, YouTube 377, SoundCloud 208, Aparat 159 (archive.org's
+1,019 h not processed yet: its files are the least likely to be recitations). Left out of the
+export: 629 recordings in a test reciter's voice, 1,897 re-uploads, 576 held-out-text spans, 924
+recordings that are, or sound like (voice >= 0.85), a validation uploader or a scenario-bench test
+recording (data/testbed/test_voices.json). Full tables: [data_harvest_numbers.md](data_harvest_numbers.md).
 
 ## Where the audio came from
 
@@ -97,6 +100,34 @@ downloaded.
   still the ones that aligned.
 - **Who.** 2.8% of recordings matched a test voice and are never exported.
 
+## First use: the phone CTC student (pre-registered, did not pass)
+
+`ctc-student-base-h1`: `ctc-student-base-v6`'s recipe at v6's exact step count (75,406), with
+60,000 voice-balanced harvest windows (2,503 uploaders, at most 400 each; teacher frames
+sliced from the whole-file posteriors by `scripts/harvest_ctc_cache.py`) added to
+`train_v4`'s 68,757 (`train_v4h`). Pre-registration (written before training): pass if
+RetaSy streaming CER drops >= 1 pt, with Quran-Lab and Common Voice no more than 1 pt
+worse and Hasan's sessions' follow word-exact no more than 2 pt worse. v6 re-run under
+the same code (the follower changed since v6's own numbers).
+
+| | v6 | h1 |
+|---|---:|---:|
+| RetaSy crowd, streaming / whole-clip CER | 40.1 / 22.2% | 40.7 / 23.5% |
+| Quran-Lab, streaming / whole-clip CER | 29.2 / 22.0% | 28.3 / 19.9% |
+| Common Voice, streaming / whole-clip CER | 20.4 / 11.6% | 20.6 / 12.2% |
+| Hasan's 7 sessions, follow word exact / ±1 | 54.5 / 83.6% | 58.2 / 86.9% |
+| val_v4 (held-out reciters), crop / 6 s CER | 24.0 / 47.6% | 23.6 / 46.4% |
+
+Fails on its primary criterion: ordinary crowd voices (RetaSy) did not improve. The gains
+are where the harvest's voices are: recitation (Quran-Lab, val reciters) and Hasan's own
+sessions (+3.7 pt word exact). One seed each, so differences under ~1 pt are noise. Not
+adopted. (The battery's DuaPlayer follow_eval runs were skipped: the follower was being
+changed by another session that night.) What the harvest is: thousands of reciters and rooms, few ordinary phone readers;
+the ordinary-voice sets (`quranspeech`, `recerrors`, `nahw`, `fleurs`) and the harvest's
+children/home recordings are the part aimed at the RetaSy gap, and are not in h1. 17% of
+h1's harvest windows came from recordings the test-voice check had not reached yet (none
+of the four evaluation sets involve those reciters).
+
 ## Things found on the way
 
 - **The voice check matters.** By name alone, Farahmand's Tawassul came back three times
@@ -123,8 +154,9 @@ downloaded.
 ## Using it
 
 ```
-python scripts/harvest_label.py export --version v1 --combine h1   # train_h1 = train_v4 + harvest (8 h/text cap)
-python scripts/finetune_whisper.py --data h1 ...                     # same recipe as v4/syn-v5
+python scripts/harvest_label.py export --version v2 --combine h2   # train_h2 = train_v4 + harvest (8 h/text cap)
+python scripts/finetune_whisper.py --data h2 ...                     # same recipe as v4/syn-v5
+python scripts/harvest_ctc_cache.py harvest_v2 --combine-with train_v4   # CTC student set (6 s clips, on D:)
 python scripts/build_voice_sets.py quranspeech recerrors nahw sawtarabi   # ordinary-voice clip sets (--crowd style)
 python scripts/harvest_report.py                                     # the numbers above
 ```
