@@ -601,6 +601,22 @@ class StreamFollower:
         self.IB = np.full((nl, K), NEG)
         self.active = np.ones(nl, dtype=np.uint8)
         self._proposed = None
+        if self.cfg.beam > 0:
+            # Start on the tracker's lines only: every line of Jawshan Kabir for the first second cost 20-80 ms
+            # a step on a desktop (several times that on a phone). The anchor's line and every line the
+            # tracker puts propose_mass on, beam_margin either side; the rest come in by proposals.
+            on = np.zeros(nl, dtype=bool)
+            k, mg = int(dd.line_of_word[hmm_word - dd.lo]), self.cfg.beam_margin
+            on[max(0, k - mg) : k + mg + 1] = True
+            if line_mass is not None:
+                for li in range(nl):
+                    if line_mass(int(dd.lo + dd.line_first_word[li])) >= self.cfg.propose_mass:
+                        on[max(0, li - 1) : li + 2] = True
+            for li in np.flatnonzero(~on):
+                a, b = dd.line_lo[li], dd.line_hi[li]
+                self.L[a:b] = NEG
+                self.B[a:b] = NEG
+            self.active = on.astype(np.uint8)
         self.word = int(hmm_word)
 
     def _advance(self, L, B, F, IL, IB, frames: np.ndarray):

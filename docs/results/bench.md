@@ -99,6 +99,7 @@ What each piece bought, on dev voices (all scored on the grid, not on the case t
 | salawat chain | a salawat was a jump or talk | salawat stays put 49 -> 88%, jumps 8.3 -> 2.5 /10 min |
 | restarts and go-backs cheaper (-3; -5, -6, -7) | readers do it more than the prior said | repeats followed 78 -> 84%, go-back jumps -0.9 |
 | beam (12 lines of ~250-830) + the tracker's and the frames' line proposals | Kumayl took 47 ms a step, Abu Hamza 148 ms (desktop JS) | 3.5-4.9 ms a step; jumping around +3-4 pts |
+| the beam starts on the tracker's lines | the first second after a du'a was found still ran every line: 20-80 ms a step on a desktop, enough to stall a phone's screen as the du'a appears | 1-11 ms from the first step; neutral on the dev grid |
 | hold through a tracker lapse only while silent | an unknown du'a kept the last one on screen | unknown du'a shown 24 -> 14% (dev) |
 | 1 nat off the blank column | ordinary voices and echo give faint letters; the belief rested in the blank after the last word | hall +14 pts, far +11, his voice: line lag 0.93 -> 0.55 s; salawat -17 pts (still +7 over today's phone) |
 | a du'a change counts after 2 s | texts sharing a passage (Ayat al-Kursi in Namaz-e-Wahshat and Eid-e-Mubahila) flipped the tracker's du'a for a moment | his sessions: wrong du'a 3.5 -> 2.0%, on line 76 -> 78%; a real switch followed 2 s later |
@@ -121,7 +122,7 @@ Decoder (the defaults above) against today's phone, the same 405 items (799 minu
 |---|---:|---:|
 | on the reader's line | 83% | **87%** |
 | right word | 61% | **67%** |
-| jumps where the reader isn't /10 min | 3.4 | **2.4** |
+| jumps where the reader isn't /10 min | 3.4 | **2.3** |
 | early moves /10 min | 3.5 | **2.5** |
 | lost (4+ s off the line) /10 min | 4.2 | **1.8** |
 | go-back / skip / jump followed within 3 s | 58% | **72%** |
@@ -139,6 +140,33 @@ in some conditions (the 2 s du'a-change rule: stumble -6, hall -6, phone call -7
 (on line +4, lost -1.9 /10 min, follows +14, stays put +23, jumps -0.7). On Hasan's own sessions (35
 items): on line 67 -> 78%, early moves 11.1 -> 5.9 /10 min, lost 7.7 -> 3.8, jumps 2.8 -> 2.4, follows
 47 -> 85%, stays put 78 -> 98%, line lag 0.55 -> 0.51 s.
+
+## Through the real page
+
+`scripts/bench_page.py` played one held-out item per scenario through the actual page in headless
+Chrome (the browser's own ONNX models, `follower.js` or `stream-follower.js`, the capture worklet, in
+real time, Whisper held to at least 1.2 s and the CTC model to 150 ms a step, as on a phone), each item
+through both followers at the same time so both saw the same load. 23 items (42 minutes) completed for both:
+
+| real page | follower.js | stream decoder |
+|---|---:|---:|
+| on the reader's line | 81% | **86%** |
+| right word | 54% | **63%** |
+| jumps /10 min | 3.8 | **1.2** |
+| early moves /10 min | 3.3 | **2.1** |
+| lost /10 min | 3.1 | **1.7** |
+| go-back / skip / jump followed within 3 s | 53% | **68%** |
+| stays put | 73% | 60% |
+| line-change lag | 0.55 s | **0.49 s** |
+| du'a found within 10 s | 77% | 77% |
+
+It agrees with the replay except on staying put, which rests on two items: one pause item whose
+"pauses" are the recording's own room tone at -22 dB against a -20 dB voice (the stop detector never
+calls it quiet; the replay of that item moves early at the same moment, 19.7 s against the page's
+19.85 s), and one combination item. The decoder is the page's default since this check
+(`?follower=rules` for the rule-based follower); `ctc` events in the session log carry `follow_ms`, its
+time per step on the page's thread (1-11 ms per step on a desktop, from the first step, in the longest
+du'as).
 
 ## Outside the follower
 

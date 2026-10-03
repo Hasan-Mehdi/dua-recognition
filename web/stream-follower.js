@@ -211,6 +211,28 @@ export class StreamFollower {
     this.st = st;
     this.active = new Uint8Array(nl).fill(1);
     this.proposed = null;
+    if (this.cfg.beam > 0) {
+      // Start on the tracker's lines only (every line of a long du'a for the first second cost 20-80 ms a
+      // step on a desktop): the anchor's line and every line it puts proposeMass on; the rest come in by proposals.
+      const on = new Uint8Array(nl);
+      const k = dd.lineOfWord[hmmWord - dd.lo];
+      const mg = this.cfg.beamMargin;
+      for (let i = Math.max(0, k - mg); i <= Math.min(nl - 1, k + mg); i++) on[i] = 1;
+      if (lineMass) {
+        for (let li = 0; li < nl; li++) {
+          if (lineMass(dd.lo + dd.lineFirstWord[li]) < this.cfg.proposeMass) continue;
+          for (let i = Math.max(0, li - 1); i <= Math.min(nl - 1, li + 1); i++) on[i] = 1;
+        }
+      }
+      for (let li = 0; li < nl; li++) {
+        if (on[li]) continue;
+        for (let j = dd.lineLo[li]; j < dd.lineHi[li]; j++) {
+          st.L[j] = NEG;
+          st.B[j] = NEG;
+        }
+      }
+      this.active = on;
+    }
     this.word = hmmWord;
   }
 

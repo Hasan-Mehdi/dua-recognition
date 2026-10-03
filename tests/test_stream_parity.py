@@ -64,12 +64,21 @@ def test_numba_equals_numpy():
     lo, _ = ix.dua_word_span[d]
     fr = np.log(rng.dirichlet(np.ones(N_COLS) * 0.3, size=40) + 1e-9)
     out = {}
-    for jit in (False, True):
-        sf = StreamFollower(ix, use_jit=jit)
+    for jit in (False, True):  # the full pass (no beam), numpy and numba
+        sf = StreamFollower(ix, StreamConfig(beam=0.0), use_jit=jit)
         sf._start(d, lo + 30)
         out[jit] = sf.posterior(*sf._advance(sf.L, sf.B, sf.F, sf.IL, sf.IB, fr))
     assert np.abs(out[True][0] - out[False][0]).max() < 1e-9
     assert abs(out[True][1] - out[False][1]) < 1e-9
+    # The beam with every line active is the full pass exactly.
+    from dataclasses import replace
+
+    sf = StreamFollower(ix, StreamConfig(beam=0.0))
+    sf._start(d, lo + 30)
+    sf.cfg = replace(sf.cfg, beam=1e-6)
+    sf.active = np.ones(sf._dua(d).line_first_word.size, dtype=np.uint8)
+    beam = sf.posterior(*sf._advance(sf.L, sf.B, sf.F, sf.IL, sf.IB, fr))
+    assert np.abs(beam[0] - out[True][0]).max() < 1e-9
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")

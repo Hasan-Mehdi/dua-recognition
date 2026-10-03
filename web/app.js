@@ -118,9 +118,9 @@ class DeviceEngine {
     // CPU to the CTC model.
     this.anchorHop = Number(params.get("anchorhop") || 2) * SR;
     this.followCfg = { lapseHold: Number(params.get("lapse") ?? 0) };
-    // ?follower=stream: the stream decoder (stream-follower.js: one belief over the whole du'a, reading
-    // moves as its transitions; docs/results/bench.md) instead of the rule-based follower.js.
-    this.followerKind = params.get("follower") === "stream" ? "stream" : "rules";
+    // The stream decoder (stream-follower.js: one belief over the whole du'a, reading moves as its
+    // transitions; docs/results/bench.md) since 2026-10-03; ?follower=rules: the rule-based follower.js.
+    this.followerKind = params.get("follower") === "rules" ? "rules" : "stream";
     this.streamCfg = {};
   }
   // The follower is placing the words (its last result under a second old).
