@@ -49,6 +49,7 @@ export const STREAM_DEFAULTS = {
   // Into the next line on evidence (nextMargin 0 = off): see StreamConfig.next_margin.
   nextMargin: 0,
   nextHold: 0.5,
+  nextSlack: 1.0,
   gateWords: 2,
   gateTentative: true,
   lapseS: 20.0,
@@ -699,9 +700,9 @@ export class StreamFollower {
     let gate = true;
     if (intoNext && cfg.nextMargin > 0) {
       const pg = cfg.gateTentative ? pw : this.posterior(this.st).pw;
-      const m = this._nextMargin(dd, lineC, pg);
-      this.gateN = m >= 0 ? this.gateN + 1 : 0;
-      gate = m >= cfg.nextMargin || (m >= 0 && this.gateN >= Math.floor(cfg.nextHold / cfg.hop + 0.5));
+      const m = this._nextMargin(dd, lineC, pg, best);
+      this.gateN = m >= -cfg.nextSlack ? this.gateN + 1 : 0;
+      gate = m >= cfg.nextMargin || this.gateN >= Math.floor(cfg.nextHold / cfg.hop + 0.5);
     } else {
       this.gateN = 0;
     }
@@ -714,27 +715,44 @@ export class StreamFollower {
     return this.word;
   }
 
-  // Nats by which the frames prefer the start of line k+1 over restarting line k, going back or
-  // skipping (stream_follower.py _next_margin); 0 when no alternative is in the beam.
-  _nextMargin(dd, k, pw) {
+  // Nats by which the frames prefer the words of line k+1 read so far (to upTo) over the same
+  // words of the lines they could be instead (stream_follower.py _next_margin): Infinity when they
+  // all read the same words, 0 when none that differs is in the beam.
+  _nextMargin(dd, k, pw, upTo) {
     const cfg = this.cfg;
+    const seen = upTo - dd.lineFirstWord[k + 1] + 1; // words of k+1 reached
+    const span = Math.max(cfg.gateWords, seen);
+    const words = (li, n = span) => [dd.lineFirstWord[li], Math.min(dd.lineFirstWord[li] + n, dd.lineLastWord[li] + 1)];
     const start = (li) => {
-      const a = dd.lineFirstWord[li];
-      const b = Math.min(a + cfg.gateWords, dd.lineLastWord[li] + 1);
+      const [a, b] = words(li);
       let s = 0;
       for (let w = a; w < b; w++) s += pw[w];
       return s;
+    };
+    // the same letters as line k+1 over the words reached: can't be told apart by listening yet
+    const same = (li) => {
+      const [a, b] = words(li, seen);
+      const [a1, b1] = words(k + 1, seen);
+      const i0 = dd.wordFirst[a];
+      const n = dd.wordLast[b - 1] + 1 - i0;
+      const j0 = dd.wordFirst[a1];
+      if (n !== dd.wordLast[b1 - 1] + 1 - j0) return false;
+      for (let i = 0; i < n; i++) if (dd.r[i0 + i] !== dd.r[j0 + i]) return false;
+      return true;
     };
     const alts = [[k, cfg.cRestart]];
     cfg.cBack.forEach((c, i) => alts.push([k - 1 - i, c]));
     cfg.cSkip.forEach((c, i) => alts.push([k + 2 + i, c]));
     let best = -Infinity;
+    let differ = false;
     for (const [li, c] of alts) {
-      if (li >= 0 && li < dd.nl) {
+      if (li >= 0 && li < dd.nl && !same(li)) {
+        differ = true;
         const mass = start(li);
         if (mass > 1e-300) best = Math.max(best, Math.log(mass) - c);
       }
     }
+    if (!differ) return Infinity; // every alternative reads the same words: no gate
     if (best === -Infinity) return 0;
     return Math.log(Math.max(start(k + 1), 1e-300)) - best;
   }
