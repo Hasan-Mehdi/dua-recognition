@@ -70,8 +70,11 @@ class TrackerConfig:
     start_words: int = 12
     # Prior over du'as: P(du'a) proportional to (recordings + 1) ** popularity, from how often
     # the harvest heard each text recited (Dua.recordings); 0 = uniform. Words many texts
-    # share (السلام عليك يا أبا عبد الله) then go to the texts people actually recite.
-    popularity: float = 0.0
+    # share (السلام عليك يا أبا عبد الله) then go to the texts people actually recite. 0.5: on the
+    # bench's held-out voices the du'a found within 10 s +2 pts, wrong du'a 0.9 -> 0.5%, nothing
+    # worse but unknown texts shown +1 pt; 1.0 found more but sat on the more recited of two
+    # texts sharing a passage in Hasan's sessions (docs/results/finding.md).
+    popularity: float = 0.5
     # "None of these": a state for recitations that aren't in the corpus. It
     # explains a window as if its transcript missed at `null_rate` edits per
     # letter. A du'a the corpus has matches far better than that, even misheard;

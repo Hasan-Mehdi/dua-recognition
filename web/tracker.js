@@ -122,7 +122,7 @@ export const DEFAULTS = {
   kappa: 0.15, kappaSearch: 1.2, lockConfidence: 0.95, maxSpeed: 4.0,
   // Speed prior and tempo adaptation: see TrackerConfig.speeds / tempo_memory in tracker.py.
   speeds: [0.59, 0.99, 1.15, 1.3, 1.44, 1.55, 1.67, 1.84, 2.05, 2.39], tempoMemory: 0.98,
-  pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, pLineJump: 0.02, startWeight: 0.3, startWords: 12, popularity: 0, minDuaConfidence: 0.7, sameTextWords: 12, sameTextAhead: 3,
+  pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, pLineJump: 0.02, startWeight: 0.3, startWords: 12, popularity: 0.5, minDuaConfidence: 0.7, sameTextWords: 12, sameTextAhead: 3,
   // Shared passages spelled differently count as one, for the display and the lock
   // (TrackerConfig.same_text_spelling / lock_on_passage in tracker.py).
   sameTextSpelling: true, lockOnPassage: true,

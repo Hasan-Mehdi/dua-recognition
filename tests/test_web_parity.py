@@ -60,7 +60,7 @@ def test_js_tracker_matches_python(tmp_path, lead, drop, pauses, pop):
         p = tracker.update(t, 1.0, lead, quiet=q)
         expected.append([p.dua, p.segment, p.word])
     js_rules = json.dumps({**({"stillMotionAfter": 0.3, "leadCrossQuiet": 0.25, "retreatAfter": 1.0} if pauses else {}),
-                           **({"popularity": pop} if pop else {})})
+                           "popularity": pop})
 
     payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar, "rec": d.recordings,
                 "segments": [{"id": s.id, "ar": s.arabic} for s in d.segments]} for d in corpus.values()]
@@ -151,7 +151,7 @@ def test_js_tracker_matches_python_on_a_respelled_shared_passage_and_a_tap(tmp_p
         expected.append([p.dua, p.segment, p.word, sorted(p.same_as)])
     assert sum(e[0] == "duasorg-namaz-e-wahshat" for e in expected) > seek_at // 2  # shown, not withheld
 
-    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar,
+    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar, "rec": d.recordings,
                 "segments": [{"id": s.id, "ar": s.arabic} for s in d.segments]} for d in corpus.values()]
     (tmp_path / "corpus.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "texts.json").write_text(json.dumps(texts, ensure_ascii=False), encoding="utf-8")
@@ -208,7 +208,7 @@ def test_js_tracker_matches_python_with_the_stability_rules(tmp_path):
         expected.append([p.dua, p.segment, p.word])
     assert sum(e[0] == "duasorg-namaz-e-wahshat" for e in expected) > len(texts) // 3
 
-    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar,
+    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar, "rec": d.recordings,
                 "segments": [{"id": s.id, "ar": s.arabic} for s in d.segments]} for d in corpus.values()]
     (tmp_path / "corpus.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "in.json").write_text(json.dumps([texts, quiet, taps], ensure_ascii=False), encoding="utf-8")
@@ -258,7 +258,7 @@ def test_js_tracker_matches_python_through_stops(tmp_path):
         expected.append([p.dua, p.segment, p.word])
     assert sum(e[0] == "duasorg-namaz-e-wahshat" for e in expected) > len(texts) // 3
 
-    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar,
+    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar, "rec": d.recordings,
                 "segments": [{"id": s.id, "ar": s.arabic} for s in d.segments]} for d in corpus.values()]
     (tmp_path / "corpus.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "in.json").write_text(json.dumps([texts, quiet, quiet_now, paused, dts], ensure_ascii=False),
@@ -407,7 +407,7 @@ def test_js_tracker_matches_python_on_lines_out_of_order(tmp_path):
         expected.append([p.dua, p.segment, p.word, mass])
     assert len({e[1] for e in expected if e[0] == "dua-kumayl"}) > 8  # it went to many lines
 
-    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar,
+    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar, "rec": d.recordings,
                 "segments": [{"id": s.id, "ar": s.arabic} for s in d.segments]} for d in corpus.values()]
     (tmp_path / "corpus.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "in.json").write_text(json.dumps(texts, ensure_ascii=False), encoding="utf-8")
