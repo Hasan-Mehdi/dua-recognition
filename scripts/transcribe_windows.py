@@ -37,13 +37,13 @@ def cache_path(tag: str, audio_id: str, window: float, hop: float) -> Path:
     return CACHE / tag / f"{audio_id}_w{window:g}_h{hop:g}.jsonl"
 
 
-def room(y: np.ndarray, snr_db: float, seed: int = 0) -> np.ndarray:
+def room(y: np.ndarray, snr_db: float, seed: int = 0, rt60: float = 0.5) -> np.ndarray:
     """Studio recording -> something like a phone in a room: a synthetic
-    reverb tail (RT60 ~0.5 s) plus pink-ish noise at `snr_db`, including the
-    pauses between lines, where real rooms are never silent."""
+    reverb tail (RT60 `rt60`, ~0.5 s by default) plus pink-ish noise at `snr_db`,
+    including the pauses between lines, where real rooms are never silent."""
     rng = np.random.default_rng(seed)
-    t = np.arange(int(0.5 * SR)) / SR
-    rir = rng.standard_normal(t.size) * np.exp(-6.9 * t / 0.5)
+    t = np.arange(int(rt60 * SR)) / SR
+    rir = rng.standard_normal(t.size) * np.exp(-6.9 * t / rt60)
     rir[0] = 1.0
     h = rir / np.abs(rir).sum() * 4
     n = 1 << int(np.ceil(np.log2(y.size + h.size - 1)))

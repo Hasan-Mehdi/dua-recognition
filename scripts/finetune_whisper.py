@@ -64,13 +64,17 @@ class AudioBank:
             self.audio[p] = np.load(f, mmap_mode="r")
 
     def window(self, row) -> np.ndarray:
+        if "clip" in row and row["clip"].endswith(".ogg"):  # a harvest window (scripts/build_clip_cache.py)
+            import soundfile as sf
+
+            return sf.read(row["clip"], dtype="float32")[0]
         if "clip" in row:  # a whole crowd-sourced clip (scripts/build_crowd_set.py)
             return np.load(ROOT / row["clip"]).astype(np.float32) / 32767
         y = self.audio[row["audio"]]
         return y[int(row["start"] * SR) : int(row["end"] * SR)].astype(np.float32) / 32767
 
 
-def augment(x: np.ndarray, rng: random.Random, room_p: float = 0.0) -> np.ndarray:
+def augment(x: np.ndarray, rng: random.Random, room_p: float = 0.0, rt60: tuple = (0.5, 0.5)) -> np.ndarray:
     """Studio recordings in, phones in a room out: level, noise, and (with
     probability room_p) reverb plus room noise at 5-25 dB SNR. Training on
     noisy audio beats denoising at inference for modern ASR
@@ -78,7 +82,8 @@ def augment(x: np.ndarray, rng: random.Random, room_p: float = 0.0) -> np.ndarra
     if room_p and rng.random() < room_p:
         from transcribe_windows import room
 
-        return room(x, rng.uniform(5, 25), seed=rng.randrange(1 << 30))
+        snr, seed = rng.uniform(5, 25), rng.randrange(1 << 30)
+        return room(x, snr, seed=seed, rt60=rng.uniform(*rt60) if rt60[0] != rt60[1] else rt60[0])
     x = x * rng.uniform(0.3, 1.5)
     if rng.random() < 0.6:
         snr_db = rng.uniform(10, 35)
@@ -153,6 +158,8 @@ def main() -> None:
     ap.add_argument("--warmup", type=int, default=100)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--room", type=float, default=0.0, help="share of training windows given room reverb + noise")
+    ap.add_argument("--room-rt60", type=lambda v: tuple(float(x) for x in v.split(",")), default=(0.5, 0.5),
+                    metavar="LO,HI", help="the room's reverberation time, uniform in [LO, HI] s (halls: 0.3,1.5)")
     ap.add_argument("--data", default="", help="training set version suffix, e.g. v2 -> train_v2.jsonl / val_v2.jsonl")
     ap.add_argument("--speed", type=float, default=0.0, help="share of windows speed-perturbed (0.9-1.1x)")
     ap.add_argument("--vtlp", type=float, default=0.0, help="share of windows given vocal tract length perturbation")
@@ -197,6 +204,8 @@ def main() -> None:
     if args.context < 30:
         # A clip longer than the context would lose audio its label still names.
         def secs(r):
+            if "seconds" in r:
+                return r["seconds"]
             return r["end"] - r["start"] if "clip" not in r else np.load(ROOT / r["clip"], mmap_mode="r").shape[0] / SR
 
         n0 = len(train)
@@ -258,7 +267,7 @@ def main() -> None:
         wav = [bank.window(r) for r in rows]
         if train_mode:
             wav = [speed_perturb(x, rng) if rng.random() < args.speed else x for x in wav]
-            wav = [augment(x, rng, args.room) for x in wav]
+            wav = [augment(x, rng, args.room, args.room_rt60) for x in wav]
         feats = proc.feature_extractor(wav, sampling_rate=SR, return_tensors="pt").input_features
         if train_mode and args.vtlp:
             feats = vtlp(feats, rng, args.vtlp)

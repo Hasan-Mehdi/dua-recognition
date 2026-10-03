@@ -17,6 +17,9 @@ CACHE_DIR = ROOT / "data" / "duaplayer"
 # Per-line translation and reading for the duas.org / duas.pro texts, keyed by
 # segment id like DuaPlayer's slides.json (not ours to redistribute either).
 LINES_DIR = ROOT / "data" / "lines"
+# How often each text is recited: harvest recordings per text (scripts/dua_popularity.py),
+# the tracker's prior over du'as (TrackerConfig.popularity).
+POPULARITY = ROOT / "data" / "dua_popularity.json"
 # More human-timed recordings in the same format (scripts/fetch_duaspro.py).
 # Opt-in (extra=True or DUA_EXTRA_SOURCES=1) so results stay comparable with
 # the DuaPlayer-only numbers until they're re-baselined.
@@ -44,6 +47,7 @@ class Dua:
     name_en: str
     name_ar: str
     segments: list[Segment] = field(default_factory=list)
+    recordings: int = 0  # harvest recordings of it (POPULARITY)
 
     @property
     def texts(self) -> list[str]:
@@ -80,8 +84,10 @@ def load_dua(path: str | Path, cache_dir: str | Path = CACHE_DIR) -> Dua:
 def load_all(data_dir: str | Path = DATA_DIR) -> dict[str, Dua]:
     """Load every *.json du'a under data_dir, keyed by dua id."""
     out: dict[str, Dua] = {}
+    pop = json.loads(POPULARITY.read_text(encoding="utf-8"))["recordings"] if POPULARITY.exists() else {}
     for path in sorted(Path(data_dir).glob("*.json")):
         dua = load_dua(path)
+        dua.recordings = pop.get(dua.id, 0)
         out[dua.id] = dua
     return out
 
@@ -93,7 +99,7 @@ def web_json(duas: dict[str, Dua]) -> list[dict]:
 
     return [
         {
-            "id": d.id, "name_en": d.name_en, "name_ar": d.name_ar,
+            "id": d.id, "name_en": d.name_en, "name_ar": d.name_ar, "rec": d.recordings,
             "segments": [{"id": s.id, "ar": s.arabic, "tl": for_display(s.arabic, s.transliteration),
                           "en": s.translation} for s in d.segments],
         }

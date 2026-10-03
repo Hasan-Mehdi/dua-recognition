@@ -68,6 +68,10 @@ class TrackerConfig:
     # Prior: this much mass on the first `start_words` words of each du'a.
     start_weight: float = 0.3
     start_words: int = 12
+    # Prior over du'as: P(du'a) proportional to (recordings + 1) ** popularity, from how often
+    # the harvest heard each text recited (Dua.recordings); 0 = uniform. Words many texts
+    # share (السلام عليك يا أبا عبد الله) then go to the texts people actually recite.
+    popularity: float = 0.0
     # "None of these": a state for recitations that aren't in the corpus. It
     # explains a window as if its transcript missed at `null_rate` edits per
     # letter. A du'a the corpus has matches far better than that, even misheard;
@@ -234,10 +238,18 @@ class Tracker:
         n_duas = len(ix.dua_word_span)
         anywhere = np.zeros(ix.n_words)
         start = np.zeros(ix.n_words)
-        for lo, hi in ix.dua_word_span:
-            anywhere[lo:hi] = 1.0 / (n_duas * (hi - lo))
+        pd = None
+        if self.cfg.popularity:
+            pd = (np.array([d.recordings for d in ix.duas], dtype=float) + 1.0) ** self.cfg.popularity
+            pd /= pd.sum()
+        for d, (lo, hi) in enumerate(ix.dua_word_span):
             k = min(self.cfg.start_words, hi - lo)
-            start[lo : lo + k] = 1.0 / (n_duas * k)
+            if pd is None:
+                anywhere[lo:hi] = 1.0 / (n_duas * (hi - lo))
+                start[lo : lo + k] = 1.0 / (n_duas * k)
+            else:
+                anywhere[lo:hi] = pd[d] / (hi - lo)
+                start[lo : lo + k] = pd[d] / k
         w = self.cfg.start_weight
         self._floor = w * start + (1 - w) * anywhere
         self._idx = np.arange(ix.n_words)

@@ -62,6 +62,7 @@ CTC_TAG = "ctc-student-base-v6"
 CTC_WINDOW, CTC_HOP = 2.0, 0.1
 MIN_LINES = 6  # a source is a run of at least this many consecutive, fully timed lines
 MORE_OOC = 40  # out-of-corpus readings from uploaders outside the held-out side (sources_harvest)
+MAFATIH_MIN = 3  # voices per added text in lane mafatih, from other uploaders where the held-out side is short
 SALAWAT = "اللهم صل على محمد وآل محمد"
 
 # What "usable" means, per metric (score prints pass/fail against these).
@@ -74,6 +75,7 @@ BARS = {
     "event_3s": (">=", 0.80),  # back / skip / jump / repeat / restart / switch followed within 3 s
     "stay": (">=", 0.95),  # share of pause / talk / salawat time the highlight stays put
     "found_10s": (">=", 0.95),  # du'a on screen within 10 s of the first word
+    "found_d10s": (">=", 0.95),  # ...of the first words no other text reads (--same-text)
     "ooc_shown": ("<=", 0.05),  # unknown du'a: share of time some du'a is on screen anyway
 }
 
@@ -243,8 +245,10 @@ def sources_harvest(ix) -> tuple[list[dict], list[dict]]:
     Mafatih texts the corpus has since taken in (mafatih_corpus.py) are lane "mafatih":
     their alignments carried over word by word to the corpus's own lines. The held-out
     side has few readings of texts the app lacks, so the out-of-corpus readings add one
-    each from up to MORE_OOC other uploaders (listed in test_voices.json by `sources`, so
-    training exports leave them out too; the phone's models predate the harvest)."""
+    each from up to MORE_OOC other uploaders, and an added text with fewer than
+    MAFATIH_MIN held-out runs gets runs of other uploaders up to that (all listed in
+    test_voices.json by `sources`, so training exports leave them out too; the phone's
+    models predate the harvest)."""
     from harvest_label import HARVEST, LABELS, _meta_index, _reciter, read_jsonl
     from mafatih_corpus import book_words
 
@@ -254,7 +258,7 @@ def sources_harvest(ix) -> tuple[list[dict], list[dict]]:
     metas = _meta_index()
     voices = {(r["platform"], r["id"]): r for r in read_jsonl(HARVEST / "voices.jsonl")}
     side = lambda rc: int(hashlib.sha1(rc.encode()).hexdigest()[:8], 16) % 100 < 3  # noqa: E731
-    out, ooc, more = [], [], {}
+    out, ooc, more, more_mf = [], [], {}, {}
 
     def ooc_source(res, si, sp, meta, audio, rc, good):
         return {"sid": f"harvest:{res['platform']}:{res['id']}:{si}", "lane": "harvest", "audio": str(audio),
@@ -262,6 +266,25 @@ def sources_harvest(ix) -> tuple[list[dict], list[dict]]:
                 "lines": [{"seg": ln["seg"], "words": [], "from": ln["start"] - 0.05, "to": ln["end"] + 0.1}
                           for ln in good],
                 "tags": {"platform": res["platform"], "title": meta.get("title", "")[:120]}}
+
+    def mafatih_runs(res, si, sp, add, meta, audio, rc):
+        lo = ix.dua_word_span[ix.dua_ids.index(add["dua"])][0]
+        timed: dict[int, list] = {}  # two book words can be one of ours (a separate وَ joined on)
+        for ln in sp["lines"]:
+            o = add["off"].get(ln["seg"])
+            if not ln["ok"] or o is None or add["words"][o:o + len(ln["words"])] != ln["words"]:
+                continue
+            for j, (a, b) in enumerate(ln["times"]):
+                w = add["local"].get(o + j)
+                if w is not None:
+                    t = timed.setdefault(lo + w, [a, b])
+                    t[0], t[1] = min(t[0], a), max(t[1], b)
+        words = [[w, a, b, 0.0] for w, (a, b) in timed.items()]
+        runs = sorted(_line_runs(sorted(words, key=lambda w: w[1]), ix), key=len, reverse=True)
+        return [{"sid": f"harvest:{res['platform']}:{res['id']}:{si}.{k}", "lane": "mafatih", "audio": str(audio),
+                 "dua": add["dua"], "voice": rc, "lines": run,
+                 "tags": {"platform": res["platform"], "title": meta.get("title", "")[:120]}}
+                for k, run in enumerate(runs[:2]) if len(run) >= MIN_LINES]
 
     for lab in sorted(LABELS.glob("*/*.json")):
         if lab.name.endswith(".captions.json"):
@@ -275,6 +298,12 @@ def sources_harvest(ix) -> tuple[list[dict], list[dict]]:
         if voices.get(key, {}).get("verdict") != "ok":
             continue
         if not side(rc):
+            for si, sp in enumerate(res["spans"]):
+                add = added.get(sp["dua"])
+                if add and sp["usable"] and rc not in more_mf.get(add["dua"], {}):
+                    runs = mafatih_runs(res, si, sp, add, meta, audio, rc)
+                    if runs:
+                        more_mf.setdefault(add["dua"], {})[rc] = runs[0]
             if rc in more or any(sp["dua"] in added for sp in res["spans"]):
                 continue
             for si, sp in enumerate(res["spans"]):
@@ -288,24 +317,7 @@ def sources_harvest(ix) -> tuple[list[dict], list[dict]]:
                 continue
             add = added.get(sp["dua"])
             if add:
-                lo = ix.dua_word_span[ix.dua_ids.index(add["dua"])][0]
-                timed: dict[int, list] = {}  # two book words can be one of ours (a separate وَ joined on)
-                for ln in sp["lines"]:
-                    o = add["off"].get(ln["seg"])
-                    if not ln["ok"] or o is None or add["words"][o:o + len(ln["words"])] != ln["words"]:
-                        continue
-                    for j, (a, b) in enumerate(ln["times"]):
-                        w = add["local"].get(o + j)
-                        if w is not None:
-                            t = timed.setdefault(lo + w, [a, b])
-                            t[0], t[1] = min(t[0], a), max(t[1], b)
-                words = [[w, a, b, 0.0] for w, (a, b) in timed.items()]
-                runs = sorted(_line_runs(sorted(words, key=lambda w: w[1]), ix), key=len, reverse=True)
-                for k, run in enumerate(runs[:2]):
-                    if len(run) >= MIN_LINES:
-                        out.append({"sid": f"harvest:{res['platform']}:{res['id']}:{si}.{k}", "lane": "mafatih",
-                                    "audio": str(audio), "dua": add["dua"], "voice": rc, "lines": run,
-                                    "tags": {"platform": res["platform"], "title": meta.get("title", "")[:120]}})
+                out += mafatih_runs(res, si, sp, add, meta, audio, rc)
                 continue
             if sp["dua"] not in ix.dua_ids:
                 good = [ln for ln in sp["lines"] if ln["ok"]]
@@ -332,7 +344,11 @@ def sources_harvest(ix) -> tuple[list[dict], list[dict]]:
                 out.append({"sid": f"harvest:{res['platform']}:{res['id']}:{si}.{k}", "lane": "harvest",
                             "audio": str(audio), "dua": sp["dua"], "voice": rc, "lines": run,
                             "tags": {"platform": res["platform"], "title": meta.get("title", "")[:120]}})
-    ooc += [more[rc] for rc in sorted(more, key=lambda rc: hashlib.sha1(rc.encode()).hexdigest())[:MORE_OOC]]
+    order = lambda rc: hashlib.sha1(rc.encode()).hexdigest()  # noqa: E731
+    ooc += [more[rc] for rc in sorted(more, key=order)[:MORE_OOC]]
+    for dua, cands in sorted(more_mf.items()):
+        need = MAFATIH_MIN - len({s["voice"] for s in out if s["lane"] == "mafatih" and s["dua"] == dua})
+        out += [cands[rc] for rc in sorted(cands, key=order)[:max(0, need)]]
     return out, ooc
 
 
@@ -1013,7 +1029,7 @@ _W: dict = {}
 
 
 def _worker_init(cfg_kw: dict, fw_kw: dict, asr_tag: str, ctc_tag: str, delay: float, f_delay: float,
-                 display: str = "follower", sc_kw: dict | None = None) -> None:
+                 display: str = "follower", sc_kw: dict | None = None, same_text: int = 0) -> None:
     from dataclasses import replace
 
     import evaluate as ev
@@ -1028,6 +1044,39 @@ def _worker_init(cfg_kw: dict, fw_kw: dict, asr_tag: str, ctc_tag: str, delay: f
         from dua_recognition.stream_follower import StreamConfig
 
         _W["scfg"] = replace(StreamConfig(), **sc_kw)
+    _W["same_text"] = same_text
+    if same_text:
+        _W["passages"] = _passages(_W["ix"], same_text)
+
+
+def _passages(ix, k: int) -> dict:
+    """k-word passages more than one du'a reads: words -> {du'a index: [its last word, ...]}."""
+    text = [w.text for w in ix.words]
+    seen: dict = {}
+    for d, (lo, hi) in enumerate(ix.dua_word_span):
+        for e in range(lo + k - 1, hi):
+            seen.setdefault(tuple(text[e - k + 1 : e + 1]), {}).setdefault(d, []).append(e)
+    return {key: v for key, v in seen.items() if len(v) > 1}
+
+
+def _same_text(shown: list, truth_word: list, ix, k: int) -> list:
+    """The display moved onto the reader's du'a wherever it shows the same k words the reader's
+    du'a reads (Ayat al-Kursi in three texts, the salam passages of the ziyarat): no display
+    could tell those apart, and the reader sees their own words."""
+    passages, text, out = _W["passages"], [w.text for w in ix.words], []
+    for s, tw in zip(shown, truth_word):
+        if s is None or tw is None or s[0] == ix.dua_ids[ix.word_dua[tw]]:
+            out.append(s)
+            continue
+        w, td = s[2], int(ix.word_dua[tw])
+        whole = w - k + 1 >= ix.dua_word_span[ix.word_dua[w]][0]  # k words inside the shown du'a
+        hits = passages.get(tuple(text[w - k + 1 : w + 1]), {}).get(td) if whole else None
+        if not hits:
+            out.append(s)
+            continue
+        p = min(hits, key=lambda e: abs(e - tw))
+        out.append((ix.dua_ids[td], int(ix.word_segment[p]), p))
+    return out
 
 
 def replay(it: dict) -> list[tuple] | None:
@@ -1151,6 +1200,9 @@ def metrics(it: dict, shown: list, ix) -> dict:
     gw.sort(key=lambda x: x[1])
     starts = [x[1] for x in gw]
     still = it["still"]
+    if gw and _W.get("same_text"):
+        tw = [None if (k := bisect.bisect_right(starts, t) - 1) < 0 else gw[k][0] for t in ticks]
+        shown = _same_text(shown, tw, ix, _W["same_text"])
     D = [None if s is None else _code(s[0], s[1]) for s in shown]
     m = {"items": 1, "minutes": it["duration"] / 60}
     if not gw:  # out of corpus: is anything shown?
@@ -1178,6 +1230,13 @@ def metrics(it: dict, shown: list, ix) -> dict:
                   and D[i].split("#")[0] == TL[i].split("#")[0]), None)
     m["found_n"] = 1
     m["found_10s"] = int(found is not None and ticks[found] - first <= 10.0)
+    if _W.get("same_text"):  # the clock from the first words no other text reads (basmala, salawat first)
+        k, text = _W["same_text"], [w.text for w in ix.words]
+        own = [(w, a) for w, a, _ in gw if w - k + 1 >= ix.dua_word_span[ix.word_dua[w]][0]
+               and tuple(text[w - k + 1 : w + 1]) not in _W["passages"]]
+        if own:
+            m["found_d_n"] = 1
+            m["found_d10s"] = int(found is not None and ticks[found] - own[0][1] <= 10.0)
     m["found_s"] = float(ticks[found] - first) if found is not None else 60.0
     # on the line (1 s lag grace, 0.3 s early grace), after the du'a was first found
     ok = np.zeros(T, bool)
@@ -1314,6 +1373,8 @@ def aggregate(ms: list[dict]) -> dict:
         out["lost_10"] = s("lost") / minutes * 10
         out["lost_share"] = s("lost_ticks") / max(1, s("after_found_ticks"))
         out["found_10s"] = s("found_10s") / max(1, s("found_n"))
+        if s("found_d_n"):
+            out["found_d10s"] = s("found_d10s") / s("found_d_n")
         out["found_med"] = float(np.median([m["found_s"] for m in ms if "found_s" in m]))
         out["entry_lag"] = float(np.median(lags)) if lags else float("nan")
     if evs:
@@ -1340,7 +1401,8 @@ def passes(agg: dict) -> dict:
 COLS = [("on_line", "on line", "{:.0%}"), ("word_exact", "word", "{:.0%}"), ("jumps_10", "jumps/10m", "{:.2f}"),
         ("early_10", "early/10m", "{:.2f}"), ("lost_10", "lost/10m", "{:.2f}"), ("wrong_place", "wrong place", "{:.0%}"),
         ("event_3s", "follows≤3s", "{:.0%}"), ("event_med", "follow med", "{:.1f}s"), ("stay", "stays put", "{:.0%}"),
-        ("found_10s", "found≤10s", "{:.0%}"), ("found_med", "found med", "{:.1f}s"), ("wrong_dua", "wrong du'a", "{:.1%}"),
+        ("found_10s", "found≤10s", "{:.0%}"), ("found_d10s", "found≤10s*", "{:.0%}"),
+        ("found_med", "found med", "{:.1f}s"), ("wrong_dua", "wrong du'a", "{:.1%}"),
         ("entry_lag", "line lag", "{:+.2f}s"), ("ooc_shown", "ooc shown", "{:.0%}")]
 
 
@@ -1392,7 +1454,7 @@ def cmd_score(args) -> None:
     for a in (x for x in args.sc.split(",") if x):
         k, v = a.split("=")
         sc_kw[k] = tuple(float(x) for x in v.split(";")) if ";" in v else             (int(v) if k in ("line_steps", "next_steps") else float(v))
-    init = (cfg_kw, fw_kw, asr_tag, ctc_tag, args.delay, args.follow_delay, args.display, sc_kw)
+    init = (cfg_kw, fw_kw, asr_tag, ctc_tag, args.delay, args.follow_delay, args.display, sc_kw, args.same_text)
     results = {}
     with Pool(args.workers, initializer=_worker_init, initargs=init) as pool:
         for r in pool.imap_unordered(_score_one, items, chunksize=1):
@@ -1462,6 +1524,9 @@ def main() -> None:
     s.add_argument("--compare", help="a previous --name to diff against")
     s.add_argument("--split", choices=["dev", "test", "all"], default="all", help="voices: tune on dev, report test")
     s.add_argument("--lane", help="only this lane (studio, majlis, harvest, user)")
+    s.add_argument("--same-text", type=int, default=0, metavar="K",
+                   help="count the display right where it shows the same K words as the reader's du'a there "
+                        "(a passage several texts share); 0 = only the reader's own du'a counts")
     s.add_argument("--display", choices=["follower", "tracker", "oracle", "stream"], default="follower",
                    help="what drives the highlight: the phone's follower (default), the tracker alone, or the "
                         "follower anchored on the true word (a perfect tracker)")

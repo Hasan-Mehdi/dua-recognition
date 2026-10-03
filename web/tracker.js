@@ -122,7 +122,7 @@ export const DEFAULTS = {
   kappa: 0.15, kappaSearch: 1.2, lockConfidence: 0.95, maxSpeed: 4.0,
   // Speed prior and tempo adaptation: see TrackerConfig.speeds / tempo_memory in tracker.py.
   speeds: [0.59, 0.99, 1.15, 1.3, 1.44, 1.55, 1.67, 1.84, 2.05, 2.39], tempoMemory: 0.98,
-  pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, pLineJump: 0.02, startWeight: 0.3, startWords: 12, minDuaConfidence: 0.7, sameTextWords: 12, sameTextAhead: 3,
+  pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, pLineJump: 0.02, startWeight: 0.3, startWords: 12, popularity: 0, minDuaConfidence: 0.7, sameTextWords: 12, sameTextAhead: 3,
   // Shared passages spelled differently count as one, for the display and the lock
   // (TrackerConfig.same_text_spelling / lock_on_passage in tracker.py).
   sameTextSpelling: true, lockOnPassage: true,
@@ -158,16 +158,23 @@ export class Tracker {
     this.floor = new Float64Array(n);
     this.first = new Int32Array(n);
     this.last = new Int32Array(n);
-    for (const [lo, hi] of index.duaWordSpan) {
+    // Prior over du'as (TrackerConfig.popularity): proportional to (recordings + 1) ** popularity.
+    let pd = null;
+    if (this.cfg.popularity) {
+      pd = index.duas.map((d) => ((d.rec || 0) + 1) ** this.cfg.popularity);
+      const sum = pd.reduce((a, b) => a + b, 0);
+      pd = pd.map((x) => x / sum);
+    }
+    index.duaWordSpan.forEach(([lo, hi], d) => {
       const k = Math.min(this.cfg.startWords, hi - lo);
       for (let w = lo; w < hi; w++) {
-        const anywhere = 1 / (nDuas * (hi - lo));
-        const start = w - lo < k ? 1 / (nDuas * k) : 0;
+        const anywhere = pd ? pd[d] / (hi - lo) : 1 / (nDuas * (hi - lo));
+        const start = w - lo < k ? (pd ? pd[d] / k : 1 / (nDuas * k)) : 0;
         this.floor[w] = this.cfg.startWeight * start + (1 - this.cfg.startWeight) * anywhere;
         this.first[w] = lo;
         this.last[w] = hi - 1;
       }
-    }
+    });
     // First word of each word's line, and of the line after it.
     this.lineFirst = new Int32Array(n);
     this.nextLine = new Int32Array(n).fill(n);

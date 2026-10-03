@@ -37,13 +37,14 @@ PARITY_DUAS = ["dua-aahad", "dua-abu-hamza-thumali", "dua-al-hajj", "dua-allahhu
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
-@pytest.mark.parametrize("lead,drop,pauses", [(0.0, False, False), (1.3, False, False), (1.3, True, False),
-                                              (1.3, False, True)])
-def test_js_tracker_matches_python(tmp_path, lead, drop, pauses):
+@pytest.mark.parametrize("lead,drop,pauses,pop", [(0.0, False, False, 0.0), (1.3, False, False, 0.0),
+                                                  (1.3, True, False, 0.0), (1.3, False, True, 0.0),
+                                                  (1.3, False, False, 0.5)])
+def test_js_tracker_matches_python(tmp_path, lead, drop, pauses, pop):
     """lead 1.3: the live display's lookahead. drop: the second du'a streamed is
     missing from the corpus, which exercises the "not in the corpus" state.
     pauses: the reciter falls silent now and then (quiet > 0), with every
-    pause rule switched on."""
+    pause rule switched on. pop: the prior over du'as by how often each is recited."""
     all_duas = load_all()
     corpus = {k: all_duas[k] for k in PARITY_DUAS}
     texts = _stream([corpus[k] for k in list(corpus)[3:5]])
@@ -53,14 +54,15 @@ def test_js_tracker_matches_python(tmp_path, lead, drop, pauses):
     rng = random.Random(3)
     quiet = [rng.choice([0.0, 0.0, 0.0, 0.2, 0.7, 1.5, 3.0]) if pauses else 0.0 for _ in texts]
     rules = {"still_motion_after": 0.3, "lead_cross_quiet": 0.25, "retreat_after": 1.0} if pauses else {}
-    tracker = Tracker(CorpusIndex(corpus), TrackerConfig(**rules))
+    tracker = Tracker(CorpusIndex(corpus), TrackerConfig(**rules, popularity=pop))
     expected = []
     for t, q in zip(texts, quiet):
         p = tracker.update(t, 1.0, lead, quiet=q)
         expected.append([p.dua, p.segment, p.word])
-    js_rules = json.dumps({"stillMotionAfter": 0.3, "leadCrossQuiet": 0.25, "retreatAfter": 1.0} if pauses else {})
+    js_rules = json.dumps({**({"stillMotionAfter": 0.3, "leadCrossQuiet": 0.25, "retreatAfter": 1.0} if pauses else {}),
+                           **({"popularity": pop} if pop else {})})
 
-    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar,
+    payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar, "rec": d.recordings,
                 "segments": [{"id": s.id, "ar": s.arabic} for s in d.segments]} for d in corpus.values()]
     (tmp_path / "corpus.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "texts.json").write_text(json.dumps(texts, ensure_ascii=False), encoding="utf-8")
