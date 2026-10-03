@@ -59,6 +59,7 @@ export const STREAM_DEFAULTS = {
   // A du'a change counts once the tracker has held the new du'a this long (0 = at once): texts that
   // share a passage flip the tracker's du'a for a moment.
   switchS: 2.0,
+  switchShowSteps: 0, // ...then its word shows once it holds lineP this many steps (StreamConfig)
   // The beam (0 = off): only lines holding beam of the belief, beamMargin lines either side, the shown
   // word's line and the tracker's proposals (proposeMass, +-1) are updated (stream_follower.py _prune).
   beam: 1e-6,
@@ -239,7 +240,11 @@ export class StreamFollower {
       }
       this.active = on;
     }
-    this.word = hmmWord;
+    this.cand = null;
+    this.candN = 0;
+    this.gateN = 0;
+    // else the old du'a's word stays on screen until step() sees the new one hold (switchShowSteps)
+    if (this.word == null || this.cfg.switchShowSteps <= 0) this.word = hmmWord;
   }
 
   static _copy(st) {
@@ -569,6 +574,7 @@ export class StreamFollower {
         return null;
       }
       hmmWord = this.word;
+      if (ix.wordDua[hmmWord] !== this.dua) hmmWord = this._dua(this.dua).lo; // a du'a change not shown yet
       lineMass = null;
     } else this.lapseSince = null;
     let d = ix.wordDua[hmmWord];
@@ -611,7 +617,8 @@ export class StreamFollower {
     this.steps++;
     // stalled while the reader sounds, the tracker well ahead (or on a later line): push
     if (cfg.pushP > 0 && this.shownSince != null && t - this.shownSince >= cfg.stuckS && quietNow != null
-        && quietNow < cfg.quietS && this.word != null && ix.wordDua[hmmWord] === this.dua && this.lapseSince == null) {
+        && quietNow < cfg.quietS && this.word != null && ix.wordDua[hmmWord] === this.dua
+      && ix.wordDua[this.word] === this.dua && this.lapseSince == null) {
       const ahead = hmmWord - this.word >= cfg.pushWords;
       const other = dd0(this).lineOfWord[hmmWord - dd0(this).lo] !== dd0(this).lineOfWord[this.word - dd0(this).lo]
         && hmmWord > this.word;
@@ -640,8 +647,23 @@ export class StreamFollower {
     const w = dd.lo + best;
     const cur = this.word;
     if (cur == null || ix.wordDua[cur] !== this.dua) {
-      this.word = w;
-      return w;
+      if (cur == null || cfg.switchShowSteps <= 0) {
+        this.word = w;
+        return w;
+      }
+      if (pw[best] < cfg.lineP) {
+        this.cand = null;
+        this.candN = 0;
+        return cur;
+      }
+      this.candN = this.cand === w ? this.candN + 1 : 1;
+      this.cand = w;
+      if (this.candN >= cfg.switchShowSteps) {
+        this.word = w;
+        this.cand = null;
+        this.candN = 0;
+      }
+      return this.word;
     }
     if (w === cur) {
       this.cand = null;

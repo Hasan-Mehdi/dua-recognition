@@ -104,6 +104,9 @@ class StreamConfig:
     # share a passage (Ayat al-Kursi in Namaz-e-Wahshat and Eid-e-Mubahila) flip the tracker's du'a for a
     # moment, and starting over there showed a line of the other text.
     switch_s: float = 2.0
+    # ...and then its word is shown once it holds line_p of the belief for this many steps (0 = at
+    # once): the belief seeded from the tracker's lines may still sit on the wrong one.
+    switch_show_steps: int = 0
     # A beam (0 = off: every line every frame, too slow for Kumayl on a phone): after each step only
     # lines holding at least `beam` of the belief, `beam_margin` lines either side (back and skip
     # moves land there), the shown word's line and every line the tracker puts `propose_mass` on
@@ -630,7 +633,10 @@ class StreamFollower:
                 self.L[a:b] = NEG
                 self.B[a:b] = NEG
             self.active = on.astype(np.uint8)
-        self.word = int(hmm_word)
+        self._cand, self._cand_n, self._gate_n = None, 0, 0
+        if self.word is None or self.cfg.switch_show_steps <= 0:
+            self.word = int(hmm_word)
+        # else the old du'a's word stays on screen until _step sees the new one hold (switch_show_steps)
 
     def _advance(self, L, B, F, IL, IB, frames: np.ndarray):
         dd = self._dua(self.dua)
@@ -795,6 +801,8 @@ class StreamFollower:
                 self.reset()
                 return None
             hmm_word = self.word  # carry on in the du'a it was in
+            if ix.word_dua[hmm_word] != self.dua:  # (a du'a change not shown yet: on in the new one)
+                hmm_word = self._dua(self.dua).lo
         else:
             self._lapse_since = None
         d = int(ix.word_dua[hmm_word])
@@ -832,7 +840,10 @@ class StreamFollower:
                                                                  self._quiet(new, q_then))
         self._steps += 1
         # stalled while the reader sounds, the tracker well ahead (or on another line): push
-        if cfg.push_p > 0 and self._shown_since is not None and t - self._shown_since >= cfg.stuck_s                 and quiet_now is not None and quiet_now < cfg.quiet_s and self.word is not None                 and hmm_word is not None and ix.word_dua[hmm_word] == self.dua and self._lapse_since is None:
+        if (cfg.push_p > 0 and self._shown_since is not None and t - self._shown_since >= cfg.stuck_s
+                and quiet_now is not None and quiet_now < cfg.quiet_s and self.word is not None
+                and hmm_word is not None and ix.word_dua[hmm_word] == self.dua
+                and ix.word_dua[self.word] == self.dua and self._lapse_since is None):
             dd0 = self._dua(self.dua)
             ahead = hmm_word - self.word >= cfg.push_words
             other = dd0.line_of_word[hmm_word - dd0.lo] != dd0.line_of_word[self.word - dd0.lo] and hmm_word > self.word
@@ -856,8 +867,17 @@ class StreamFollower:
         w = dd.lo + best
         cur = self.word
         if cur is None or ix.word_dua[cur] != self.dua:
-            self.word = w
-            return w
+            if cur is None or cfg.switch_show_steps <= 0:
+                self.word = w
+                return w
+            if pw[best] < cfg.line_p:  # a du'a change: the old du'a stays on screen until this holds
+                self._cand, self._cand_n = None, 0
+                return cur
+            self._cand_n = self._cand_n + 1 if self._cand == w else 1
+            self._cand = w
+            if self._cand_n >= cfg.switch_show_steps:
+                self.word, self._cand, self._cand_n = w, None, 0
+            return self.word
         if w == cur:
             self._cand, self._cand_n, self._gate_n = None, 0, 0
             return cur

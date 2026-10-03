@@ -87,6 +87,25 @@ def shown_from_log(it: dict, path: Path, ix) -> tuple[list, float]:
     return shown, off
 
 
+def page_log(path: Path, query: str) -> tuple[list[float], dict]:
+    """The page's follower step times (ms, ctc events) and, for every ?sc= / ?tc= setting in the
+    query, the value its session log says it ran with (so a typo can't pass for a variant)."""
+    import session_report as sr
+
+    _, log = sr.read_session(path)
+    ms = [float(e["follow_ms"]) for e in log["events"] if e["type"] == "ctc" and e.get("follow_ms") is not None]
+    asked = {}
+    for part in query.split("&"):
+        key, _, val = part.partition("=")
+        if key in ("sc", "tc"):
+            for kv in val.split(","):
+                if ":" in kv:
+                    asked[(key, kv.split(":")[0])] = kv.split(":")[1]
+    ran = {f"{key}.{k}": ((log.get("words") or {}) if key == "sc" else (log.get("tracker") or {})).get(k, "MISSING")
+           for key, k in asked}
+    return ms, ran
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--name", default="page_test")
@@ -98,6 +117,7 @@ def main() -> None:
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--report", action="store_true", help="only score what has been played")
     ap.add_argument("--variants", nargs="*", default=None, help="name:query pairs (default: --name with --query)")
+    ap.add_argument("--same-text", type=int, default=8, help="as bench.py score --same-text")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     items = bench.load_items(split=args.split)
@@ -116,10 +136,11 @@ def main() -> None:
     import evaluate as ev
 
     ix = ev.CorpusIndex(ev.load_all())
-    bench._worker_init({}, {}, bench.ASR_TAG, bench.CTC_TAG, 1.2, 0.15)
-    res = {}
-    for name, _ in variants:
+    bench._worker_init({}, {}, bench.ASR_TAG, bench.CTC_TAG, 1.2, 0.15, same_text=args.same_text)
+    res, steps_ms, echo = {}, {}, {}
+    for name, query in variants:
         page = {}
+        steps_ms[name] = []
         for it in pick:
             f = OUT / name / f"{it['id']}.session.wav"
             if not f.exists():
@@ -129,12 +150,18 @@ def main() -> None:
             m.update(scenario=it["scenario"], lane=it["lane"], voice=it["voice"], split=bench.split_of(it["voice"]),
                      dua=it["dua"], offset=off)
             page[it["id"]] = m
+            ms, echo[name] = page_log(f, query)
+            steps_ms[name] += ms
         res[name] = page
         (OUT / f"{name}.json").write_text(json.dumps({"page": page}, ensure_ascii=False), encoding="utf-8")
     both = set.intersection(*(set(r) for r in res.values())) if res else set()
     for name, page in res.items():
         print(f"\n== {name} (real page, headless Chrome): {len(both)} items played by every variant")
         print(bench.table(bench.grid_rows({k: v for k, v in page.items() if k in both})))
+        ms = np.array(steps_ms[name])
+        if ms.size:
+            print(f"follow_ms per step: median {np.median(ms):.1f}, p90 {np.percentile(ms, 90):.1f} ({ms.size} steps)")
+        print(f"settings the page ran with (from its session log): {echo.get(name) or 'shipped'}")
 
 
 if __name__ == "__main__":

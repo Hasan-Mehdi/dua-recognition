@@ -185,6 +185,15 @@ class TrackerConfig:
     # A du'a on screen stays on screen until its mass falls below this (None =
     # min_dua_confidence, the bar to appear): a threshold with hysteresis.
     keep_dua_confidence: float | None = None
+    # Texts that read a passage word for word (Ayat al-Kursi in Namaz-e-Wahshat, Eid-e-Mubahila and
+    # Sahifa 54): keep_in_passage holds the du'a on screen while the passage is shared even if it
+    # was never told apart (else the pick among identical texts flips update by update), and
+    # another du'a replaces the one on screen only once it has stood alone on top for
+    # switch_confirm updates in a row while the one on screen still holds switch_hold_mass (at
+    # the end of the passage the other text led for one update).
+    keep_in_passage: bool = False
+    switch_confirm: int = 0
+    switch_hold_mass: float = 0.05
     # After retreat_after of silence, a highlight that ran ahead of the evidence
     # within its line steps back to the evidence's word too, not only a display
     # that ran into the next line. Someone who stops mid-line to look up should find
@@ -284,6 +293,9 @@ class Tracker:
         self.null = 0.5 if self.cfg.null_rate > 0 else 0.0  # P(not in the corpus)
         self._reported: int | None = None  # the du'a last reported (index)
         self._found_alone = False  # ...and it was told apart from every other text
+        self._n_updates = 0
+        self._alone_cand: int | None = None  # a du'a standing alone on top, not shown yet...
+        self._alone_first = 0  # ...since this update
 
     # -- predict ---------------------------------------------------------
     def _locked(self) -> bool:
@@ -401,6 +413,7 @@ class Tracker:
         cost: no alignment costs more than deleting the whole transcript, and
         across the corpus the worst one comes within a letter of that.
         """
+        self._n_updates += 1
         if n_letters is None and costs is not None:
             n_letters = int(costs.max())
         # An empty window is almost always the pause between lines: the
@@ -611,11 +624,25 @@ class Tracker:
             need = self.cfg.keep_dua_confidence  # already on screen: keep it down to the lower bar
         if conf < need:
             return Position(None, conf, None, 0.0, None, candidates=top)
+        cfg = self.cfg
         if len(group) == 1:
-            d, self._found_alone = group[0], True
-        elif self._reported in group and self._found_alone:
+            d = group[0]
+            held = (cfg.switch_confirm > 0 and self._reported is not None and d != self._reported
+                    and dua_mass[self._reported] >= cfg.switch_hold_mass)
+            if held:
+                if self._alone_cand != d:
+                    self._alone_cand, self._alone_first = d, self._n_updates
+                if self._n_updates - self._alone_first + 1 < cfg.switch_confirm:
+                    d = self._reported  # not yet: the du'a on screen stays
+                else:
+                    self._alone_cand, self._found_alone = None, True
+            else:
+                self._alone_cand, self._found_alone = None, True
+        elif self._reported in group and (self._found_alone or cfg.keep_in_passage):
             d = self._reported
+            self._alone_cand = None
         else:
+            self._alone_cand = None
             d = min(group, key=lambda g: self._likeliest(g) - ix.dua_word_span[g][0])
             self._found_alone = False
         self._reported = d

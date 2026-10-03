@@ -84,8 +84,11 @@ def test_numba_equals_numpy():
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 @pytest.mark.parametrize("extra", [{}, {"trackerWeight": 0.0, "nextSteps": 1}, {"quietPen": 0.0, "interjection": ""},
                                    {"nextMargin": 3.0, "nextHold": 0.5, "gateWords": 2},
-                                   {"nextMargin": 2.0, "nextHold": 0.3, "gateTentative": False}])
+                                   {"nextMargin": 2.0, "nextHold": 0.3, "gateTentative": False},
+                                   {"switchShowSteps": 2, "_flip": True}, {"_flip": True}])
 def test_js_stream_matches_python(tmp_path, extra):
+    extra = dict(extra)
+    flip = extra.pop("_flip", False)  # the tracker reports another du'a for a while (a shared passage)
     all_duas = load_all()
     corpus = {k: all_duas[k] for k in DUAS}
     ix = CorpusIndex(corpus)
@@ -102,6 +105,9 @@ def test_js_stream_matches_python(tmp_path, extra):
         anchors.append(min(max(lo, a), hi - 1))
         if 600 <= end < 700:
             anchors[-1] = None  # the tracker lost the du'a for a while
+        if flip and 300 <= end < 450:
+            lo2, hi2 = ix.dua_word_span[2]
+            anchors[-1] = lo2 + (anchors[-1] - lo) % (hi2 - lo2)
         tail = frames[max(0, end - 25) : end]
         quiet.append(round(float((tail[:, 0] > tail[:, 1:].max(axis=1)).mean()) * 0.6, 3))
     # The tracker's belief: most of it on the anchor's line, the rest spread.
@@ -113,7 +119,8 @@ def test_js_stream_matches_python(tmp_path, extra):
                           quiet_pen=js_cfg["quietPen"],
                           interjections=(js_cfg["interjection"],) if js_cfg["interjection"] else (),
                           next_margin=js_cfg.get("nextMargin", 0.0), next_hold=js_cfg.get("nextHold", 0.5),
-                          gate_words=js_cfg.get("gateWords", 2), gate_tentative=js_cfg.get("gateTentative", True))
+                          gate_words=js_cfg.get("gateWords", 2), gate_tentative=js_cfg.get("gateTentative", True),
+                          switch_show_steps=js_cfg.get("switchShowSteps", 0))
 
     def mass_fn(anchor):
         if anchor is None:

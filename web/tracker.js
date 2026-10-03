@@ -138,6 +138,8 @@ export const DEFAULTS = {
   // line stays until the evidence passes it; a step back waits for a second update; once locked,
   // "not in the corpus" needs worse windows; a du'a on screen stays down to a lower bar.
   leadCrossWords: Infinity, seekPinsLine: true, backConfirm: 2, nullRateLocked: 0.55, keepDuaConfidence: null,
+  // Shared passages (TrackerConfig.keep_in_passage / switch_confirm / switch_hold_mass).
+  keepInPassage: false, switchConfirm: 0, switchHoldMass: 0.05,
   // Stops (TrackerConfig.retreat_in_line / still_catch_up in tracker.py): after a second of
   // silence a highlight ahead of the evidence in its own line steps back too; while silent the
   // display may still move forward to the evidence.
@@ -201,6 +203,9 @@ export class Tracker {
     this.null = this.cfg.nullRate > 0 ? 0.5 : 0; // P(not in the corpus)
     this.reported = null; // the du'a last reported (index)
     this.foundAlone = false; // ...and it was told apart from every other text
+    this.nUpdates = 0;
+    this.aloneCand = null; // a du'a standing alone on top, not shown yet...
+    this.aloneFirst = 0; // ...since this update
     const k = Math.max(1, this.cfg.speeds.length);
     this.tempo = new Float64Array(k).fill(1 / k);
     this.fwdBySpeed = null;
@@ -293,6 +298,7 @@ export class Tracker {
   // update is shown (gate.js LiveQuiet; null = not known); `paused`: seconds of the last dt spent in
   // pauses (gate.js stopMeasures; null = only `quiet` counts). See tracker.py update.
   update(transcript, dt, lead = 0, quiet = 0, quietNow = null, paused = null) {
+    this.nUpdates += 1;
     const costs = transcript ? this.ix.wordCosts(transcript) : null;
     const moving = paused != null && this.cfg.pauseMotion ? dt - paused
       : quiet > this.cfg.stillMotionAfter ? dt - quiet : dt;
@@ -515,12 +521,30 @@ export class Tracker {
     // Shown: the du'a on screen if it was found before the shared passage began,
     // else the one the passage sits nearest the start of (tracker.py).
     let d;
+    const cfg = this.cfg;
     if (group.length === 1) {
       d = group[0];
-      this.foundAlone = true;
-    } else if (group.includes(this.reported) && this.foundAlone) {
+      const held = cfg.switchConfirm > 0 && this.reported != null && d !== this.reported
+        && mass[this.reported] >= cfg.switchHoldMass;
+      if (held) {
+        if (this.aloneCand !== d) {
+          this.aloneCand = d;
+          this.aloneFirst = this.nUpdates;
+        }
+        if (this.nUpdates - this.aloneFirst + 1 < cfg.switchConfirm) d = this.reported;
+        else {
+          this.aloneCand = null;
+          this.foundAlone = true;
+        }
+      } else {
+        this.aloneCand = null;
+        this.foundAlone = true;
+      }
+    } else if (group.includes(this.reported) && (this.foundAlone || cfg.keepInPassage)) {
       d = this.reported;
+      this.aloneCand = null;
     } else {
+      this.aloneCand = null;
       const offset = (g) => this._likeliest(g) - ix.duaWordSpan[g][0];
       d = group.reduce((a, b) => (offset(b) < offset(a) ? b : a));
       this.foundAlone = false;

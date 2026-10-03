@@ -34,33 +34,37 @@ def _stream(duas, seed=0):
 PARITY_DUAS = ["dua-aahad", "dua-abu-hamza-thumali", "dua-al-hajj", "dua-allahhuma-adhkil-ala",
                "dua-allahuma-arzukni", "dua-allahuma-laan-qatala", "dua-allahuma-ya-man-yaml",
                "dua-allahumma-laka-sumtu", "dua-amaal-quran", "dua-arafat", "dua-baha", "dua-eid-maghrib-isha"]
+# Ayat al-Kursi is read word for word in all three (the shared-passage case reads the last two).
+SHARED_DUAS = ["duasorg-eid-e-mubahila-1", "duasorg-eid-e-mubahila-3", "duasorg-namaz-e-wahshat"]
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
-@pytest.mark.parametrize("lead,drop,pauses,pop", [(0.0, False, False, 0.0), (1.3, False, False, 0.0),
-                                                  (1.3, True, False, 0.0), (1.3, False, True, 0.0),
-                                                  (1.3, False, False, 0.5)])
-def test_js_tracker_matches_python(tmp_path, lead, drop, pauses, pop):
+@pytest.mark.parametrize("lead,drop,pauses,pop,shared", [(0.0, False, False, 0.0, False), (1.3, False, False, 0.0, False),
+                                                         (1.3, True, False, 0.0, False), (1.3, False, True, 0.0, False),
+                                                         (1.3, False, False, 0.5, False), (1.3, False, False, 0.5, True)])
+def test_js_tracker_matches_python(tmp_path, lead, drop, pauses, pop, shared):
     """lead 1.3: the live display's lookahead. drop: the second du'a streamed is
     missing from the corpus, which exercises the "not in the corpus" state.
     pauses: the reciter falls silent now and then (quiet > 0), with every
-    pause rule switched on. pop: the prior over du'as by how often each is recited."""
+    pause rule switched on. pop: the prior over du'as by how often each is recited.
+    shared: a reading through a passage three texts share, with the shared-passage rules on."""
     all_duas = load_all()
-    corpus = {k: all_duas[k] for k in PARITY_DUAS}
-    texts = _stream([corpus[k] for k in list(corpus)[3:5]])
+    corpus = {k: all_duas[k] for k in PARITY_DUAS + (SHARED_DUAS if shared else [])}
+    texts = _stream([corpus[k] for k in (SHARED_DUAS[1:] if shared else list(corpus)[3:5])])
     if drop:
         corpus.pop(list(corpus)[4])
 
     rng = random.Random(3)
     quiet = [rng.choice([0.0, 0.0, 0.0, 0.2, 0.7, 1.5, 3.0]) if pauses else 0.0 for _ in texts]
     rules = {"still_motion_after": 0.3, "lead_cross_quiet": 0.25, "retreat_after": 1.0} if pauses else {}
+    rules |= {"keep_in_passage": True, "switch_confirm": 2} if shared else {}
     tracker = Tracker(CorpusIndex(corpus), TrackerConfig(**rules, popularity=pop))
     expected = []
     for t, q in zip(texts, quiet):
         p = tracker.update(t, 1.0, lead, quiet=q)
         expected.append([p.dua, p.segment, p.word])
     js_rules = json.dumps({**({"stillMotionAfter": 0.3, "leadCrossQuiet": 0.25, "retreatAfter": 1.0} if pauses else {}),
-                           "popularity": pop})
+                           "popularity": pop, **({"keepInPassage": True, "switchConfirm": 2} if shared else {})})
 
     payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar, "rec": d.recordings,
                 "segments": [{"id": s.id, "ar": s.arabic} for s in d.segments]} for d in corpus.values()]

@@ -121,11 +121,7 @@ class DeviceEngine {
     // The stream decoder (stream-follower.js: one belief over the whole du'a, reading moves as its
     // transitions; docs/results/bench.md) since 2026-10-03; ?follower=rules: the rule-based follower.js.
     this.followerKind = params.get("follower") === "rules" ? "rules" : "stream";
-    // ?sc=nextMargin:3,nextHold:0.5 (a;b;c for lists): StreamConfig overrides for page runs
-    // (scripts/bench_page.py variants); the session log's follower config echoes what ran.
-    const scVal = (x) => (x === "true" ? true : x === "false" ? false : Number.isNaN(Number(x)) ? x : Number(x));
-    this.streamCfg = Object.fromEntries((params.get("sc") || "").split(",").filter((kv) => kv.includes(":"))
-      .map((kv) => { const [k, v] = kv.split(":"); return [k, v.includes(";") ? v.split(";").map(scVal) : scVal(v)]; }));
+    this.streamCfg = urlCfg("sc");
   }
   // The follower is placing the words (its last result under a second old).
   get following() {
@@ -524,7 +520,15 @@ function following() {
 }
 
 function followConfig() {
-  return following() === "reciter" ? RECITER : {};
+  return { ...(following() === "reciter" ? RECITER : {}), ...urlCfg("tc") };
+}
+
+// ?sc=nextMargin:3,nextHold:0.5 / ?tc=keepInPassage:true (a;b;c for lists): stream decoder and
+// tracker settings for page runs (scripts/bench_page.py variants); the session log echoes both.
+function urlCfg(key) {
+  const val = (x) => (x === "true" ? true : x === "false" ? false : Number.isNaN(Number(x)) ? x : Number(x));
+  return Object.fromEntries((params.get(key) || "").split(",").filter((kv) => kv.includes(":"))
+    .map((kv) => { const [k, v] = kv.split(":"); return [k, v.includes(";") ? v.split(";").map(val) : val(v)]; }));
 }
 
 function setMajlis(on, remember = true) {

@@ -1079,6 +1079,25 @@ def _same_text(shown: list, truth_word: list, ix, k: int) -> list:
     return out
 
 
+# TrackerConfig fields added after the tracker cache was built, with the value that changes
+# nothing: left out of the cache key while at it, so adding a switch keeps every cached run.
+_LATE_FIELDS = {"keep_in_passage": False, "switch_confirm": 0, "switch_hold_mass": 0.05}
+
+
+class _ConfigKey:
+    """repr of a config as the dataclass prints it, minus late fields at their neutral value."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def __repr__(self):
+        import dataclasses
+        c = self.cfg
+        kept = [f for f in dataclasses.fields(c) if f.repr
+                and not (f.name in _LATE_FIELDS and getattr(c, f.name) == _LATE_FIELDS[f.name])]
+        return f"{type(c).__qualname__}(" + ", ".join(f"{f.name}={getattr(c, f.name)!r}" for f in kept) + ")"
+
+
 def replay(it: dict) -> list[tuple] | None:
     """The phone's display for one item: per 0.1 s tick, (dua id, line, global word) or None."""
     import evaluate as ev
@@ -1095,7 +1114,7 @@ def replay(it: dict) -> list[tuple] | None:
     # follower variants re-run in a fraction of the time.
     if "tkey" not in _W:
         ref = hashlib.sha1(" ".join(w.text for w in ix.words).encode("utf-8")).hexdigest()
-        _W["tkey"] = hashlib.sha1(repr((cfg, _W["asr_tag"], _W["delay"], ref)).encode()).hexdigest()[:12]
+        _W["tkey"] = hashlib.sha1(repr((_ConfigKey(cfg), _W["asr_tag"], _W["delay"], ref)).encode()).hexdigest()[:12]
     tc = BENCH / "tracker_cache" / _W["tkey"] / f"{it['id']}.pkl"
     if tc.exists() and tc.stat().st_mtime >= fa.stat().st_mtime:
         import pickle
@@ -1189,6 +1208,31 @@ def _code(dua: str | None, seg: int | None) -> str | None:
     return None if dua is None else f"{dua}#{seg}"
 
 
+def _moves(D: list, TL: list, ok) -> list[tuple[int, str]]:
+    """The display's moves away from the reader, by tick: "jump" (from where the reader is or just
+    was to a line 2+ away or another du'a), "early" (to the neighbouring line first), "far" (2+
+    away while already lost: lost time counts it, not a new jump). See metrics()."""
+    out = []
+    for i in range(1, len(D)):
+        if D[i] is None or D[i] == D[i - 1]:
+            continue
+        lo, hi = max(0, i - 30), min(len(D), i + 11)
+        if D[i] in TL[lo:hi]:
+            continue
+        ref = TL[i] or next((x for x in TL[lo:hi] if x), None)
+        if ref is None:
+            continue
+        dd, ds = D[i].split("#")
+        rd_, rs = ref.split("#")
+        far_ = dd != rd_ or abs(int(ds) - int(rs)) >= 2
+        was_ok = D[i - 1] is not None and (ok[i - 1] or D[i - 1] in TL[lo:hi])
+        if was_ok:
+            out.append((i, "jump" if far_ else "early"))
+        elif far_:
+            out.append((i, "far"))
+    return out
+
+
 def metrics(it: dict, shown: list, ix) -> dict:
     """Reader-facing numbers for one item (sums; aggregate() turns them into rates)."""
     T = len(shown)
@@ -1256,26 +1300,12 @@ def metrics(it: dict, shown: list, ix) -> dict:
     # or another du'a, that the reader isn't on within 3 s before / 1 s after. Early: to the
     # neighbouring line before the reader gets there. Moves while already lost (stepping along on
     # the wrong repetition of a refrain, catching up late) are not new jumps: lost time counts them.
-    jumps = early = far_moves = 0
-    for i in range(1, T):
-        if D[i] is None or D[i] == D[i - 1]:
-            continue
-        lo, hi = max(0, i - 30), min(T, i + 11)
-        if D[i] in TL[lo:hi]:
-            continue
-        ref = TL[i] or next((x for x in TL[lo:hi] if x), None)
-        if ref is None:
-            continue
-        dd, ds = D[i].split("#")
-        rd_, rs = ref.split("#")
-        far_ = dd != rd_ or abs(int(ds) - int(rs)) >= 2
-        far_moves += far_
-        was_ok = D[i - 1] is not None and (ok[i - 1] or D[i - 1] in TL[lo:hi])
-        if was_ok and far_:
-            jumps += 1
-        elif was_ok:
-            early += 1
-    m["jumps"], m["early"], m["far_moves"] = jumps, early, far_moves
+    moves = _moves(D, TL, ok)
+    kinds = [k for _, k in moves]
+    m["jumps"], m["early"] = kinds.count("jump"), kinds.count("early")
+    m["far_moves"] = kinds.count("jump") + kinds.count("far")
+    if _W.get("keep_moves"):  # scripts/jump_diag.py
+        m["moves"] = moves
     # wrong place: reading time (after the du'a is found) with the highlight 2+ lines away or on another du'a
     wp = 0
     for i in range(found or T, T):
@@ -1458,7 +1488,7 @@ def cmd_score(args) -> None:
         elif ";" in v:
             sc_kw[k] = tuple(float(x) for x in v.split(";"))
         else:
-            sc_kw[k] = int(v) if k in ("line_steps", "next_steps", "gate_words") else float(v)
+            sc_kw[k] = int(v) if k in ("line_steps", "next_steps", "gate_words", "switch_show_steps") else float(v)
     init = (cfg_kw, fw_kw, asr_tag, ctc_tag, args.delay, args.follow_delay, args.display, sc_kw, args.same_text)
     results = {}
     with Pool(args.workers, initializer=_worker_init, initargs=init) as pool:
