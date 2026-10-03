@@ -1081,7 +1081,7 @@ def _same_text(shown: list, truth_word: list, ix, k: int) -> list:
 
 # TrackerConfig fields added after the tracker cache was built, with the value that changes
 # nothing: left out of the cache key while at it, so adding a switch keeps every cached run.
-_LATE_FIELDS = {"keep_in_passage": False, "switch_confirm": 0, "switch_hold_mass": 0.05}
+_LATE_FIELDS = {"keep_in_passage": False, "switch_confirm": 0, "switch_hold_mass": 0.05, "switch_sure": None}
 
 
 class _ConfigKey:

@@ -194,6 +194,10 @@ class TrackerConfig:
     keep_in_passage: bool = False
     switch_confirm: int = 0
     switch_hold_mass: float = 0.05
+    # ...unless it has clearly won: at this much of the belief it replaces the one on screen at once
+    # (None = always wait). Iftitah opens with a passage it shares with Ramadan day 13: alone at 0.92
+    # it waited while day 13 kept 0.08.
+    switch_sure: float | None = None
     # After retreat_after of silence, a highlight that ran ahead of the evidence
     # within its line steps back to the evidence's word too, not only a display
     # that ran into the next line. Someone who stops mid-line to look up should find
@@ -628,7 +632,8 @@ class Tracker:
         if len(group) == 1:
             d = group[0]
             held = (cfg.switch_confirm > 0 and self._reported is not None and d != self._reported
-                    and dua_mass[self._reported] >= cfg.switch_hold_mass)
+                    and dua_mass[self._reported] >= cfg.switch_hold_mass
+                    and (cfg.switch_sure is None or conf < cfg.switch_sure))
             if held:
                 if self._alone_cand != d:
                     self._alone_cand, self._alone_first = d, self._n_updates
@@ -657,7 +662,7 @@ class Tracker:
         cum = np.cumsum(self.post[in_seg])
         word = int(in_seg[min(int(np.searchsorted(cum, cum[-1] / 2)), len(in_seg) - 1)])
         at_end = word + 1 >= hi or ix.word_segment[word + 1] != ix.word_segment[word]
-        same = [ix.dua_ids[g] for g in group if g != d]
+        same = [ix.dua_ids[g] for g in group if g != d] if d in group else []  # (held: not the same text)
         return Position(ix.dua_ids[d], conf, s, float(seg_mass[s] / dua_mass[d]), word, at_end, top, same)
 
     def prompt(self, n_words: int = 12) -> str | None:

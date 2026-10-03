@@ -139,7 +139,7 @@ export const DEFAULTS = {
   // "not in the corpus" needs worse windows; a du'a on screen stays down to a lower bar.
   leadCrossWords: Infinity, seekPinsLine: true, backConfirm: 2, nullRateLocked: 0.55, keepDuaConfidence: null,
   // Shared passages (TrackerConfig.keep_in_passage / switch_confirm / switch_hold_mass).
-  keepInPassage: false, switchConfirm: 0, switchHoldMass: 0.05,
+  keepInPassage: false, switchConfirm: 0, switchHoldMass: 0.05, switchSure: null,
   // Stops (TrackerConfig.retreat_in_line / still_catch_up in tracker.py): after a second of
   // silence a highlight ahead of the evidence in its own line steps back too; while silent the
   // display may still move forward to the evidence.
@@ -525,7 +525,7 @@ export class Tracker {
     if (group.length === 1) {
       d = group[0];
       const held = cfg.switchConfirm > 0 && this.reported != null && d !== this.reported
-        && mass[this.reported] >= cfg.switchHoldMass;
+        && mass[this.reported] >= cfg.switchHoldMass && (cfg.switchSure == null || conf < cfg.switchSure);
       if (held) {
         if (this.aloneCand !== d) {
           this.aloneCand = d;
@@ -571,7 +571,7 @@ export class Tracker {
     return {
       dua: ix.duaIds[d], duaConfidence: conf, segment: seg, segmentConfidence: best / mass[d],
       word, token: ix.words[word].token, atLineEnd, candidates,
-      sameAs: group.filter((g) => g !== d).map((g) => ix.duaIds[g]),
+      sameAs: group.includes(d) ? group.filter((g) => g !== d).map((g) => ix.duaIds[g]) : [],
     };
   }
 
