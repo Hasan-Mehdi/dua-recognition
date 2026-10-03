@@ -161,8 +161,16 @@ def main() -> None:
                     help="train only the decoder: the acoustic model keeps what it learnt from many voices")
     ap.add_argument("--crowd", type=float, default=0.0,
                     help="add crowd-sourced clips (data/cache/finetune/crowd.jsonl) as this share of the training set")
+    ap.add_argument("--synth", type=float, default=0.0,
+                    help="add synthetic ordinary voices (data/cache/finetune/synth.jsonl, scripts/synth_voices.py) "
+                         "as up to this share of the training set")
+    ap.add_argument("--synth-data", default="synth", help="which synthetic set: data/cache/finetune/<name>.jsonl")
     ap.add_argument("--lora", type=int, default=0, metavar="RANK",
                     help="train LoRA adapters of this rank instead of all weights (for large models)")
+    ap.add_argument("--context", type=float, default=30.0, metavar="SECONDS",
+                    help="audio context: Whisper pads every input to 30 s, so a 6 s window costs the encoder "
+                         "five times its length. Shorter = a smaller Whisper (max_source_positions = 50 per "
+                         "second, the feature extractor's chunk_length to match) that the phone runs faster")
     args = ap.parse_args()
 
     from transformers import WhisperForConditionalGeneration, WhisperProcessor, get_linear_schedule_with_warmup
@@ -180,13 +188,46 @@ def main() -> None:
         n = min(len(crowd), int(len(train) * args.crowd / (1 - args.crowd)))
         train += crowd[:n]
         print(f"+{n} crowd-sourced clips", flush=True)
+    if args.synth:
+        synth = load_rows(args.synth_data)
+        rng.shuffle(synth)
+        n = min(len(synth), int(len(train) * args.synth / (1 - args.synth)))
+        train += synth[:n]
+        print(f"+{n} synthetic clips", flush=True)
+    if args.context < 30:
+        # A clip longer than the context would lose audio its label still names.
+        def secs(r):
+            return r["end"] - r["start"] if "clip" not in r else np.load(ROOT / r["clip"], mmap_mode="r").shape[0] / SR
+
+        n0 = len(train)
+        train = [r for r in train if secs(r) <= args.context - 0.2]
+        val = [r for r in val if secs(r) <= args.context - 0.2]
+        print(f"context {args.context:g} s: dropped {n0 - len(train)} training clips longer than that", flush=True)
     print(f"{len(train)} train / {len(val)} val windows", flush=True)
     bank = AudioBank([r.get("audio") for r in train + val])
 
     proc = WhisperProcessor.from_pretrained(args.base, language="arabic", task="transcribe")
     tok = proc.tokenizer
     tok.set_prefix_tokens(language="arabic", task="transcribe", predict_timestamps=False)
-    model = WhisperForConditionalGeneration.from_pretrained(args.base).cuda()
+    model = WhisperForConditionalGeneration.from_pretrained(args.base)
+    n_pos = int(round(args.context * 50))  # encoder frames: 2 mel frames (10 ms each) per position
+    if n_pos < model.config.max_source_positions:
+        # The encoder's positional embeddings are fixed sinusoids, so the first n_pos rows
+        # are exactly those of an n_pos-long encoder: nothing is re-initialized.
+        from transformers import WhisperFeatureExtractor
+
+        enc = model.model.encoder
+        rows = enc.embed_positions.weight.data[:n_pos].clone()
+        enc.embed_positions = torch.nn.Embedding(n_pos, rows.shape[1])
+        enc.embed_positions.weight.data.copy_(rows)
+        enc.embed_positions.requires_grad_(False)
+        enc.max_source_positions = model.config.max_source_positions = n_pos
+        fe = proc.feature_extractor
+        proc.feature_extractor = WhisperFeatureExtractor(feature_size=fe.feature_size, sampling_rate=SR,
+                                                         hop_length=fe.hop_length, chunk_length=int(args.context),
+                                                         n_fft=fe.n_fft)
+        print(f"encoder context {args.context:g} s ({n_pos} positions)", flush=True)
+    model = model.cuda()
     model.config.use_cache = False
     # Non-reentrant checkpointing also works when the base weights are frozen (LoRA).
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -275,6 +316,7 @@ def main() -> None:
             best = vcer
             model.save_pretrained(out / "adapter" if args.lora else out)
             proc.save_pretrained(out)
+            proc.feature_extractor.to_json_file(out / "preprocessor_config.json")  # for export_onnx.py
 
     if args.lora:
         # Merge the best adapter into full weights so the export below is an

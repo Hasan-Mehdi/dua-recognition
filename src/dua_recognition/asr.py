@@ -105,7 +105,16 @@ def speech_runs(probs: np.ndarray, min_frames: int = 7, on: float = 0.5, off: fl
     return runs
 
 
-def quiet_at_end(window: np.ndarray, tail_s: float = 3.0, energy_db: float | None = 6.0) -> float:
+# The stop detector (quiet_at_end): energy counts as sound only within this many dB
+# of the reciter's voice, and a window's voice level is trusted from this many
+# frames of speech. Tuned in docs/results/stops.md.
+QUIET_REL_DB: float | None = 15.0
+VOICE_MIN_FRAMES = 16
+LIVE_REL_DB = 15.0  # the page's live detector (LiveQuiet), energy alone
+
+
+def quiet_at_end(window: np.ndarray, tail_s: float = 3.0, energy_db: float | None = 6.0,
+                 rel_db: float | None = QUIET_REL_DB, voice_db: float | None = None) -> float:
     """Seconds since the reciter last made a sound (tail_s if not in the last tail_s).
 
     The transcript of a 6 s window keeps the last words for seconds after the
@@ -118,12 +127,109 @@ def quiet_at_end(window: np.ndarray, tail_s: float = 3.0, energy_db: float | Non
     melodic notes: against forced-aligned word timings it called 19% of the
     test reciters' mid-word moments silent for > 0.3 s, and the energy term
     brings that to 4% (docs/results/pauses.md). None = Silero only.
-    Mirrored in web/asr-worker.js (quietAtEnd).
+
+    ...and the energy must also come within `rel_db` of the reciter's voice
+    (`voice_db`, from earlier windows: QuietMeter; None = this window's own
+    voice_level). A phone's automatic gain control turns the room up by 10-15
+    dB within a second of the reciter stopping, and against the window's floor
+    that hiss read as someone still reciting: in Hasan's sessions a quarter of
+    the moments after he stopped (docs/results/stops.md). A long note is loud;
+    the hiss sits 20-25 dB under the voice. With no voice level known, energy
+    alone counts for nothing. rel_db None = the floor alone decides, as before.
+    Mirrored in web/gate.js (quietAtEnd).
     """
     probs, db, floor = _tail_activity(window, tail_s)
     if probs is None:
         return tail_s
-    return _quiet(probs, db, floor, energy_db)
+    return _quiet(probs, db, floor, energy_db, rel_db, voice_db)
+
+
+def voice_level(probs: np.ndarray, db: np.ndarray, min_frames: int = VOICE_MIN_FRAMES) -> float | None:
+    """The reciter's voice in dBFS: the median frame Silero is sure is speech
+    (p >= 0.5), from at least `min_frames` of them. A breath or a click after
+    they stop can be "speech" for a few frames, and it is 20 dB quieter."""
+    voiced = db[probs >= 0.5]
+    return float(np.median(voiced)) if voiced.size >= max(1, min_frames) else None
+
+
+class QuietMeter:
+    """quiet_at_end over one stream's windows in order, remembering the voice
+    level from the last window that had enough speech to measure it: after the
+    reciter stops, the window holds only hiss, which has no voice to compare
+    with. Mirrored in web/app.js (the page keeps voiceDb and hands it to the
+    worker's quietAtEnd).
+
+    With `dt` it also says how much of the window's last dt seconds went on
+    pauses (silences of min_pause or more, anywhere in them, not only at the
+    end): `paused`. The tracker's belief moves only for the rest. A breath or
+    a click a second after the reciter stopped otherwise made the whole gap
+    since the last update count as reciting (docs/results/stops.md).
+    """
+
+    def __init__(self, tail_s: float = 3.0, energy_db: float | None = 6.0, rel_db: float | None = QUIET_REL_DB,
+                 min_pause: float = 0.3):
+        self.tail_s, self.energy_db, self.rel_db, self.min_pause = tail_s, energy_db, rel_db, min_pause
+        self.voice_db: float | None = None
+        self.paused: float | None = None
+
+    def __call__(self, window: np.ndarray, dt: float | None = None) -> float:
+        probs, db, floor = _tail_activity(window, self.tail_s)
+        if probs is None:
+            self.paused = None if dt is None else dt
+            return self.tail_s
+        v = voice_level(probs, db)
+        if v is not None:
+            self.voice_db = v
+        runs = _sound_runs(probs, db, floor, self.energy_db, self.rel_db, self.voice_db)
+        self.paused = None if dt is None else min(dt, _paused(runs, probs.size, dt, self.min_pause))
+        return (probs.size - runs[-1][1]) * VAD_FRAME_S if runs else probs.size * VAD_FRAME_S
+
+
+class LiveQuiet:
+    """Seconds the reciter has been silent, on the audio the page holds right now.
+
+    The window's quiet (quiet_at_end) is a second or two old by the time the
+    page shows its update: Whisper was running while the reciter went on, or
+    stopped. The page hears that audio as it arrives, so it can tell at once.
+    Silero is in the worker, busy with Whisper, so this goes by loudness
+    alone: a 32 ms frame is sound if it comes within `rel_db` of the voice
+    level the worker last measured (QuietMeter.voice_db); sound is a run of
+    at least 3 frames. Until a voice level is known it says nothing (None).
+
+    Unlike quiet_at_end there is no floor term (6 dB over the quietest tenth
+    of the last seconds): without Silero beside it, it called 12% of the
+    test reciters' mid-word moments silent, against 0.5% without it, and it
+    caught hardly any more of Hasan's stops (docs/results/stops.md).
+    Mirrored in web/gate.js.
+    """
+
+    FRAME = 512
+
+    def __init__(self, rel_db: float = LIVE_REL_DB):
+        self.rel_db = rel_db
+        self.rest = np.zeros(0, np.float32)
+        self.voice_db: float | None = None
+        self.n = 0  # frames heard
+        self.run = 0  # frames in the current run of sound
+        self.last_end = 0  # frames heard when the last run of 3+ was last sounding
+
+    def push(self, x: np.ndarray) -> None:
+        x = np.concatenate([self.rest, np.asarray(x, np.float32)])
+        k = x.size // self.FRAME
+        self.rest = x[k * self.FRAME :]
+        frames = x[: k * self.FRAME].reshape(k, self.FRAME).astype(np.float64)
+        for d in 10 * np.log10(np.mean(frames * frames, axis=1) + 1e-12):
+            self.n += 1
+            sound = self.voice_db is not None and d >= self.voice_db - self.rel_db
+            self.run = self.run + 1 if sound else 0
+            if self.run >= 3:
+                self.last_end = self.n
+
+    @property
+    def quiet(self) -> float | None:
+        if self.voice_db is None:
+            return None
+        return (self.n - self.last_end) * self.FRAME / SAMPLE_RATE
 
 
 def _tail_activity(window: np.ndarray, tail_s: float):
@@ -145,25 +251,48 @@ def _tail_activity(window: np.ndarray, tail_s: float):
     return probs, db[-probs.size :], floor
 
 
-def _quiet(probs: np.ndarray, db: np.ndarray, floor: float, energy_db: float | None) -> float:
-    if energy_db is None:
-        runs = speech_runs(probs)
-    else:
-        # The floor is never taken below -70 dBFS: phones and headsets with noise
-        # suppression output exact zeros between words, and against a floor of
-        # digital silence a faint click read as "still reciting".
-        active = (probs >= 0.35) | (db >= max(floor, -70.0) + energy_db)
-        runs, start = [], None
-        for i, a in enumerate(list(active) + [False]):
-            if a and start is None:
-                start = i
-            elif not a and start is not None:
-                if i - start >= 3:
-                    runs.append((start, i))
-                start = None
+def _quiet(probs: np.ndarray, db: np.ndarray, floor: float, energy_db: float | None,
+           rel_db: float | None = None, voice_db: float | None = None) -> float:
+    runs = _sound_runs(probs, db, floor, energy_db, rel_db, voice_db)
     if not runs:
         return probs.size * VAD_FRAME_S
     return (probs.size - runs[-1][1]) * VAD_FRAME_S
+
+
+def _sound_runs(probs: np.ndarray, db: np.ndarray, floor: float, energy_db: float | None,
+                rel_db: float | None = None, voice_db: float | None = None) -> list[tuple[int, int]]:
+    """Frame spans [start, end) of sound, by quiet_at_end's rule."""
+    if energy_db is None:
+        return speech_runs(probs)
+    # The floor is never taken below -70 dBFS: phones and headsets with noise
+    # suppression output exact zeros between words, and against a floor of
+    # digital silence a faint click read as "still reciting".
+    bar = max(floor, -70.0) + energy_db
+    if rel_db is not None:
+        voice = voice_db if voice_db is not None else voice_level(probs, db)
+        bar = max(bar, voice - rel_db) if voice is not None else np.inf
+    active = (probs >= 0.35) | (db >= bar)
+    runs, start = [], None
+    for i, a in enumerate(list(active) + [False]):
+        if a and start is None:
+            start = i
+        elif not a and start is not None:
+            if i - start >= 3:
+                runs.append((start, i))
+            start = None
+    return runs
+
+
+def _paused(runs: list[tuple[int, int]], n: int, seconds: float, min_pause: float) -> float:
+    """Seconds of the last `seconds` of n frames spent in silences of at least
+    `min_pause` (between runs of sound, or before the first or after the last)."""
+    lo = max(0, n - int(round(seconds / VAD_FRAME_S)))
+    edges = [0] + [x for r in runs for x in r] + [n]
+    out = 0
+    for a, b in zip(edges[::2], edges[1::2]):  # the gaps
+        if (b - a) * VAD_FRAME_S >= min_pause:
+            out += max(0, b - max(a, lo))
+    return out * VAD_FRAME_S
 
 
 def _speech_run(probs: np.ndarray, min_frames: int = 7, on: float = 0.5, off: float = 0.35) -> bool:
@@ -236,7 +365,9 @@ def transcribe_batch(
     if not live:
         return out
 
-    feats = np.stack([pad_or_trim(m.feature_extractor(windows[i])) for i in live])
+    # To the model's own context: 30 s, or less for scripts/shorten_context.py's models.
+    frames = m.feature_extractor.nb_max_frames
+    feats = np.stack([pad_or_trim(m.feature_extractor(windows[i]), frames) for i in live])
     encoded = m.encode(feats)
     token_prompts = []
     for i in live:

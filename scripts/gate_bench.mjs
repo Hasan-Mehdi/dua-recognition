@@ -2,7 +2,7 @@
 // (web/dev/gate-bench.html): headless Chrome, the phone checkpoint (ONNX q8, WASM), a
 // development clip streamed in real time. Desktop numbers are PROVISIONAL for phones.
 //
-//   node scripts/gate_bench.mjs <clip.f32> <start s> <seconds> <out.json> [policies...]
+//   node scripts/gate_bench.mjs <clip.f32> <start s> <seconds> <out.json> [policy[@model]...]
 //
 // Serves web/ on a local port (plus the clip at /bench-audio.f32) and runs one page per
 // policy, one after another. puppeteer-core lives in data/cache/reliability/node.
@@ -46,14 +46,16 @@ const browser = await puppeteer.launch({
   args: ["--autoplay-policy=no-user-gesture-required"],
 });
 const results = { clip, start_s: Number(startS), seconds: Number(seconds), chrome: await browser.version(), runs: [] };
-for (const gate of policies) {
+for (const run of policies) {
+  // "policy" or "policy@model" (a model under web/models/, e.g. legacy@whisper-base-aug-v4-ctx8)
+  const [gate, model] = run.split("@");
   const page = await browser.newPage();
-  page.on("console", (m) => m.type() === "error" && console.error(`[${gate}]`, m.text()));
-  await page.goto(`http://127.0.0.1:${port}/dev/gate-bench.html?gate=${gate}&seconds=${seconds}`);
+  page.on("console", (m) => m.type() === "error" && console.error(`[${run}]`, m.text()));
+  await page.goto(`http://127.0.0.1:${port}/dev/gate-bench.html?gate=${gate}&seconds=${seconds}${model ? `&model=${model}` : ""}`);
   await page.waitForFunction("window.__result", { timeout: (Number(seconds) + 600) * 1000, polling: 1000 });
   const r = await page.evaluate("window.__result");
-  results.runs.push(r);
-  console.log(gate, r.error ?? `${r.hops.length} hops, load ${Math.round(r.load_ms)} ms`);
+  results.runs.push({ ...r, model: model || "whisper-base-aug-v4" });
+  console.log(run, r.error ?? `${r.hops.length} hops, load ${Math.round(r.load_ms)} ms`);
   await page.close();
 }
 await browser.close();

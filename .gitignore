@@ -39,3 +39,5 @@ data/fatemah/
 data/usertest/
 STATUS.md
 data/testsets/
+# harvested audio and labels (junction to D:\dua-data\harvest)
+data/harvest/

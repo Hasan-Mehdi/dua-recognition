@@ -32,7 +32,8 @@ const s = await ort.InferenceSession.create(root + "/web/vad/silero_vad_v6.onnx"
 const vad = gate.makeVadProbs((f) => s.run(f), ort.Tensor);
 const buf = readFileSync(pcm);
 const y = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-const out = { quiet: await gate.quietAtEnd(y, vad) };
+const out = { quiet: await gate.quietAtEnd(y, vad), voiced: {} };
+for (const v of [-22, -15]) out.voiced[v] = await gate.stopMeasures(y, vad, { voiceDb: v, dt: 1.0 });
 for (const p of gate.POLICIES) out[p] = await gate.decide(y, p, vad);
 out.halluc = [await gate.looksHallucinated("شكرا"), await gate.looksHallucinated("الله ".repeat(20)),
               await gate.looksHallucinated("اللهم اني اسالك برحمتك التي وسعت كل شيء")];
@@ -77,7 +78,23 @@ def test_new_sound_rejected_by_silero_reaches_the_energy_branch(tmp_path):
     assert r["legacy"]["run"] is False and r["legacy"]["reason"] == "vad_reject"
     assert r["energy_assisted"]["run"] is True and r["energy_assisted"]["via"] == "energy"
     assert r["ungated"]["run"] is True and r["ungated"]["vad"] is None  # Silero never consulted
-    assert r["quiet"] < 0.5  # quietAtEnd already saw the sound
+    # The stop detector counts the tone as the reciter only near a voice level it knows:
+    assert r["voiced"]["-22"]["quiet"] < 0.5  # a long note at about the reciter's level
+    # No voice to compare with: loudness alone isn't reciting (only the tone's onset,
+    # which Silero hears as speech for a moment, counts)
+    assert r["quiet"] > 1.0
+
+
+def test_gain_control_hiss_after_the_reciter_stops_is_quiet(tmp_path):
+    # Speech-level sound until 3 s from the end, then room hiss that a phone's gain control
+    # turns up from -50 to -36 dBFS: over the window's floor, but 20 dB under the voice.
+    hiss = noise(3.0, -50, seed=2) * np.linspace(1.0, 10 ** (14 / 20), int(3.0 * SR)).astype(np.float32)
+    y = np.concatenate([tone(3.0, -15), hiss])
+    r = run_gate(tmp_path, y)
+    m = r["voiced"]["-15"]
+    assert m["quiet"] > 2.5  # the old rule (floor + 6 dB alone) called the rising hiss sound
+    assert m["paused"] == pytest.approx(1.0, abs=0.05)  # the whole last second was a pause
+    assert m["voiceDb"] == -15  # remembered: the tail had no speech of its own to measure
 
 
 def test_stationary_noise_stays_gated_under_energy_assist(tmp_path):

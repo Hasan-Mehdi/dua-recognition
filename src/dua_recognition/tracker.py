@@ -60,6 +60,11 @@ class TrackerConfig:
     # Once locked on a du'a, jumping elsewhere should take sustained evidence,
     # not one noisy window: a smaller teleport floor while locked.
     p_teleport_locked: float = 1e-2
+    # A jump within the du'a, per second of audio (0 = off): to the first word of any of its
+    # lines, uniformly. Readers skip to the part they know or go back to a line they like; the
+    # teleport floor spreads its mass over all 505 texts, so a jump inside the du'a was worth
+    # almost nothing a priori (docs/results/phone_latency.md, lines out of order).
+    p_line_jump: float = 0.02
     # Prior: this much mass on the first `start_words` words of each du'a.
     start_weight: float = 0.3
     start_words: int = 12
@@ -106,10 +111,12 @@ class TrackerConfig:
     # The belief is about the end of the audio window, but it reaches the
     # screen later (ASR time), and the transcript's tail lags the voice. So
     # the live display shows the belief predicted forward by the measured
-    # delay plus this much (`update(..., lead=delay + display_lead)`). Chosen
-    # on the train split; on test it cuts line-switch lag from 1.8 s to 0.6 s
-    # at 0.5 s ASR delay and raises line accuracy (docs/results/display_lead.md).
-    display_lead: float = 0.5
+    # delay plus this much (`update(..., lead=delay + display_lead)`). 0.5 s,
+    # chosen on professional reciters, cut line-switch lag from 1.8 s to 0.6 s
+    # (docs/results/display_lead.md); on ordinary voices reading short lines it
+    # ran into the next line and back, so it is 0.25 s now, with the rules below
+    # (docs/results/display_stability.md).
+    display_lead: float = 0.25
     # When the display moves on to the next line, start at its first word.
     # The lead's estimate often lands two or three words into a new line and
     # the highlight appeared to skip its opening words (4 jerks/min on test;
@@ -141,6 +148,54 @@ class TrackerConfig:
     # these rules and 33% with them; a reciter who flows through breaths sees
     # a step back now and then, which is why majlis mode uses RECITER.
     retreat_after: float = 1.0
+    # The rules below come from Hasan's own sessions, an ordinary voice reading
+    # slowly with short lines (Ayat al-Kursi: 3-8 words a line), where the rules
+    # above, tuned on professional reciters, kept stepping a line on and back
+    # (docs/results/display_stability.md; scripts/session_replay.py). On by
+    # default since 2026-09-30: steps back and flickers in his sessions 16 -> 6,
+    # taps undone 7 -> 1 of 12; DuaPlayer test line 83.9 -> 84.6%, jumps/min
+    # 0.74 -> 0.23; next line shown in pauses 32.6 -> 24.8%.
+    #
+    # The lead may carry the display into the next line only once the evidence is
+    # within this many words of the current line's end (1 = on its last word). A
+    # lead of a second or more otherwise crosses while the reciter is mid-line,
+    # and the display steps back when the evidence doesn't follow. inf = wherever
+    # the lead lands.
+    lead_cross_words: float = float("inf")
+    # "I'm here" (seek): the tapped line stays on screen until the evidence itself
+    # moves past it; the lead may not carry the display off it. In one session the
+    # lead undid 6 of 7 taps within a second on a three-word line.
+    seek_pins_line: bool = True
+    # A step back to an earlier line of the same du'a is shown only once this many
+    # updates in a row say so (1 = at once). The pause rule's own step back
+    # (retreat_after) is separate and unaffected.
+    back_confirm: int = 2
+    # Once locked on a du'a, "not in the corpus" explains a window only at this many
+    # edits per letter (None = null_rate). A weak phone transcript of an ordinary
+    # voice misses ~40% of the letters, as bad as the null state's 0.45, so a few
+    # such windows sent it to ~100% and the page froze on its last line.
+    null_rate_locked: float | None = 0.55
+    # A du'a on screen stays on screen until its mass falls below this (None =
+    # min_dua_confidence, the bar to appear): a threshold with hysteresis.
+    keep_dua_confidence: float | None = None
+    # After retreat_after of silence, a highlight that ran ahead of the evidence
+    # within its line steps back to the evidence's word too, not only a display
+    # that ran into the next line. Someone who stops mid-line to look up should find
+    # the word they stopped on (docs/results/stops.md).
+    retreat_in_line: bool = False
+    # While they are silent the display holds, but it may still move forward to the
+    # evidence: the windows go on hearing their last words, which the transcript's
+    # tail had cut short, and without the lead a stop otherwise rests a word or two
+    # before the word they stopped on (docs/results/stops.md).
+    still_catch_up: bool = False
+    # The belief moves only for the time the reciter was reciting: every pause in the
+    # last dt (update(..., paused=), from asr.QuietMeter) is taken off, not only the one
+    # at the window's end. A breath a second after they stopped otherwise made the
+    # whole gap since the last update count as reciting, and the evidence itself drifted
+    # into the next line after Hasan stopped (docs/results/stops.md). The benchmark's
+    # pauses are clean room tone, with no breath in them: there it made 3 points more
+    # words exact while flowing, lines 0.3 points worse at phone latency.
+    pause_motion: bool = True
 
 
 # Following a professional reciter (majlis mode): they flow from line to line
@@ -193,6 +248,8 @@ class Tracker:
         # First word of the following line (n_words past the end of the corpus).
         starts = np.r_[np.flatnonzero(new_line), ix.n_words]
         self._next_line = starts[np.searchsorted(starts, self._idx, side="right")]
+        self._line_starts = np.flatnonzero(new_line)
+        self._lines_in_dua = np.bincount(ix.word_dua[self._line_starts], minlength=len(ix.dua_word_span))
         self._spans = np.array(ix.dua_word_span).reshape(-1, 2)
         self._edge_cache: dict[int, np.ndarray] = {}
         self._text = [w.text for w in ix.words]
@@ -207,6 +264,8 @@ class Tracker:
         self._fwd_by_speed: tuple[np.ndarray, np.ndarray] | None = None
         self._last_word: int | None = None
         self._shown: Position | None = None
+        self._pin: int | None = None  # last word of a tapped line (seek_pins_line)
+        self._backs = 0  # updates in a row that asked to step back a line (back_confirm)
         self.null = 0.5 if self.cfg.null_rate > 0 else 0.0  # P(not in the corpus)
         self._reported: int | None = None  # the du'a last reported (index)
         self._found_alone = False  # ...and it was told apart from every other text
@@ -243,7 +302,15 @@ class Tracker:
             back += self._shift(self.post, cs, -d)
         back /= cfg.back_words
         p = (1 - cfg.p_back) * fwd + cfg.p_back * back
-        self.post = (1 - tele) * p / p.sum() + tele * self._floor
+        p = p / p.sum()
+        if cfg.p_line_jump > 0:
+            pj = min(1.0, cfg.p_line_jump * dt)
+            mass = np.bincount(self.ix.word_dua, weights=p, minlength=len(self._lines_in_dua))
+            d = self.ix.word_dua[self._line_starts]
+            jump = np.zeros_like(p)
+            jump[self._line_starts] = mass[d] / self._lines_in_dua[d]
+            p = (1 - pj) * p + pj * jump
+        self.post = (1 - tele) * p + tele * self._floor
 
     def _shift(self, post: np.ndarray, cs: np.ndarray, d: int) -> np.ndarray:
         """Mass moved d words (back if d < 0), clamped to its own du'a: what
@@ -286,7 +353,8 @@ class Tracker:
         return k / k.sum(axis=1, keepdims=True)
 
     # -- correct ---------------------------------------------------------
-    def update(self, transcript: str, dt: float, lead: float = 0.0, quiet: float = 0.0) -> Position:
+    def update(self, transcript: str, dt: float, lead: float = 0.0, quiet: float = 0.0,
+               quiet_now: float | None = None, paused: float | None = None) -> Position:
         """Advance by dt seconds, then condition on the latest window's text.
 
         With `lead` > 0 the position returned is the belief predicted `lead`
@@ -294,12 +362,23 @@ class Tracker:
         silent window holds the last position shown rather than falling back.
         `quiet`: seconds since the reciter last spoke (asr.quiet_at_end); the
         position moves only for the time they were speaking.
+        `quiet_now`: the same, measured when the update is shown (asr.LiveQuiet on
+        the audio that arrived while Whisper ran; None = not known). Fresher than
+        `quiet`, it decides whether they are silent now: for holding still,
+        letting the lead cross into the next line and stepping back. Past
+        still_after while the window ended in speech, they stopped since: the
+        lead covers only the part of the delay they were still reciting.
+        `paused`: seconds of the last dt spent in pauses (asr.QuietMeter), anywhere
+        in them; the belief moves for the rest. None = only the pause at the end
+        (`quiet`, past still_motion_after) counts.
         """
         costs = self.ix.word_costs(transcript) if transcript else None
-        return self.update_costs(costs, dt, lead, n_letters=len(encode(transcript)) if transcript else 0, quiet=quiet)
+        return self.update_costs(costs, dt, lead, n_letters=len(encode(transcript)) if transcript else 0, quiet=quiet,
+                                 quiet_now=quiet_now, paused=paused)
 
     def update_costs(self, costs: np.ndarray | None, dt: float, lead: float = 0.0,
-                     n_letters: int | None = None, quiet: float = 0.0) -> Position:
+                     n_letters: int | None = None, quiet: float = 0.0, quiet_now: float | None = None,
+                     paused: float | None = None) -> Position:
         """`update` with the alignment already done (evaluation reuses it).
 
         `n_letters`: the transcript's length in letters (align.encode), for the
@@ -311,10 +390,14 @@ class Tracker:
             n_letters = int(costs.max())
         # An empty window is almost always the pause between lines: the
         # reciter isn't moving, so neither does the belief (bar the floors).
-        moving = dt - quiet if quiet > self.cfg.still_motion_after else dt
+        if paused is not None and self.cfg.pause_motion:
+            moving = dt - paused
+        else:
+            moving = dt - quiet if quiet > self.cfg.still_motion_after else dt
         self._advance(max(0.0, moving) if costs is not None else 0.0, locked=self._locked())
         if costs is not None:
-            kappa = self.cfg.kappa if self._locked() else self.cfg.kappa_search
+            locked = self._locked()
+            kappa = self.cfg.kappa if locked else self.cfg.kappa_search
             c0 = float(costs.min())
             lik = np.exp(-kappa * (costs - c0).astype(np.float64))
             if self._fwd_by_speed is not None:
@@ -326,35 +409,83 @@ class Tracker:
                     self.tempo = w / w.sum()
             if self.cfg.null_rate > 0 and n_letters:
                 cfg = self.cfg
+                rate = cfg.null_rate_locked if locked and cfg.null_rate_locked is not None else cfg.null_rate
                 known = (1 - self.null) * (1 - cfg.null_enter) + self.null * cfg.null_leave
                 in_corpus = known * float(self.post @ lik)
-                none = (1 - known) * np.exp(-kappa * min(50.0, max(-50.0, cfg.null_rate * n_letters - c0)))
+                none = (1 - known) * np.exp(-kappa * min(50.0, max(-50.0, rate * n_letters - c0)))
                 self.null = none / (in_corpus + none)
             self.post = self.post * lik
             self.post /= self.post.sum()
         if lead <= 0:
             return self._forward_only(self.position())
-        if (costs is None or quiet > self.cfg.still_after) and self._shown is not None:
+        cfg = self.cfg
+        # How long they have been silent when this is shown: the page's own ear if it
+        # has one (quiet_now), else the window's end. A window that ended in a pause
+        # they have since recited on from is no reason to hold.
+        heard = quiet_now is not None
+        silent = quiet_now if heard else quiet
+        resumed = heard and quiet_now <= cfg.still_after
+        if (costs is None or (quiet > cfg.still_after and not resumed)) and self._shown is not None:
             now = self.position()
-            if quiet > self.cfg.retreat_after:
+            shown = self._shown
+            if silent > cfg.retreat_after:
                 self._retreat(now)
+            if (cfg.still_catch_up and costs is not None and now.word is not None and shown.word is not None
+                    and now.dua == shown.dua and now.word > self._shown.word):
+                self._backs = 0
+                self._shown = self._forward_only(now)
             return replace(self._shown, candidates=now.candidates)
+        retreat = False
+        if heard and quiet_now > cfg.still_after:
+            # They stopped after the window's end: the lead is for time spent reciting
+            # (display_lead is for someone still going).
+            lead = max(0.0, lead - cfg.display_lead - quiet_now)
+            retreat = quiet_now > cfg.retreat_after
         led = self.lookahead(lead)
-        if self.cfg.lead_within_line or quiet >= self.cfg.lead_cross_quiet:
+        # Only while they make sound may the lead cross into the next line. At the window's
+        # end that is under lead_cross_quiet; what the page hears now, a gap between words
+        # is not a stop: under still_after, as for the glide.
+        cross_bar = max(cfg.lead_cross_quiet, cfg.still_after) if heard else cfg.lead_cross_quiet
+        if (cfg.lead_within_line or silent >= cross_bar or self._pin is not None
+                or cfg.lead_cross_words != float("inf")):
             now = self.position()
-            if now.dua is not None and (led.dua, led.segment) != (now.dua, now.segment):
+            if self._pin is not None and (now.word is None or self.ix.word_dua[now.word] != self.ix.word_dua[self._pin]
+                                          or now.word > self._pin):
+                self._pin = None  # the evidence has left the tapped line
+            hold = (cfg.lead_within_line or silent >= cross_bar or self._pin is not None
+                    or (now.word is not None and self._next_line[now.word] - now.word > cfg.lead_cross_words))
+            if hold and now.dua is not None and (led.dua, led.segment) != (now.dua, now.segment):
                 # Stay on the evidence's line, as far along it as the lead reached (its last word).
                 last = int(self._next_line[now.word]) - 1
                 led = replace(now, word=last, at_line_end=True)
+        shown = self._shown
+        back_a_line = (shown is not None and shown.word is not None and led.word is not None and led.dua == shown.dua
+                       and self._line_first[led.word] < self._line_first[shown.word])
+        if retreat and back_a_line:
+            # The retreat (_retreat): they stopped at the end of the evidence's line.
+            led = replace(led, word=int(self._next_line[led.word]) - 1, at_line_end=True)
+        if cfg.back_confirm > 1 and not retreat and back_a_line:
+            self._backs += 1
+            if self._backs < cfg.back_confirm:
+                return replace(shown, candidates=led.candidates)  # not yet: hold the line on screen
+        self._backs = 0
+        if retreat and cfg.retreat_in_line and self._last_word is not None and led.word is not None:
+            self._last_word = min(self._last_word, led.word)  # no forward-only hold past the evidence
         self._shown = self._forward_only(led)
         return self._shown
 
     def _retreat(self, now: Position) -> None:
         """The display is in a later line of the same du'a than the evidence: go
-        back to the end of the evidence's line."""
+        back to the end of the evidence's line (retreat_in_line: or ahead of it in
+        the same line: back to the evidence's word)."""
         shown = self._shown
         if (now.dua is None or now.word is None or shown.word is None or now.dua != shown.dua
-                or shown.word <= now.word or self._line_first[shown.word] == self._line_first[now.word]):
+                or shown.word <= now.word):
+            return
+        if self._line_first[shown.word] == self._line_first[now.word]:
+            if self.cfg.retreat_in_line:
+                self._shown = replace(now)
+                self._last_word = now.word
             return
         last = int(self._next_line[now.word]) - 1
         self._shown = replace(now, word=last, at_line_end=True)
@@ -377,6 +508,8 @@ class Tracker:
         self._reported, self._found_alone = d, True
         first = int(words[0])
         self._last_word = first
+        self._pin = int(self._next_line[first]) - 1 if self.cfg.seek_pins_line else None
+        self._backs = 0
         self._shown = replace(self.position(), word=first, at_line_end=len(words) == 1)
         return self._shown
 
@@ -442,6 +575,15 @@ class Tracker:
                 group.append(int(o))
         return group
 
+    def line_mass(self, word: int) -> float:
+        """Posterior mass of the line `word` is in (the word follower's jump rule, jump_mass)."""
+        return float((1 - self.null) * self.post[self._line_first[word] : self._next_line[word]].sum())
+
+    def line_masses(self, dua: int) -> np.ndarray:
+        """Posterior mass of each line of du'a `dua` (index), in order."""
+        lo, hi = self.ix.dua_word_span[dua]
+        return ((1 - self.null) * np.add.reduceat(self.post[lo:hi], self._line_starts[(self._line_starts >= lo) & (self._line_starts < hi)] - lo)).astype(np.float32)
+
     def position(self) -> Position:
         ix = self.ix
         dua_mass = self._dua_mass()
@@ -449,7 +591,10 @@ class Tracker:
         top = [(ix.dua_ids[i], float(dua_mass[i])) for i in order[:3]]
         group = self._same_text(dua_mass, order)
         conf = float(dua_mass[group].sum())
-        if conf < self.cfg.min_dua_confidence:
+        need = self.cfg.min_dua_confidence
+        if self.cfg.keep_dua_confidence is not None and self._reported in group:
+            need = self.cfg.keep_dua_confidence  # already on screen: keep it down to the lower bar
+        if conf < need:
             return Position(None, conf, None, 0.0, None, candidates=top)
         if len(group) == 1:
             d, self._found_alone = group[0], True

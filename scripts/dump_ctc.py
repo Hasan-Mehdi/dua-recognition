@@ -60,7 +60,9 @@ def main() -> None:
     ap.add_argument("--room", type=float, metavar="SNR_DB")
     args = ap.parse_args()
     tag = (args.tag or Path(args.model).name) + (f"+room{args.room:g}" if args.room is not None else "")
-    m = CtcModel(args.model)
+    from dua_recognition.ctc_student import load_ctc
+
+    m = load_ctc(args.model)
     done = 0
     for dua in load_all().values():
         if args.duas and dua.id not in args.duas:

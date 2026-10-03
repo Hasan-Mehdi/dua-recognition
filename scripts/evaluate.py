@@ -53,16 +53,24 @@ WORD_TRUTH = ROOT / "data" / "cache" / "word_truth"
 # (auto labels) or all but the auto labels still waiting for review.
 SOURCE = "duaplayer"
 TIER = "all"
+# --part dev|final: only that part of a held-out set (scripts/testset_split.py; groups not
+# assigned yet are never scored).
+PART = None
 
 
-def use_source(source: str, tier: str = "all") -> None:
-    global SOURCE, TIER
-    SOURCE, TIER = source, tier
+def use_source(source: str, tier: str = "all", part: str | None = None) -> None:
+    global SOURCE, TIER, PART
+    SOURCE, TIER, PART = source, tier, part
 
 
 def load_recordings(dua, **kw) -> list[Recording]:
     if SOURCE in TESTSETS:
         recs = _load_recordings(dua, cache_dir=TESTSETS[SOURCE], extra=False)
+        if PART:
+            from testset_split import load_split, part_of
+
+            split = load_split()
+            recs = [r for r in recs if part_of(SOURCE, r, split) == PART]
     else:
         recs = _load_recordings(dua, **kw)
     return [r for r in recs if r.tier == TIER or (TIER == "all" and r.tier != "review")]
@@ -178,18 +186,42 @@ def run_matcher(duas, clf, matchers, rows):
     return preds
 
 
-def run_tracker(ix, cfg, costs, hop, start=0, steps=None, lead=0.0, quiet=None):
+def _value(v: str):
+    """A --set value: a number, inf, true/false or null."""
+    try:
+        return json.loads(v)
+    except json.JSONDecodeError:
+        return float(v)
+
+
+def run_tracker(ix, cfg, costs, hop, start=0, steps=None, lead=0.0, quiet=None, stop2=None):
     """`lead`: seconds, or one value per window (e.g. latency + staleness).
-    `quiet`: per window, seconds since the reciter last spoke (scripts/dump_quiet.py)."""
+    `quiet`: per window, seconds since the reciter last spoke (scripts/dump_quiet.py).
+    `stop2`: per window, (quiet_now, paused) for the tracker (--stop2)."""
     tr = Tracker(ix, cfg)
     end = len(costs) if steps is None else min(len(costs), start + steps)
     leads = lead if isinstance(lead, list) else [lead] * len(costs)
     quiet = quiet or [0.0] * len(costs)
+    stop2 = stop2 or [(None, None)] * len(costs)
     out = []
-    for c, ld, q in zip(costs[start:end], leads[start:end], quiet[start:end]):
-        p = tr.update_costs(c, hop, ld, quiet=q)
+    for c, ld, q, (qn, pz) in zip(costs[start:end], leads[start:end], quiet[start:end], stop2[start:end]):
+        p = tr.update_costs(c, hop, ld, quiet=q, quiet_now=qn, paused=pz)
         out.append((p.dua, p.segment))
     return out
+
+
+def stop2_inputs(rec: Recording, stride: int, latency: float, live: bool, paused: bool):
+    """(quiet, [(quiet_now, paused)]) per used window from data/cache/quiet2 (dump_quiet.py --v2)."""
+    m = json.loads((ROOT / "data" / "cache" / "quiet2" / f"{rec.audio_id}.json").read_text())
+    quiet = m["quiet"][stride - 1 :: stride]
+    out = []
+    for i in range(stride - 1, len(m["quiet"]), stride):
+        t = (i + 1) * m["hop"]
+        k = int((t + latency) / m["live_step"]) - 1  # the chunks the page holds when the result is shown
+        qn = m["live"][k] if live and 0 <= k < len(m["live"]) else None
+        pz = sum(m["paused"][max(0, i - stride + 1) : i + 1]) if paused else None
+        out.append((qn, pz))
+    return quiet, out
 
 
 # -- scoring ----------------------------------------------------------------
@@ -326,10 +358,18 @@ def main() -> None:
                          "(data/cache/word_ends, scripts/dump_word_ends.py) + EXTRA, instead of + display_lead")
     ap.add_argument("--still", action="store_true",
                     help="hold still while the reciter is silent (VAD, data/cache/quiet from scripts/dump_quiet.py)")
+    ap.add_argument("--stop2", nargs="*", choices=["live", "paused"],
+                    help="hold still on the stop detector as it is now (data/cache/quiet2, dump_quiet.py --v2); "
+                         "live: the page's own detector at the moment each result is shown (needs --latency); "
+                         "paused: the belief moves only for time not spent in pauses")
     ap.add_argument("--corpus", choices=["all", "recorded"], default="all",
                     help="recorded: only texts that have recordings (no extra distractors)")
+    ap.add_argument("--part", choices=["dev", "final"],
+                    help="with --source: only this part of the held-out set (scripts/testset_split.py)")
+    ap.add_argument("--quick", action="store_true",
+                    help="the tracker only: no matcher, oracle, per-du'a table or identification")
     args = ap.parse_args()
-    use_source(args.source, args.tier)
+    use_source(args.source, args.tier, args.part)
 
     duas = load_all()
     if args.corpus == "recorded":
@@ -339,7 +379,7 @@ def main() -> None:
     clf = TextClassifier(duas)
     matchers = {k: PassageMatcher(v) for k, v in duas.items()}
 
-    data, stale_by_rec, quiet_by_rec = [], {}, {}
+    data, stale_by_rec, quiet_by_rec, stop2_by_rec = [], {}, {}, {}
     for dua in duas.values():
         if args.duas and dua.id not in args.duas:
             continue
@@ -362,7 +402,10 @@ def main() -> None:
                 f = ROOT / "data" / "cache" / "word_ends" / args.asr / f"{rec.audio_id}.json"
                 stale = [args.latency + (s or 0.0) + args.stale_lead for s in json.loads(f.read_text())]
             stale_by_rec[rec.audio_id] = stale
-            if args.still:
+            if args.stop2 is not None:
+                quiet_by_rec[rec.audio_id], stop2_by_rec[rec.audio_id] = stop2_inputs(
+                    rec, args.stride, args.latency or 0.0, "live" in args.stop2, "paused" in args.stop2)
+            elif args.still:
                 qf = ROOT / "data" / "cache" / "quiet" / f"{rec.audio_id}.json"
                 quiet_by_rec[rec.audio_id] = json.loads(qf.read_text())[args.stride - 1 :: args.stride]
             data.append((rec, rows, costs))
@@ -370,7 +413,7 @@ def main() -> None:
     header = describe([r for r, _, _ in data])
     print(f"{len(data)} recordings, {args.split} split, ASR = {args.asr}, update every {hop:g} s\n{header}\n")
 
-    base_cfg = replace(TrackerConfig(), **{k: float(v) for k, v in (kv.split("=", 1) for kv in args.set)})
+    base_cfg = replace(TrackerConfig(), **{k: _value(v) for k, v in (kv.split("=", 1) for kv in args.set)})
     lead = 0.0 if args.latency is None else args.latency + base_cfg.display_lead
     if args.tune:
         grid = {
@@ -408,23 +451,31 @@ def main() -> None:
         lo, hi = ix.dua_word_span[ix.dua_ids.index(rec.dua_id)]
         oracle_costs = [None if c is None else c[lo:hi] for c in costs]
         runs = {
-            "matcher": run_matcher(duas, clf, matchers, rows),
             "tracker": run_tracker(ix, base_cfg, costs, hop, lead=stale_by_rec[rec.audio_id] or lead,
-                                   quiet=quiet_by_rec.get(rec.audio_id)),
-            "oracle": run_tracker(subix[rec.dua_id], base_cfg, oracle_costs, hop, lead=stale_by_rec[rec.audio_id] or lead,
-                                  quiet=quiet_by_rec.get(rec.audio_id)),
+                                   quiet=quiet_by_rec.get(rec.audio_id), stop2=stop2_by_rec.get(rec.audio_id)),
         }
+        if not args.quick:
+            runs["matcher"] = run_matcher(duas, clf, matchers, rows)
+            runs["oracle"] = run_tracker(subix[rec.dua_id], base_cfg, oracle_costs, hop,
+                                         lead=stale_by_rec[rec.audio_id] or lead, quiet=quiet_by_rec.get(rec.audio_id),
+                                         stop2=stop2_by_rec.get(rec.audio_id))
         for name, preds in runs.items():
             s = score(rec, rows, preds, refrains)
             per_method[name].append(s)
             per_dua.setdefault(rec.dua_id, {}).setdefault(name, []).append(s)
 
+    per_method = {name: res for name, res in per_method.items() if res}
     summary = {name: summarize(res) for name, res in per_method.items()}
     print(HEADER)
     labels = {"matcher": "v0.1 per-window matcher", "tracker": "HMM tracker (identifies du'a)",
               "oracle": "HMM tracker, du'a given"}
     for name in per_method:
         print(fmt(labels[name], summary[name]))
+    if args.quick:
+        if args.json:
+            Path(args.json).write_text(json.dumps({"asr": args.asr, "split": args.split, "set": header,
+                                                   "summary": summary}, indent=1), encoding="utf-8")
+        return
 
     print("\nPer du'a, tracker (matcher):\n\n| du'a | hours | line acc | refrain-line acc |\n|---|---|---|---|")
     for dua_id, m in sorted(per_dua.items()):

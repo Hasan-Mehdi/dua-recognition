@@ -1,0 +1,337 @@
+/* Kids mode (kids.js): the same pages, bubbly. Sky instead of night, one rounded
+   face for Arabic and English, navy outlines with hard shadows so buttons look
+   pressable, and Noor the lantern. Nothing here applies without body.kids. */
+
+.kid-ico, .kid-name, .kids-sky, .kids-town, .kids-hang, .kids-exit, .kids-book, .kid-seal, .noor, .noor-mini, .garland, .stickers { display: none; }
+
+body.kids {
+  --navy: #1F2A5A; --sun: #FFC93C; --pink: #FF7BAC; --cream: #FFF4CC;
+  --k-bg: #BDE5FF; --k-on: #1F2A5A; --k-soft: #4A5690;
+  --paper: var(--k-bg); --paper-2: #fff; --ink: var(--k-on); --muted: var(--k-soft); --faint: #8490C4;
+  --gold: var(--sun); --gold-hi: #FFE27A; --rubric: var(--pink); --wash: rgba(255, 201, 60, .45); --line: rgba(31, 42, 90, .18);
+  --pattern: none; --latin: "Baloo Bhaijaan 2", system-ui, sans-serif;
+  color-scheme: light;
+  background: var(--k-bg);
+}
+body.kids.kids-night { --k-bg: #34307A; --k-on: #FFF8E7; --k-soft: #D4CFF7; --faint: #A39DDF; color-scheme: dark; }
+body.kids .folio { display: none; }
+
+/* A chunky button: white, navy outline, a hard shadow it presses into. */
+body.kids .icon, .kids-exit, .kids-book, .celebrate .party-buttons button {
+  background: #fff; color: var(--navy); border: 4px solid var(--navy); box-shadow: 0 5px 0 var(--navy);
+  transition: transform .1s, box-shadow .1s;
+}
+body.kids .icon:active, .kids-book:active, .celebrate .party-buttons button:active { transform: translateY(4px); box-shadow: 0 1px 0 var(--navy); }
+
+/* ---------- sky, town and the hanging lantern ---------- */
+body.kids .kids-sky { display: block; position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.kids-sky i { position: absolute; display: block; }
+.kids-sky svg { display: block; width: 100%; height: auto; }
+.kids-sky .cloud { animation: kid-drift 14s ease-in-out infinite alternate; }
+.kids-sky .star, .kids-sky .moon { display: none; }
+body.kids-night .kids-sky .cloud { display: none; }
+body.kids-night .kids-sky .star { display: block; fill: #FFE9A8; animation: kid-twinkle 2.6s ease-in-out infinite; }
+body.kids-night .kids-sky .moon { display: block; right: 8%; top: 12%; width: 56px; fill: #FFE9A8; stroke: var(--navy); stroke-width: 3.5; stroke-linejoin: round; }
+body.kids .kids-town {
+  display: block; position: fixed; left: 0; right: 0; bottom: 0; height: 302px; z-index: 0; pointer-events: none;
+  background: url("kids-town-day.svg") repeat-x center bottom / 390px 302px; transition: transform .8s cubic-bezier(.3, 0, .2, 1);
+}
+body.kids-night .kids-town { background-image: url("kids-town-night.svg"); }
+body.kids[data-state="listening"] .kids-town { transform: translateY(190px); }
+body.kids[data-state="following"] .kids-sky, body.kids[data-state="following"] .kids-town { display: none; }
+
+body.kids .kids-hang {
+  display: block; position: absolute; left: 50%; top: 0; width: 150px; height: 250px; margin-left: -75px;
+  transform-origin: 50% 0; animation: kid-swing 3.6s ease-in-out infinite;
+}
+.kids-hang .string { position: absolute; left: 73px; top: 0; width: 4px; height: 40px; border-radius: 2px; background: var(--navy); }
+.kids-hang .lantern { position: absolute; left: 0; top: 22px; width: 150px; height: 212px; overflow: visible; }
+.kids-hang .glow, .noor .glow, .noor-mini .glow, .celebrate .hero .glow {
+  position: absolute; border-radius: 50%; background: radial-gradient(circle, rgba(255, 224, 115, .95), rgba(255, 224, 115, 0) 64%);
+}
+.kids-hang .glow { left: -50px; top: 50px; width: 250px; height: 250px; animation: kid-glow 3s ease-in-out infinite; }
+body.kids-night .kids-hang .glow { left: -80px; top: 30px; width: 310px; height: 310px; }
+
+/* ---------- home ---------- */
+body.kids .home { position: relative; z-index: 1; justify-content: flex-start; padding-top: 256px; padding-bottom: 210px; gap: 0; }
+body.kids .bismillah, body.kids .brand-en, body.kids .tagline, body.kids .links, body.kids .footnote,
+body.kids .sessions, body.kids .samples, body.kids .kids-on { display: none !important; }
+body.kids .brand-ar { font-family: var(--latin); font-weight: 800; font-size: 50px; line-height: 1.25; color: var(--k-on); margin-bottom: 12px; }
+body.kids .hint { margin-top: 10px; font-weight: 700; font-size: 21px; color: var(--k-on); }
+body.kids .load { width: 180px; height: 12px; border-radius: 6px; background: #fff; border: 3px solid var(--navy); }
+body.kids .load i { background: var(--sun); }
+body.kids .resume { color: var(--navy); background: #fff; border: 3px solid var(--navy); border-radius: 99px; padding: 4px 16px; text-decoration: none; font-weight: 700; }
+
+/* The start button: the seal, as a squishy pink toy. */
+body.kids .seal { width: 176px; height: 176px; animation: kid-breathe 2.6s ease-in-out infinite; }
+body.kids .seal-star, body.kids .seal-mic { display: none; }
+body.kids .kid-seal { display: block; grid-area: 1 / 1; width: 100%; height: 100%; overflow: visible; }
+.kid-seal-star { animation: turn 40s linear infinite; }
+body.kids[data-state="loading"] .kid-seal-star { animation-duration: 4s; }
+
+body.kids .kids-exit, body.kids .kids-book {
+  display: grid; place-items: center; position: fixed; top: max(20px, env(safe-area-inset-top)); z-index: 3; padding: 0;
+}
+.kids-exit { left: 20px; width: 50px; height: 50px; border-radius: 50%; overflow: hidden; background: rgba(255, 255, 255, .6); box-shadow: none; border-width: 3px; }
+.kids-exit svg, .kids-book svg { position: relative; width: 24px; height: 24px; }
+/* Press and hold: the lock fills while it's held (kids.js holdToLeave). */
+.kids-exit i { position: absolute; inset: 0; background: var(--sun); transform: scaleY(0); transform-origin: 50% 100%; }
+.kids-exit.pressing i { transform: scaleY(1); transition: transform 1.2s linear; }
+.kids-exit.nudge { animation: kid-nudge .5s; }
+.kids-exit-hint { display: none; }
+body.kids .kids-exit-hint.show {
+  display: block; position: fixed; z-index: 3; left: 84px; top: max(26px, calc(env(safe-area-inset-top) + 6px)); max-width: calc(100% - 180px);
+  padding: 6px 14px; border-radius: 16px; background: #fff; color: var(--navy); border: 3px solid var(--navy);
+  font: 700 15px/1.25 var(--latin); animation: kid-pop .4s cubic-bezier(.3, 1.6, .5, 1) backwards;
+}
+.kids-book { right: 20px; width: 60px; height: 60px; border-radius: 20px; }
+.kids-book svg { width: 30px; height: 30px; }
+.kids-book b {
+  position: absolute; top: -13px; right: -13px; min-width: 28px; height: 28px; padding: 0 5px; border-radius: 14px; box-sizing: border-box;
+  display: grid; place-items: center; background: var(--pink); border: 3px solid var(--navy); font: 800 15px/1 var(--latin);
+}
+.kids-book b:empty { display: none; }
+
+/* Today's du'as stand in front of the town. */
+body.kids .today { position: fixed; z-index: 2; left: 50%; bottom: max(22px, env(safe-area-inset-bottom)); width: min(420px, calc(100% - 32px)); transform: translateX(-50%); margin: 0; gap: 10px; }
+body.kids .today .guess-label {
+  padding: 0 16px; border-radius: 99px; background: #fff; border: 3px solid var(--navy); color: var(--navy);
+  letter-spacing: 0; text-transform: none; font-weight: 800; font-size: 16px;
+}
+body.kids .today .chips { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 132px); justify-content: center; gap: 10px; width: 100%; }
+body.kids .today .chip { flex-direction: column; padding: 12px 6px 10px; font-size: 16px; line-height: 1.1; animation: kid-float 3.6s ease-in-out infinite; }
+body.kids .today .chip:nth-child(2) { animation-delay: -1.2s; }
+body.kids .today .chip:nth-child(3) { animation-delay: -2.4s; }
+
+/* ---------- chips become cards: today's du'as, the "Is it…" guesses ---------- */
+body.kids .chip {
+  display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 24px; padding: 10px 18px;
+  background: #fff; color: var(--navy); border: 4px solid var(--navy); box-shadow: 0 6px 0 var(--navy); font-weight: 800;
+}
+body.kids .chip:hover { background: #fff; border-color: var(--navy); }
+body.kids .chip .ar { font-family: var(--latin); color: #4A5690; }
+body.kids .kid-ico {
+  display: grid; place-items: center; flex: none; width: 52px; height: 52px; border-radius: 50%; box-sizing: border-box;
+  background: var(--c); border: 3px solid var(--navy);
+}
+body.kids .kid-ico svg { width: 28px; height: 28px; }
+body.kids .chip .grown { display: none; } /* the grown-up name steps aside for the friendly one (kids.chip) */
+body.kids .kid-name { display: inline; }
+body.kids .size .chip { padding: 2px 12px; box-shadow: 0 3px 0 var(--navy); border-width: 3px; }
+
+/* ---------- listening: Noor answers the voice (kids.voice, from meter()) ---------- */
+body.kids .listen { padding-top: 110px; position: relative; z-index: 1; }
+body.kids[data-state="listening"] .title, body.kids[data-state="listening"] .progress { visibility: hidden; }
+body.kids .voice { width: 200px; height: 260px; }
+body.kids .girih, body.kids .voice-glow { display: none; }
+body.kids .noor { display: block; position: absolute; inset: 0; }
+.noor .glow { left: -60px; top: -20px; width: 320px; height: 320px; opacity: .6; }
+.noor .ring, .noor-mini .ring {
+  position: absolute; border-radius: 50%; border: 5px solid #fff; box-sizing: border-box; animation: kid-ring 2.4s ease-out infinite;
+}
+.noor .ring { left: 10px; top: 60px; width: 180px; height: 180px; }
+.noor .ring:nth-of-type(3), .noor-mini .ring:nth-of-type(3) { animation-delay: -.8s; }
+.noor .ring:nth-of-type(4) { animation-delay: -1.6s; }
+.noor .lantern { position: absolute; left: 15px; top: 16px; width: 170px; height: 241px; overflow: visible; transform-origin: 50% 20%; }
+body.kids .listen-msg {
+  order: -1; position: relative; margin-bottom: 10px; padding: 8px 26px; border-radius: 30px;
+  background: #fff; color: var(--navy); border: 4px solid var(--navy); box-shadow: 0 6px 0 var(--navy);
+  font-style: normal; font-weight: 800; font-size: 24px; line-height: 1.3; animation: kid-pop .5s cubic-bezier(.3, 1.6, .5, 1) backwards;
+}
+body.kids .listen-msg::after {
+  content: ""; position: absolute; left: 50%; bottom: -15px; width: 20px; height: 20px; margin-left: -10px;
+  background: #fff; border-right: 4px solid var(--navy); border-bottom: 4px solid var(--navy); transform: rotate(45deg);
+}
+body.kids .guesses .guess-label { color: var(--k-on); letter-spacing: 0; text-transform: none; font-weight: 800; font-size: 18px; }
+body.kids .guesses .chips { flex-direction: column; align-items: stretch; gap: 14px; width: min(360px, calc(100vw - 32px)); }
+body.kids .guesses .chip { justify-content: flex-start; gap: 14px; padding: 12px 16px 12px 12px; font-size: 22px; text-align: left; }
+body.kids .guesses .chip .ar { margin-inline-start: auto; font-size: 20px; }
+
+/* ---------- following ---------- */
+body.kids .top { background: linear-gradient(var(--k-bg) 72%, transparent); padding-bottom: 18px; }
+body.kids.has-garland .top { padding-bottom: 66px; background: linear-gradient(var(--k-bg) 86%, transparent); }
+body.kids .live { display: none; } /* the small Noor in the corner listens instead */
+body.kids .title { align-items: center; text-align: center; }
+body.kids .title-ar { font-family: var(--latin); font-weight: 800; font-size: 25px; color: var(--k-on); }
+body.kids .title-en, body.kids .title-also { letter-spacing: 0; text-transform: none; font-style: normal; font-weight: 700; font-size: 15px; color: var(--k-soft); }
+body.kids .icon { width: 50px; height: 50px; font-weight: 800; font-size: 19px; }
+body.kids .icon svg { stroke-width: 3; }
+body.kids .icon:hover { background: #fff; color: var(--navy); }
+
+/* Long du'as: a fat bar filling from the right, as the text reads. */
+body.kids .progress { left: 26px; right: 26px; bottom: 2px; height: 14px; border-radius: 7px; background: #fff; border: 3px solid var(--navy); }
+body.kids .progress i { margin-left: auto; border-radius: 7px; background: var(--sun); }
+body.kids .progress i::after { left: -10px; right: auto; top: -6px; width: 20px; height: 20px; border-radius: 50%; transform: none; background: var(--pink); border: 3px solid var(--navy); box-sizing: border-box; }
+body.kids.has-garland .progress { display: none; }
+
+/* Short ones: a garland, one lantern per line, lit as each line is finished (kids.js). */
+body.kids.has-garland .garland { display: block; position: absolute; left: 26px; right: 26px; bottom: 6px; height: 58px; }
+.garland svg { position: absolute; left: 0; top: 0; width: 100%; height: 40px; overflow: visible; }
+.garland path { fill: none; stroke: var(--navy); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+body.kids-night .garland path { stroke: #FFF8E7; }
+.garland .g { position: absolute; width: 22px; height: 31px; margin-left: -11px; transform-origin: 50% 0; }
+.garland .g svg { position: absolute; width: 100%; height: 100%; stroke: var(--navy); stroke-width: 1.8; stroke-linejoin: round; }
+.garland .g .cap, .garland .g .band { fill: #DCE2F6; }
+.garland .g .glass { fill: #fff; }
+.garland .g.lit .cap, .garland .g.now .cap { fill: var(--sun); }
+.garland .g.lit .band, .garland .g.now .band { fill: #FF9F43; }
+.garland .g.lit .glass { fill: #FFE27A; }
+.garland .g.now .glass { fill: var(--pink); }
+.garland .g.lit::before {
+  content: ""; position: absolute; left: -13px; top: -4px; width: 48px; height: 48px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 224, 115, .9), rgba(255, 224, 115, 0) 65%); animation: kid-lit .6s ease-out;
+}
+.garland .g.now { animation: kid-swing 1.4s ease-in-out infinite; }
+
+body.kids .folio-head { padding-top: 22vh; }
+body.kids .head-ar { font-family: var(--latin); font-weight: 800; color: var(--k-on); }
+body.kids .head-en { letter-spacing: 0; text-transform: none; font-weight: 700; color: var(--k-soft); }
+body.kids .head-note { font-style: normal; }
+body.kids .folio-head::after { display: none; }
+
+body.kids .text { max-width: 40rem; padding: 6vh 14px 55vh; }
+body.kids .ln { border: 5px solid transparent; border-radius: 32px; padding: .15em .6em; opacity: .5; }
+body.kids .ln.past { opacity: .45; }
+body.kids .ln.next.coming { opacity: .85; }
+body.kids .ln .ar { font-family: "Baloo Bhaijaan 2", var(--naskh); font-weight: 600; line-height: 1.9; text-align: center; text-align-last: center; }
+/* The line being recited is a card. */
+body.kids .ln.now {
+  opacity: 1; margin: 18px 0 24px; padding: 30px 14px 16px; color: var(--navy);
+  background: #fff; border-color: var(--navy); box-shadow: 0 9px 0 var(--navy);
+}
+body.kids .ln.now .ar { font-weight: 700; line-height: 1.75; }
+/* Every word keeps the highlight's box, so the highlight moving never reflows the line. */
+body.kids .ln.now .ar .wd {
+  display: inline-block; position: relative; padding: 0 .18em; margin: .42em 0 .06em; border-radius: .45em; border: 4px solid transparent;
+  line-height: 1.45; color: #8490C4; background: none; transition: none;
+}
+body.kids .ln.now .ar .wd.said { color: var(--navy); animation: kid-said .35s ease-out; }
+body.kids .ln.now .ar .wd.w { color: var(--navy); background: var(--sun); border-color: var(--navy); box-shadow: 0 4px 0 var(--navy); }
+/* The ball hops onto each word as it's reached, and bounces there. */
+body.kids .ln.now .ar .wd.w::after {
+  content: ""; position: absolute; left: 50%; top: -26px; width: 22px; height: 22px; margin-left: -11px; border-radius: 50%; box-sizing: border-box;
+  background: var(--pink); border: 4px solid var(--navy);
+  animation: kid-land .38s cubic-bezier(.3, 0, .5, 1), kid-ball .55s ease-in-out .38s infinite alternate;
+}
+body.kids .mark { color: var(--k-on); }
+body.kids .mark svg { stroke-width: 5; }
+body.kids .ln.now .mark { color: var(--navy); }
+body.kids .ln.past .mark b, body.kids .ln.sealed .mark b { color: var(--navy); }
+body.kids .ln.past .mark svg, body.kids .ln.sealed .mark svg { stroke: var(--navy); }
+body.kids .ln.now .tl { text-align: center; font-style: normal; font-weight: 600; color: #4A5690; }
+body.kids .ln.now .en {
+  width: fit-content; margin: 8px auto 2px; padding: 6px 18px; border-radius: 20px;
+  background: var(--cream); color: var(--navy); font-weight: 700; text-align: center;
+}
+body.kids .end svg { stroke: var(--k-on); }
+body.kids .back { background: #fff; color: var(--navy); border: 4px solid var(--navy); box-shadow: 0 5px 0 var(--navy); }
+
+/* The small Noor who keeps listening while following (kids.voice). */
+body.kids[data-state="following"]:not(.watching) .noor-mini { display: block; position: fixed; left: 12px; bottom: max(14px, env(safe-area-inset-bottom)); z-index: 9; width: 96px; height: 110px; pointer-events: none; }
+.noor-mini .glow { left: -34px; top: -20px; width: 164px; height: 164px; opacity: .6; }
+.noor-mini .ring { left: 8px; top: 20px; width: 80px; height: 80px; border-width: 4px; }
+body.kids.holding .noor-mini .ring { animation-duration: 4s; opacity: .4; }
+.noor-mini .lantern { position: absolute; left: 10px; top: 0; width: 76px; height: 108px; overflow: visible; transform-origin: 50% 20%; }
+
+/* ---------- menus, picker and the sticker book ---------- */
+body.kids .menu, body.kids .picker-card { background: #fff; color: var(--navy); border: 4px solid var(--navy); box-shadow: 0 8px 0 var(--navy); }
+body.kids .menu { font-weight: 600; }
+body.kids .seg { border: 3px solid var(--navy); }
+body.kids .seg button { color: var(--navy); font-weight: 700; }
+body.kids .seg button[aria-checked="true"] { background: var(--sun); color: var(--navy); }
+body.kids .picker { background: rgba(31, 42, 90, .45); }
+body.kids .picker-card { max-height: 88svh; overflow: auto; }
+body.kids #picker-list { overflow: visible; }
+body.kids #picker-list .ar { font-family: var(--latin); color: #4A5690; }
+body.kids #picker-list .section, body.kids #picker-list .note, body.kids #picker-list .pick { color: var(--navy); }
+body.kids #search { color: var(--navy); background: #fff; border: 3px solid var(--navy); border-radius: 16px; }
+body.kids .share-card, body.kids .toast { color: var(--navy); }
+body.kids .toast { background: #fff; border: 3px solid var(--navy); }
+
+body.kids .stickers { display: block; margin-bottom: 16px; }
+.stickers-head { display: flex; align-items: center; justify-content: space-between; margin: 2px 4px 12px; }
+.stickers-head b { font-size: 26px; font-weight: 800; }
+.stickers-count { padding: 0 14px; border-radius: 99px; border: 3px solid var(--navy); font-weight: 800; }
+.stickers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 16px 6px; }
+.sticker { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 4px 0; color: #4A5690; font: 700 15px/1.1 var(--latin); }
+.sticker .rosette { position: relative; width: 84px; height: 84px; display: grid; place-items: center; }
+.sticker .rosette > svg:first-child { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; fill: rgba(255, 255, 255, .5); stroke: #8490C4; stroke-width: 3.5; stroke-dasharray: 5 5; stroke-linejoin: round; }
+.sticker .rosette circle { display: none; }
+.sticker .rosette > svg + svg { position: relative; width: 34px; height: 34px; stroke: #8490C4; color: #8490C4; }
+.sticker.got { color: var(--navy); font-weight: 800; }
+.sticker.got .rosette { animation: kid-wobble 4s ease-in-out infinite; animation-delay: inherit; }
+.sticker.got .rosette > svg:first-child { fill: var(--c); stroke: var(--navy); stroke-width: 4; stroke-dasharray: none; filter: drop-shadow(0 5px 0 var(--navy)); }
+.sticker.got .rosette circle { display: inline; fill: rgba(255, 255, 255, .5); stroke: var(--navy); stroke-width: 3; }
+.sticker.got .rosette > svg + svg { stroke: var(--navy); color: var(--navy); }
+.sticker .rosette b { position: absolute; top: -6px; right: -12px; padding: 0 8px; border-radius: 99px; background: var(--pink); border: 3px solid var(--navy); font-size: 14px; line-height: 1.4; }
+
+/* ---------- the celebration (kids.finished) ---------- */
+.celebrate {
+  position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  padding: 24px 18px max(24px, env(safe-area-inset-bottom)); overflow: hidden; background: var(--k-bg); color: var(--navy);
+  font-family: var(--latin); animation: kid-fade .5s ease-out;
+}
+.celebrate[hidden] { display: none; }
+.celebrate .confetti { position: absolute; inset: 0; pointer-events: none; }
+.celebrate .confetti i { position: absolute; top: 0; display: block; animation: kid-fall 5s linear infinite; }
+.celebrate .confetti .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--c); border: 2.5px solid var(--navy); }
+.celebrate .confetti .bit { width: 11px; height: 19px; border-radius: 6px; background: var(--c); border: 2.5px solid var(--navy); }
+.celebrate .confetti .moon { width: 18px; }
+.celebrate .confetti .moon svg { display: block; width: 100%; overflow: visible; fill: var(--c); stroke: var(--navy); stroke-width: 2; stroke-linejoin: round; }
+.celebrate .bubble {
+  position: relative; display: flex; flex-direction: column; align-items: center; padding: 6px 32px 10px; border-radius: 32px;
+  background: #fff; border: 4px solid var(--navy); box-shadow: 0 6px 0 var(--navy); animation: kid-pop .6s cubic-bezier(.3, 1.6, .5, 1) backwards;
+}
+.celebrate .bubble span:first-child { font-size: 42px; font-weight: 800; line-height: 1.35; }
+.celebrate .bubble span:last-child { font-size: 19px; font-weight: 700; color: #4A5690; line-height: 1.1; }
+.celebrate .bubble::after {
+  content: ""; position: absolute; left: 50%; bottom: -15px; width: 20px; height: 20px; margin-left: -10px;
+  background: #fff; border-right: 4px solid var(--navy); border-bottom: 4px solid var(--navy); transform: rotate(45deg);
+}
+.celebrate .hero { position: relative; width: 180px; height: 220px; flex: none; }
+.celebrate .hero .glow { left: -70px; top: -40px; width: 320px; height: 320px; animation: kid-glow 2s ease-in-out infinite; }
+.celebrate .hero .lantern { position: absolute; left: 20px; top: 8px; width: 140px; height: 198px; overflow: visible; animation: kid-hop 1.4s cubic-bezier(.3, 0, .4, 1) infinite; }
+.celebrate .spark { position: absolute; width: 26px; height: 26px; background: #fff; clip-path: polygon(50% 0, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0 50%, 40% 40%); animation: kid-twinkle 1.6s ease-in-out infinite; }
+.celebrate .spark:nth-of-type(2) { left: -24px; top: 40px; }
+.celebrate .spark:nth-of-type(3) { right: -18px; top: 10px; background: var(--sun); animation-delay: -.5s; }
+.celebrate .spark:nth-of-type(4) { right: -30px; top: 150px; animation-delay: -1s; }
+.celebrate .badge { position: relative; width: 150px; height: 150px; flex: none; display: grid; place-items: center; animation: kid-stamp .8s cubic-bezier(.3, 1.7, .5, 1) .3s backwards; }
+.celebrate .badge > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 6px 0 var(--navy)); animation: turn 14s linear infinite; }
+.celebrate .badge path { fill: var(--c, var(--sun)); stroke: var(--navy); stroke-width: 3; stroke-linejoin: round; }
+.celebrate .badge circle { fill: var(--cream); stroke: var(--navy); stroke-width: 2.6; }
+.celebrate .badge-ico { position: relative; width: 44px; height: 44px; }
+.celebrate .badge-ico svg { width: 100%; height: 100%; }
+.celebrate .badge-count { position: absolute; top: 4px; right: -6px; padding: 0 12px; border-radius: 99px; background: var(--pink); border: 4px solid var(--navy); font-size: 21px; line-height: 1.35; transform: rotate(10deg); }
+.celebrate .badge-count:empty { display: none; }
+.celebrate .badge-name { margin: 0; font-size: 26px; font-weight: 800; color: var(--k-on); }
+.celebrate .party-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; width: min(360px, 100%); margin-top: 8px; }
+.celebrate .party-buttons button { display: flex; align-items: center; justify-content: center; gap: 10px; height: 62px; border-radius: 31px; font: 800 22px var(--latin); }
+.celebrate .party-buttons .again { background: var(--sun); }
+.celebrate .party-buttons svg { width: 26px; height: 26px; stroke-width: 2.8; }
+
+@media (max-height: 740px) {
+  body.kids .kids-hang { transform: scale(.72); transform-origin: 50% 0; animation: none; }
+  body.kids .home { padding-top: 186px; }
+  body.kids .brand-ar { font-size: 40px; }
+  body.kids .seal { width: 140px; height: 140px; }
+  .celebrate .hero { transform: scale(.8); margin: -20px 0; }
+}
+
+@keyframes kid-drift { to { transform: translateX(22px); } }
+@keyframes kid-twinkle { 0%, 100% { transform: scale(.7); opacity: .45; } 50% { transform: scale(1.1); opacity: 1; } }
+@keyframes kid-swing { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+@keyframes kid-glow { 0%, 100% { opacity: .7; transform: scale(.94); } 50% { opacity: 1; transform: scale(1.07); } }
+@keyframes kid-breathe { 50% { transform: scale(1.045); } }
+@keyframes kid-float { 50% { transform: translateY(-4px); } }
+@keyframes kid-ring { from { transform: scale(.5); opacity: .95; } to { transform: scale(1.45); opacity: 0; } }
+@keyframes kid-pop { from { transform: scale(.5); opacity: 0; } }
+@keyframes kid-land { 0% { transform: translate(26px, -4px); } 45% { transform: translate(12px, -18px); } 100% { transform: none; } }
+@keyframes kid-ball { from { transform: translateY(0) scale(1.08, .92); } to { transform: translateY(-9px) scale(.96, 1.04); } }
+@keyframes kid-said { from { transform: scale(1.12); } }
+@keyframes kid-lit { from { opacity: 0; transform: scale(.4); } }
+@keyframes kid-nudge { 20%, 60% { transform: rotate(-12deg); } 40%, 80% { transform: rotate(12deg); } }
+@keyframes kid-wobble { 0%, 100% { transform: rotate(-3deg) translateY(0); } 50% { transform: rotate(3deg) translateY(-3px); } }
+@keyframes kid-fade { from { opacity: 0; } }
+@keyframes kid-fall { from { transform: translateY(-60px) rotate(0); } to { transform: translateY(110vh) rotate(620deg); } }
+@keyframes kid-hop { 0%, 100% { transform: translateY(0); } 30% { transform: translateY(-22px) scale(.97, 1.04); } 55% { transform: translateY(0) scale(1.06, .94); } 70% { transform: none; } }
+@keyframes kid-stamp { from { transform: scale(.2) rotate(-40deg); opacity: 0; } }

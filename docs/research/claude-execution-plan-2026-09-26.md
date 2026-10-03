@@ -1,6 +1,6 @@
 **Execution plan for Claude Code: reliable browser recognition and acoustic word following**
 
-Work in `C:\Users\hasan\Downloads\work_\dua-recognition`.
+Work in `C:\Users\hasan\code\speech-ml\dua-recognition`.
 
 Execute this plan through implementation, development-set experiments, and a reproducible report. The objective is to determine and improve what actually limits live du'a following: discarded speech, acoustic emission latency, inaccurate reference timings, or display behavior. Preserve successful existing behavior. A documented negative result is an acceptable experiment outcome; unsupported accuracy claims are not.
 

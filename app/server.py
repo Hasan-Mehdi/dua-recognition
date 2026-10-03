@@ -12,9 +12,9 @@ each hop with the tracker's position. ASR runs off the event loop, and audio
 that arrives meanwhile is folded into the next step, so a slow machine lags
 gracefully instead of queueing.
 
-?words=ctc (off by default) adds the CTC word follower (docs/results/follower.md):
-every 0.2 s a {"type": "word"} message says which word is being recited. The CTC
-model (DUA_CTC_MODEL, default models/wav2vec2-quran-dua) loads on first use.
+The CTC word follower (docs/results/phone_follower.md; ?words=off turns it off): every
+0.1 s a {"type": "word"} message says which word is being recited. The CTC model
+(DUA_CTC_MODEL, default models/ctc-student-base-v6, the phone's) loads on first use.
 
 Debug sessions the page records (web/session-log.js) are uploaded to
 data/sessions/, one .wav each with its log inside (scripts/session_report.py).
@@ -50,19 +50,20 @@ MODEL = os.environ.get("DUA_ASR_MODEL", DEFAULT_MODEL)
 ENGINE = os.environ.get("DUA_ENGINE", "server")  # "device": the browser runs speech recognition itself
 SESSIONS = ROOT / "data" / "sessions"
 MAX_SESSION_BYTES = 256 << 20  # 16 kHz int16 mono: over two hours
-CTC_MODEL = os.environ.get("DUA_CTC_MODEL", str(ROOT / "models" / "wav2vec2-quran-dua"))
+CTC_MODEL = os.environ.get("DUA_CTC_MODEL", str(ROOT / "models" / "ctc-student-base-v6"))
 _ctc = None
 _ctc_lock = threading.Lock()
 
 
 def ctc_model():
-    """The CTC model for ?words=ctc, loaded once, on first use."""
+    """The word follower's CTC model, loaded once, on first use: the phone's small one by default
+    (docs/results/phone_follower.md), any Hugging Face CTC model with DUA_CTC_MODEL."""
     global _ctc
     with _ctc_lock:
         if _ctc is None:
-            from dua_recognition.ctc import CtcModel
+            from dua_recognition.ctc_student import load_ctc
 
-            _ctc = CtcModel(CTC_MODEL)
+            _ctc = load_ctc(CTC_MODEL)
         return _ctc
 
 DUAS = load_all()
@@ -130,9 +131,10 @@ def audio(audio_id: str):
 
 
 def _message(update, step_ms: float, index: CorpusIndex, speed: float, unknown: float = 0.0,
-             still_after: float = 0.3) -> dict:
+             still_after: float = 0.3, retreat_after: float = 1.0) -> dict:
     p = update.position
-    still = update.quiet > still_after  # the reciter has stopped: so does the gliding highlight
+    silent = max(update.quiet, update.quiet_now or 0.0)  # at the window's end, or since
+    still = silent > still_after  # the reciter has stopped: so does the gliding highlight
     word = index.words[p.word] if p.word is not None else None
     return {
         "t": round(update.t, 2),
@@ -144,6 +146,12 @@ def _message(update, step_ms: float, index: CorpusIndex, speed: float, unknown: 
         "token": word.token if word and p.dua else None,
         "speed": 0.0 if still else round(speed, 3),  # words/s: the page glides the highlight at this pace
         "quiet": round(update.quiet, 2),  # seconds the reciter had been silent
+        "quiet_now": None if update.quiet_now is None else round(update.quiet_now, 2),  # ...and when sent
+        "paused": None if update.paused is None else round(update.paused, 2),
+        # The page's own stop detector compares with this (web/gate.js LiveQuiet).
+        "voice_db": None if update.voice_db is None else round(update.voice_db, 1),
+        # Silent a while: the highlight may go back to the word they stopped on.
+        "back": silent > retreat_after,
         "unknown": round(unknown, 3),  # P(the recitation isn't in the corpus)
         # Reached the end of the line and the latest window was silent: the
         # next line is probably coming, so the UI previews it.
@@ -165,10 +173,11 @@ def _follow(mode: str) -> TrackerConfig:
 async def follow(ws: WebSocket):
     await ws.accept()
     # ?lead=0 / ?pauses=0 switch those off, for comparing by feel. ?follow=reciter:
-    # majlis mode, where the display runs on through a reciter's breaths. ?words=ctc: the
-    # word follower (an experiment, off by default).
-    words = "ctc" if ws.query_params.get("words") == "ctc" else None
-    rec = StreamingRecognizer(DUAS, model=MODEL, index=INDEX, lead=ws.query_params.get("lead") != "0",
+    # majlis mode, where the display runs on through a reciter's breaths. The word follower places
+    # the word unless ?words=off; with it, the tracker's display shows its evidence, not a lead.
+    words = None if ws.query_params.get("words") == "off" else "ctc"
+    rec = StreamingRecognizer(DUAS, model=MODEL, index=INDEX,
+                              lead=ws.query_params.get("lead") != "0" and words is None,
                               pauses=ws.query_params.get("pauses") != "0",
                               config=_follow(ws.query_params.get("follow", "reading")),
                               words=words, ctc=await asyncio.to_thread(ctc_model) if words else None)
@@ -193,7 +202,7 @@ async def follow(ws: WebSocket):
         update = await asyncio.to_thread(rec.step)
         if update is not None:
             await ws.send_json(_message(update, (time.perf_counter() - t0) * 1000, rec.index, rec.tracker.speed,
-                                        rec.tracker.null, rec.tracker.cfg.still_after))
+                                        rec.tracker.null, rec.tracker.cfg.still_after, rec.tracker.cfg.retreat_after))
 
     try:
         while True:

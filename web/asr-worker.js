@@ -10,7 +10,7 @@ import {
 
 import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.wasm.min.mjs";
 
-import { decide, looksHallucinated, makeVadProbs, quietAtEnd } from "./gate.js";
+import { decide, looksHallucinated, makeVadProbs, stopMeasures } from "./gate.js";
 
 env.localModelPath = new URL("./models/", self.location.href).href;
 env.allowLocalModels = true; // off by default in browsers
@@ -59,12 +59,16 @@ self.onmessage = async ({ data }) => {
     const policy = data.gate || "legacy";
     let text = "";
     let quiet = 0;
+    let stops = { paused: null, voiceDb: data.voiceDb ?? null };
     let gate = null;
     let inferMs = null;
     let hallucinated = false;
     let failed = false;
     try {
-      quiet = await quietAtEnd(data.audio, vadProbs);
+      // How long they've been silent, how much of the last dt went on pauses, and the voice level
+      // to remember (the page hands the last one back each time): gate.js stopMeasures.
+      stops = await stopMeasures(data.audio, vadProbs, { voiceDb: data.voiceDb ?? null, dt: data.dt ?? null });
+      quiet = stops.quiet;
       gate = await decide(data.audio, policy, vadProbs);
       // No speech evidence in the newest audio: report a pause and skip Whisper entirely.
       if (gate.run) {
@@ -86,7 +90,8 @@ self.onmessage = async ({ data }) => {
     // and wrote nothing; "hallucination" = filtered (?filter=1); "error" = inference failed.
     const skip = failed ? "error" : gate && !gate.run ? gate.reason
       : hallucinated && data.filter ? "hallucination" : text ? null : "empty";
-    self.postMessage({ type: "text", id: data.id, text, quiet, ms: performance.now() - t0, gate, skip,
+    self.postMessage({ type: "text", id: data.id, text, quiet, paused: stops.paused, voiceDb: stops.voiceDb,
+      ms: performance.now() - t0, gate, skip,
       hallucinated, infer_ms: inferMs, recv, done: clock() });
   }
 };

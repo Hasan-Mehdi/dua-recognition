@@ -179,6 +179,12 @@ def gate_summary(log: dict) -> list[str]:
     if inf:
         out.append(f"  Whisper: {percentile(inf, 50):.0f} ms p50, {percentile(inf, 90):.0f} ms p90 "
                    f"(first hop {cold[0]:.0f} ms)" if cold else f"  Whisper: {percentile(inf, 50):.0f} ms p50")
+    ctc = [e for e in log["events"] if e["type"] == "ctc"]
+    if ctc:
+        gaps = np.diff([e["t"] for e in ctc])
+        out.append(f"  word follower: {len(ctc)} steps, one every {percentile(gaps, 50):.2f} s  ·  "
+                   f"model {percentile([e['ms'] for e in ctc], 50):.0f} ms p50, {percentile([e['ms'] for e in ctc], 90):.0f} p90"
+                   f"  ·  shown {percentile([e['delay'] for e in ctc], 50):.2f} s after its audio")
     ages = {e["end"]: e["age_ms"] for e in log["events"] if e["type"] == "visible" and e.get("age_ms") is not None}
     age = [ages[h["end"]] for h in steady if h["end"] in ages]
     if age:
@@ -208,7 +214,8 @@ def timeline(log: dict, lines: Lines, words: bool = False) -> list[str]:
             cand = e.get("cand") or []
             top = f"{cand[0][0]} {cand[0][1]:.2f}" if cand and not e.get("dua") else ""
             ev = f" (evidence {lines(e['dua'], e.get('now_seg'))})" if e.get("now_seg") is not None else ""
-            out.append(f"{t:7.1f}  hop   asr {e['asr_ms']:5.0f} ms  delay {t - e['end']:4.1f}  quiet {e.get('quiet') or 0:3.1f}  "
+            now_q = f"/{e['quiet_now']:3.1f}" if e.get("quiet_now") is not None else ""
+            out.append(f"{t:7.1f}  hop   asr {e['asr_ms']:5.0f} ms  delay {t - e['end']:4.1f}  quiet {e.get('quiet') or 0:3.1f}{now_q}  "
                        f"line {lines(e.get('dua'), e.get('seg')):>3s}:{e.get('token') if e.get('token') is not None else '-'}"
                        f"{ev}{'  ' + top if top else ''}  « {e.get('text') or ''} »")
         elif k == "dua":
@@ -225,6 +232,11 @@ def timeline(log: dict, lines: Lines, words: bool = False) -> list[str]:
             out.append(f"{t:7.1f}  ?? guesses: {', '.join(lines.name(g) for g in e['ids']) or '(none)'}")
         elif k == "lock":
             out.append(f"{t:7.1f}  ** chose {lines.name(e['dua'])}")
+        elif k == "hush":
+            out.append(f"{t:7.1f}     {'stopped: the highlight holds' if e['on'] else 'reciting again'}")
+        elif k == "ctc":
+            if words:
+                out.append(f"{t:7.1f}     ctc {e['ms']:4.0f} ms  word {e.get('word')}  (anchor {e.get('anchor')})")
         elif k == "preview":
             out.append(f"{t:7.1f}     next line {'previewed' if e['on'] else 'preview off'}")
         else:
@@ -273,18 +285,61 @@ def reference_lines(duas, dua_id: str, texts: list[str]) -> tuple[np.ndarray, np
     return segs, ok
 
 
-def retrack(log: dict, duas, overrides: dict) -> list[tuple[str | None, int | None]]:
-    """The Python tracker over the phone's own transcripts: (du'a, segment) per update."""
+# Tracker settings that JSON can't hold as numbers: the page logs Infinity as null.
+_INF = {"max_speed", "lead_cross_words", "lead_cross_quiet", "retreat_after", "still_after", "still_motion_after"}
+
+
+def logged_config(log: dict) -> dict:
+    """The tracker settings the page ran with (web/tracker.js, camelCase), as TrackerConfig fields.
+    Sessions from before a setting existed simply lack it: it keeps the Python default."""
+    import dataclasses
+    import re
+
+    from dua_recognition.tracker import TrackerConfig
+
+    fields = {f.name: f for f in dataclasses.fields(TrackerConfig)}
+    # Settings added since some sessions were recorded, as they were before they existed
+    # (the page then behaved as if they were off), and display_lead's old default for
+    # sessions from before it changed (server sessions log no tracker settings at all).
+    out = {"lead_cross_words": float("inf"), "seek_pins_line": False, "back_confirm": 1,
+           "null_rate_locked": None, "keep_dua_confidence": None,
+           "retreat_in_line": False, "still_catch_up": False, "pause_motion": False}
+    if (log.get("started") or "") < "2026-09-30T08":
+        out["display_lead"] = 0.5
+    for k, v in (log.get("tracker") or {}).items():
+        name = re.sub(r"(?<!^)(?=[A-Z])", "_", k).lower()
+        if name not in fields:
+            continue
+        if v is None and name in _INF:
+            v = float("inf")
+        elif v is None and "None" not in str(fields[name].type):
+            continue  # not an optional setting: keep the default
+        out[name] = tuple(v) if isinstance(v, list) else v
+    return out
+
+
+def retrack(log: dict, duas, overrides: dict, *, as_logged: bool = True, hear=None,
+            index=None) -> list[tuple[str | None, int | None]]:
+    """The Python tracker over the phone's own transcripts: (du'a, segment) per update.
+
+    as_logged: start from the settings the page ran with (so {} reproduces what it
+    showed); False: from today's TrackerConfig defaults. `overrides` go on top.
+    hear(hop, tracker) replaces the phone's transcript (scripts/session_replay.py --asr);
+    index is a prebuilt CorpusIndex of all `duas`, to save rebuilding it per call.
+    """
     from dua_recognition.align import CorpusIndex
     from dua_recognition.tracker import RECITER, Tracker, TrackerConfig
 
-    base = replace(TrackerConfig(), **overrides)
+    base = replace(TrackerConfig(), **{**(logged_config(log) if as_logged else {}), **overrides})
     cfg = lambda mode: replace(base, **RECITER) if mode == "reciter" else base  # noqa: E731
     mode = log.get("follow", "reading")
-    full = CorpusIndex(duas)
+    full = index or CorpusIndex(duas)
     tracker = Tracker(CorpusIndex({log["chosen"]: duas[log["chosen"]]}) if log.get("chosen") else full, cfg(mode))
     last_end, out = 0.0, []
     no_lead = "lead=0" in (log.get("params") or "")
+    # Newer sessions log each update's lead (delay + the page's display_lead): swap in
+    # the display_lead being tried.
+    logged = (log.get("tracker") or {}).get("displayLead", base.display_lead)
     for e in log["events"]:
         if e["type"] == "lock":
             tracker = Tracker(CorpusIndex({e["dua"]: duas[e["dua"]]}), cfg(mode))
@@ -296,8 +351,15 @@ def retrack(log: dict, duas, overrides: dict) -> list[tuple[str | None, int | No
         elif e["type"] == "hop":
             dt = e.get("dt", e["end"] - last_end)
             last_end = e["end"]
-            lead = e.get("lead", 0.0 if no_lead else e["t"] - e["end"] + tracker.cfg.display_lead)
-            p = tracker.update(e.get("text") or "", dt, lead=lead, quiet=e.get("quiet") or 0.0)
+            if "lead" in e:
+                lead = e["lead"] + tracker.cfg.display_lead - logged if e["lead"] > 0 else 0.0
+            else:
+                lead = 0.0 if no_lead else e["t"] - e["end"] + tracker.cfg.display_lead
+            text = hear(e, tracker) if hear else e.get("text") or ""
+            # Sessions since 2026-10-01 also log the page's live quiet and the pauses since the
+            # last update (docs/results/stops.md); older ones have neither, as the page then.
+            p = tracker.update(text, dt, lead=max(0.0, lead), quiet=e.get("quiet") or 0.0,
+                               quiet_now=e.get("quiet_now"), paused=e.get("paused"))
             out.append((p.dua, p.segment))
     return out
 
@@ -408,6 +470,7 @@ def main() -> None:
     ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE",
                     help="--score: re-run the tracker with these TrackerConfig changes")
     args = ap.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8")  # transcripts are Arabic; the Windows console defaults to cp1252
 
     files = sorted(SESSIONS.glob("*.wav")) if args.all else find(args.session)
     if not files:

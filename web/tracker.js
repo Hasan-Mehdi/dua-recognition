@@ -122,17 +122,28 @@ export const DEFAULTS = {
   kappa: 0.15, kappaSearch: 1.2, lockConfidence: 0.95, maxSpeed: 4.0,
   // Speed prior and tempo adaptation: see TrackerConfig.speeds / tempo_memory in tracker.py.
   speeds: [0.59, 0.99, 1.15, 1.3, 1.44, 1.55, 1.67, 1.84, 2.05, 2.39], tempoMemory: 0.98,
-  pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, startWeight: 0.3, startWords: 12, minDuaConfidence: 0.7, sameTextWords: 12, sameTextAhead: 3,
+  pBack: 0.1, backWords: 8, pTeleport: 0.01, pTeleportLocked: 0.01, pLineJump: 0.02, startWeight: 0.3, startWords: 12, minDuaConfidence: 0.7, sameTextWords: 12, sameTextAhead: 3,
   // Shared passages spelled differently count as one, for the display and the lock
   // (TrackerConfig.same_text_spelling / lock_on_passage in tracker.py).
   sameTextSpelling: true, lockOnPassage: true,
-  displayLead: 0.5, // seconds shown ahead of the measured delay (see tracker.py)
+  displayLead: 0.25, // seconds shown ahead of the measured delay (see tracker.py)
   enterLineAtStart: true, // moving on to the next line starts at its first word
   // Pauses (TrackerConfig.still_after ... retreat_after in tracker.py): `quiet` is how
   // long the reciter has been silent at the window's end (asr-worker.js quietAtEnd).
   stillAfter: 0.3, leadWithinLine: false, stillMotionAfter: 0.3, leadCrossQuiet: 0.1, retreatAfter: 1.0,
   // "None of these": recitations not in the corpus (TrackerConfig.null_rate in tracker.py).
   nullRate: 0.45, nullEnter: 0.002, nullLeave: 0.05,
+  // From ordinary voices reading short lines (TrackerConfig.lead_cross_words ... keep_dua_confidence
+  // in tracker.py): the lead crosses into the next line only near the current one's end; a tapped
+  // line stays until the evidence passes it; a step back waits for a second update; once locked,
+  // "not in the corpus" needs worse windows; a du'a on screen stays down to a lower bar.
+  leadCrossWords: Infinity, seekPinsLine: true, backConfirm: 2, nullRateLocked: 0.55, keepDuaConfidence: null,
+  // Stops (TrackerConfig.retreat_in_line / still_catch_up in tracker.py): after a second of
+  // silence a highlight ahead of the evidence in its own line steps back too; while silent the
+  // display may still move forward to the evidence.
+  retreatInLine: false, stillCatchUp: false,
+  // The belief moves only for time not spent in pauses (TrackerConfig.pause_motion).
+  pauseMotion: true,
 };
 
 // Following a professional reciter (majlis mode): see RECITER in tracker.py.
@@ -167,6 +178,9 @@ export class Tracker {
     for (let w = n - 2; w >= 0; w--) {
       this.nextLine[w] = this.lineFirst[w + 1] === w + 1 ? w + 1 : this.nextLine[w + 1];
     }
+    // Lines per du'a, for a jump within the du'a (pLineJump: to the first word of any of its lines).
+    this.linesInDua = new Float64Array(nDuas);
+    for (let w = 0; w < n; w++) if (this.lineFirst[w] === w) this.linesInDua[index.wordDua[w]] += 1;
     Object.assign(this, passageKeys(index.words.map((w) => w.text), index.duaWordSpan));
     this.reset();
   }
@@ -175,6 +189,8 @@ export class Tracker {
     this.post = Float64Array.from(this.floor);
     this.lastWord = null;
     this.shown = null;
+    this.pin = null; // last word of a tapped line (seekPinsLine)
+    this.backs = 0; // updates in a row that asked to step back a line (backConfirm)
     this.null = this.cfg.nullRate > 0 ? 0.5 : 0; // P(not in the corpus)
     this.reported = null; // the du'a last reported (index)
     this.foundAlone = false; // ...and it was told apart from every other text
@@ -230,7 +246,25 @@ export class Tracker {
       post[w] = (1 - cfg.pBack) * fwd + cfg.pBack * (back[w] / cfg.backWords);
       sum += post[w];
     }
-    for (let w = 0; w < n; w++) post[w] = (1 - tele) * (post[w] / sum) + tele * floor[w];
+    for (let w = 0; w < n; w++) post[w] /= sum;
+    if (cfg.pLineJump > 0) {
+      // A jump within the du'a, to the first word of any of its lines (TrackerConfig.p_line_jump).
+      const pj = Math.min(1, cfg.pLineJump * dt);
+      const dua = this.ix.wordDua;
+      const mass = new Float64Array(this.linesInDua.length);
+      for (let w = 0; w < n; w++) mass[dua[w]] += post[w];
+      for (let w = 0; w < n; w++) {
+        post[w] = (1 - pj) * post[w] + pj * (this.lineFirst[w] === w ? mass[dua[w]] / this.linesInDua[dua[w]] : 0);
+      }
+    }
+    for (let w = 0; w < n; w++) post[w] = (1 - tele) * post[w] + tele * floor[w];
+  }
+
+  // Posterior mass of the line `w` is in (the word follower's jump rule, follower.js jumpMass).
+  lineMass(w) {
+    let m = 0;
+    for (let k = this.lineFirst[w]; k < this.nextLine[w]; k++) m += this.post[k];
+    return (1 - this.null) * m;
   }
 
   _locked() {
@@ -248,13 +282,17 @@ export class Tracker {
   }
 
   // With lead > 0: show the belief predicted `lead` s past the window's end, and hold it through silence.
-  // `quiet`: seconds the reciter has been silent at the window's end (see tracker.py update).
-  update(transcript, dt, lead = 0, quiet = 0) {
+  // `quiet`: seconds the reciter has been silent at the window's end; `quietNow`: the same when the
+  // update is shown (gate.js LiveQuiet; null = not known); `paused`: seconds of the last dt spent in
+  // pauses (gate.js stopMeasures; null = only `quiet` counts). See tracker.py update.
+  update(transcript, dt, lead = 0, quiet = 0, quietNow = null, paused = null) {
     const costs = transcript ? this.ix.wordCosts(transcript) : null;
-    const moving = quiet > this.cfg.stillMotionAfter ? dt - quiet : dt;
+    const moving = paused != null && this.cfg.pauseMotion ? dt - paused
+      : quiet > this.cfg.stillMotionAfter ? dt - quiet : dt;
     this._advance(costs ? Math.max(0, moving) : 0, this._locked());
     if (costs) {
-      const kappa = this._locked() ? this.cfg.kappa : this.cfg.kappaSearch;
+      const locked = this._locked();
+      const kappa = locked ? this.cfg.kappa : this.cfg.kappaSearch;
       let min = Infinity;
       for (const c of costs) if (c < min) min = c;
       const lik = new Float64Array(costs.length);
@@ -269,13 +307,14 @@ export class Tracker {
         const tot = wts.reduce((a, b) => a + b, 0);
         if (tot > 0) wts.forEach((x, s) => (this.tempo[s] = x / tot));
       }
-      const { nullRate, nullEnter, nullLeave } = this.cfg;
+      const { nullRate, nullEnter, nullLeave, nullRateLocked } = this.cfg;
       const nLetters = encode(transcript).length;
       if (nullRate > 0 && nLetters) {
+        const rate = locked && nullRateLocked != null ? nullRateLocked : nullRate;
         const known = (1 - this.null) * (1 - nullEnter) + this.null * nullLeave;
         let fit = 0;
         for (let w = 0; w < lik.length; w++) fit += this.post[w] * lik[w];
-        const none = (1 - known) * Math.exp(-kappa * Math.min(50, Math.max(-50, nullRate * nLetters - min)));
+        const none = (1 - known) * Math.exp(-kappa * Math.min(50, Math.max(-50, rate * nLetters - min)));
         this.null = none / (known * fit + none);
       }
       let sum = 0;
@@ -286,16 +325,54 @@ export class Tracker {
       for (let w = 0; w < costs.length; w++) this.post[w] /= sum;
     }
     if (lead <= 0) return this.forwardOnly(this.position());
-    if ((!costs || quiet > this.cfg.stillAfter) && this.shown) {
+    const cfg = this.cfg;
+    // How long they have been silent when this is shown: the page's own ear if it has one,
+    // else the window's end; a window that ended in a pause they have since recited on
+    // from is no reason to hold (tracker.py).
+    const heard = quietNow != null;
+    const silent = heard ? quietNow : quiet;
+    const resumed = heard && quietNow <= cfg.stillAfter;
+    if ((!costs || (quiet > cfg.stillAfter && !resumed)) && this.shown) {
       const now = this.position();
-      if (quiet > this.cfg.retreatAfter) this._retreat(now);
+      const shown = this.shown;
+      if (silent > cfg.retreatAfter) this._retreat(now);
+      if (cfg.stillCatchUp && costs && now.word != null && shown.word != null && now.dua === shown.dua
+          && now.word > this.shown.word) {
+        this.backs = 0;
+        this.shown = this.forwardOnly({ ...now });
+      }
       return { ...this.shown, candidates: now.candidates };
     }
+    let retreat = false;
+    if (heard && quietNow > cfg.stillAfter) {
+      // They stopped after the window's end: the lead covers only the time they were reciting.
+      lead = Math.max(0, lead - cfg.displayLead - quietNow);
+      retreat = quietNow > cfg.retreatAfter;
+    }
     let led = this.lookahead(lead);
-    if (this.cfg.leadWithinLine || quiet >= this.cfg.leadCrossQuiet) {
-      // Only evidence starts a new line: stay at the end of the evidence's line.
+    // Only while they make sound may the lead cross into the next line: under leadCrossQuiet at the
+    // window's end; from the page's own ear, a gap between words is not a stop (tracker.py).
+    const crossBar = heard ? Math.max(cfg.leadCrossQuiet, cfg.stillAfter) : cfg.leadCrossQuiet;
+    if (cfg.leadWithinLine || silent >= crossBar || this.pin !== null || cfg.leadCrossWords !== Infinity) {
       const now = this.position();
-      if (now.dua !== null && (led.dua !== now.dua || led.segment !== now.segment)) led = this._lineEnd(now);
+      if (this.pin !== null && (now.word == null || this.ix.wordDua[now.word] !== this.ix.wordDua[this.pin]
+          || now.word > this.pin)) this.pin = null; // the evidence has left the tapped line
+      const hold = cfg.leadWithinLine || silent >= crossBar || this.pin !== null
+        || (now.word != null && this.nextLine[now.word] - now.word > cfg.leadCrossWords);
+      // Only evidence starts a new line: stay at the end of the evidence's line.
+      if (hold && now.dua !== null && (led.dua !== now.dua || led.segment !== now.segment)) led = this._lineEnd(now);
+    }
+    const shown = this.shown;
+    const backALine = !!shown && shown.word != null && led.word != null && led.dua === shown.dua
+      && this.lineFirst[led.word] < this.lineFirst[shown.word];
+    if (retreat && backALine) led = this._lineEnd(led); // the retreat: they stopped at the end of the evidence's line
+    if (cfg.backConfirm > 1 && !retreat && backALine) {
+      this.backs += 1;
+      if (this.backs < cfg.backConfirm) return { ...shown, candidates: led.candidates }; // not yet: hold the line
+    }
+    this.backs = 0;
+    if (retreat && cfg.retreatInLine && this.lastWord !== null && led.word != null) {
+      this.lastWord = Math.min(this.lastWord, led.word); // no forward-only hold past the evidence
     }
     this.shown = this.forwardOnly(led);
     return this.shown;
@@ -306,11 +383,19 @@ export class Tracker {
     return { ...p, word: last, token: this.ix.words[last].token, atLineEnd: true };
   }
 
-  // The display ran into a later line than the evidence: back to the end of the evidence's line.
+  // The display ran into a later line than the evidence: back to the end of the evidence's line
+  // (retreatInLine: or ahead of it in the same line: back to the evidence's word).
   _retreat(now) {
     const shown = this.shown;
     if (now.dua === null || now.word == null || shown.word == null || now.dua !== shown.dua
-        || shown.word <= now.word || this.lineFirst[shown.word] === this.lineFirst[now.word]) return;
+        || shown.word <= now.word) return;
+    if (this.lineFirst[shown.word] === this.lineFirst[now.word]) {
+      if (this.cfg.retreatInLine) {
+        this.shown = { ...now };
+        this.lastWord = now.word;
+      }
+      return;
+    }
     this.shown = this._lineEnd(now);
     this.lastWord = this.shown.word;
   }
@@ -333,6 +418,8 @@ export class Tracker {
     this.reported = d;
     this.foundAlone = true;
     this.lastWord = words[0];
+    this.pin = this.cfg.seekPinsLine ? this.nextLine[words[0]] - 1 : null;
+    this.backs = 0;
     const p = this.position();
     this.shown = { ...p, word: words[0], token: ix.words[words[0]].token, atLineEnd: words.length === 1 };
     return this.shown;
@@ -415,7 +502,9 @@ export class Tracker {
     const candidates = order.slice(0, 3).map((i) => [ix.duaIds[i], mass[i]]);
     const group = this._sameText(mass, order);
     const conf = group.reduce((n, g) => n + mass[g], 0);
-    if (conf < this.cfg.minDuaConfidence) return { dua: null, duaConfidence: conf, candidates };
+    // Already on screen: keep it down to the lower bar (keepDuaConfidence).
+    const keep = this.cfg.keepDuaConfidence != null && group.includes(this.reported);
+    if (conf < (keep ? this.cfg.keepDuaConfidence : this.cfg.minDuaConfidence)) return { dua: null, duaConfidence: conf, candidates };
     // Shown: the du'a on screen if it was found before the shared passage began,
     // else the one the passage sits nearest the start of (tracker.py).
     let d;

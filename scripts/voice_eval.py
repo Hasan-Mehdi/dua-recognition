@@ -103,7 +103,14 @@ def main() -> None:
     ap.add_argument("--limit", type=int)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--set", choices=["retasy", "quranlab"], default="retasy")
+    ap.add_argument("--max-seconds", type=float,
+                    help="only clips up to this long, each transcribed as one live window the way the app sends "
+                         "them (asr.transcribe_batch): needed for short-context models (scripts/shorten_context.py), "
+                         "whose input faster-whisper's transcribe() still pads to 30 s")
     args = ap.parse_args()
+    import os
+
+    os.environ.setdefault("DUA_ASR_DEVICE", args.device)
     from faster_whisper import WhisperModel
 
     if args.set == "quranlab":
@@ -116,13 +123,25 @@ def main() -> None:
         groups = ["male", "female"]
         print(f"{len(clips)} clips, {len({c['reciter'] for c in clips})} reciters, "
               f"{sum(c['gender'] == 'female' for c in clips)} by women, {sum(len(c['y']) for c in clips) / 16000 / 60:.0f} min")
+    if args.max_seconds:
+        clips = [c for c in clips if len(c["y"]) <= args.max_seconds * 16000]
+        print(f"  {len(clips)} clips of at most {args.max_seconds:g} s, each as one live window")
     for name in args.models:
-        m = WhisperModel(name, device=args.device, compute_type="int8" if args.device == "cpu" else "float16")
+        if args.max_seconds:
+            from dua_recognition.asr import transcribe_batch
+
+            hyps = [h for i in range(0, len(clips), 16) for h in transcribe_batch([c["y"] for c in clips[i : i + 16]], model=name)]
+        else:
+            m = WhisperModel(name, device=args.device, compute_type="int8" if args.device == "cpu" else "float16")
         tot = {"all": [0, 0], **{g: [0, 0] for g in groups}}
-        for c in clips:
-            segs, _ = m.transcribe(c["y"], language="ar", beam_size=1, condition_on_previous_text=False,
-                                   without_timestamps=True)
-            e, n = cer(c["ref"], " ".join(s.text for s in segs))
+        for j, c in enumerate(clips):
+            if args.max_seconds:
+                text = hyps[j]
+            else:
+                segs, _ = m.transcribe(c["y"], language="ar", beam_size=1, condition_on_previous_text=False,
+                                       without_timestamps=True)
+                text = " ".join(s.text for s in segs)
+            e, n = cer(c["ref"], text)
             for k in ("all", c["gender"]):
                 if k in tot:
                     tot[k][0] += e

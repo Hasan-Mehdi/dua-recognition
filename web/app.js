@@ -4,8 +4,11 @@
 //                  nothing leaves the device (used when there's no server)
 import { CorpusIndex, DEFAULTS, RECITER, Tracker } from "./tracker.js";
 import { Highlight } from "./display.js";
+import { LiveQuiet } from "./gate.js";
+import { FOLLOW_DEFAULTS, LocalFollower } from "./follower.js";
 import { VoiceLevel, voiceBandDb } from "./voice.js";
 import { SessionLog, clearSessions, listSessions, sessionFile, shareFiles } from "./session-log.js";
+import { kids } from "./kids.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -32,9 +35,9 @@ class ServerEngine {
   async prepare() {}
   async start(onUpdate) {
     // ?lead=0 turns off showing the predicted current position (for comparing by feel).
-    // ?words=ctc: the server's CTC word follower places the word (docs/results/follower.md).
+    // The server's word follower places the word unless ?words=off (docs/results/phone_follower.md).
     const q = ["lead", "pauses"].filter((k) => params.get(k) === "0").map((k) => `${k}=0`)
-      .concat(`follow=${following()}`, params.get("words") === "ctc" ? ["words=ctc"] : []).join("&");
+      .concat(`follow=${following()}`, params.get("words") === "off" ? ["words=off"] : []).join("&");
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws${q ? "?" + q : ""}`);
     ws.binaryType = "arraybuffer";
     ws.onmessage = (e) => {
@@ -43,16 +46,23 @@ class ServerEngine {
         log.event("wordstep", { end: m.t, ms: m.step_ms, dua: m.dua, seg: m.segment, token: m.token });
         return onUpdate({ word: true, dua: m.dua, segment: m.segment, token: m.token, ms: m.step_ms });
       }
-      log.event("hop", { end: m.t, asr_ms: m.step_ms, text: m.heard, quiet: m.quiet, dua: m.dua, seg: m.segment,
+      if (m.voice_db != null && !this.noPauses) this.ear.voiceDb = m.voice_db;
+      log.event("hop", { end: m.t, asr_ms: m.step_ms, text: m.heard, quiet: m.quiet, quiet_now: m.quiet_now,
+        paused: m.paused, voice_db: m.voice_db, dua: m.dua, seg: m.segment,
         token: m.token, eol: m.pause_at_line_end, dua_p: m.dua_confidence, seg_p: m.segment_confidence,
         unknown: m.unknown, speed: m.speed, cand: cands((m.candidates || []).map((c) => [c.id, c.p])) });
-      onUpdate({ dua: m.dua, segment: m.segment, token: m.token, speed: m.speed, unknown: m.unknown, pause: m.pause_at_line_end, heard: m.heard, ms: m.step_ms,
+      onUpdate({ dua: m.dua, segment: m.segment, token: m.token, speed: m.speed, back: !!m.back, unknown: m.unknown, pause: m.pause_at_line_end, heard: m.heard, ms: m.step_ms,
         candidates: (m.candidates || []).map((c) => ({ id: c.id, p: c.p })), sameAs: m.same_as || [] });
     };
     await new Promise((ok, err) => ((ws.onopen = ok), (ws.onerror = err)));
     this.ws = ws;
+    // The page hears the reciter stop before the server's next update says so (gate.js LiveQuiet):
+    // the gliding highlight stops at once. The server sends the voice level to compare with.
+    this.ear = new LiveQuiet();
+    this.noPauses = params.get("pauses") === "0";
   }
   push(chunk) {
+    this.ear?.push(chunk);
     if (this.ws?.readyState === 1) this.ws.send(chunk.buffer);
   }
   lock(duaId) {
@@ -70,6 +80,17 @@ class ServerEngine {
   }
 }
 
+// Audio reaches the engine in chunks of this many 16 kHz samples (capture-worklet.js): 50 ms, so a
+// word waits ~25 ms for its chunk instead of ~125 ms (250 ms chunks until 2026-10-01). ?chunk=4000: as before.
+const CHUNK = Number(params.get("chunk") || 800);
+
+// 2 s windows since 2026-10-01 (the same students exported with --window 2): a third less compute
+// per step than 3 s, and on the phone compute time is most of the follower's delay
+// (docs/results/phone_latency.md).
+const CTC_MODEL = "ctc-student-base-v6-w2";
+const CTC_FALLBACK = "ctc-student-tiny-v6-w2";
+const CTC_SLOW_MS = 400;
+
 class DeviceEngine {
   kind = "device";
   constructor(corpus, model) {
@@ -81,6 +102,25 @@ class DeviceEngine {
     // Speech gate policy (web/gate.js; docs/results/browser_gate.md): legacy unless ?gate=...
     this.gate = params.get("gate") || "legacy";
     this.filter = params.get("filter") === "1"; // the hallucination filter, a separate ablation
+    // The word follower (follower.js) on the phone CTC model (ctc-worker.js): timed letter evidence
+    // several times a second places the word; Whisper and the tracker find the du'a and anchor it
+    // (docs/results/phone_follower.md). ?words=off: Whisper's lead and glide alone, as before.
+    this.words = params.get("words") !== "off";
+    // A phone too slow for it (the model's step over 400 ms) gets the whisper-tiny one from its next
+    // session on: fewer, later steps cost more than a weaker ear (docs/results/phone_follower.md).
+    const kept = stored("ctc-model"); // a fallback chosen in an earlier session (older names don't count)
+    this.ctcModel = params.get("ctc") || ([CTC_MODEL, CTC_FALLBACK].includes(kept) ? kept : null) || CTC_MODEL;
+    // A step as soon as the last is done and 0.1 s of audio has come in: the step's wait is part of
+    // the delay too (0.2 s until 2026-10-01).
+    this.ctcHop = Number(params.get("ctchop") || 0.1) * SR;
+    // While the follower places the words, Whisper only anchors it: every 2 s leaves the phone's
+    // CPU to the CTC model.
+    this.anchorHop = Number(params.get("anchorhop") || 2) * SR;
+    this.followCfg = { lapseHold: Number(params.get("lapse") ?? 0) };
+  }
+  // The follower is placing the words (its last result under a second old).
+  get following() {
+    return this.words && this.follower?.word != null && this.total - (this.framesAt ?? -Infinity) < SR;
   }
   prepare(onProgress) {
     if (this.ready) return this.ready;
@@ -98,20 +138,45 @@ class DeviceEngine {
       };
     });
     this.worker.postMessage({ type: "load", model: this.model, webgpu: params.has("webgpu") });
+    // The CTC model loads once Whisper has: compiling both at once slowed Whisper's first windows.
+    if (this.words) this.ready.then(() => this._prepareCtc(), () => {});
     return this.ready;
+  }
+  _prepareCtc() {
+    this.ctc = new Worker("ctc-worker.js", { type: "module" });
+    this.ctcReady = false;
+    this.ctc.onmessage = ({ data }) => {
+      if (data.type === "ready") {
+        this.ctcReady = true;
+        this.ctcWindow = Math.round(data.meta.window_s * SR);
+      } else if (data.type === "error") {
+        log.event("error", { where: "ctc", message: data.message });
+        this.ctcBusy = false;
+      } else if (data.type === "frames") this._onFrames(data);
+    };
+    this.ctc.postMessage({ type: "load", model: this.ctcModel, threads: Number(params.get("ctcthreads") || 0) || undefined });
   }
   lock(duaId) {
     // Follow only this du'a: identification is skipped entirely.
     this.tracker = new Tracker(new CorpusIndex(this.corpus.filter((d) => d.id === duaId)), followConfig());
+    Object.assign(this, { anchor: null, follower: null }); // word indices of the old index mean nothing now
   }
   seek(duaId, segment) {
-    return this.tracker.seek(duaId, segment);
+    const p = this.tracker.seek(duaId, segment);
+    this.follower?.reset();
+    this.anchor = p?.word ?? null;
+    return p;
   }
   async start(onUpdate) {
     this.onUpdate = onUpdate;
     this.tracker = new Tracker(new CorpusIndex(this.corpus), followConfig());
     Object.assign(this, { filled: 0, total: 0, lastSent: 0, lastUpdate: 0, busy: false, live: true, marks: [],
-      firstText: true });
+      firstText: true, voiceDb: null });
+    // The stop detector on the audio as it arrives (gate.js LiveQuiet): an update is shown a second
+    // or so after its window ends, and the reciter may have stopped since (docs/results/stops.md).
+    this.ear = new LiveQuiet();
+    this.noPauses = params.get("pauses") === "0";
+    Object.assign(this, { ctcBusy: false, ctcSent: 0, anchor: null, follower: null, previewWord: null, ctcTimes: [] });
   }
   // Capture time (epoch ms) of sample `id` of the stream, from the chunk marks.
   capturedAt(id) {
@@ -120,7 +185,7 @@ class DeviceEngine {
   }
   push(chunk, at = clock()) {
     this.marks.push([this.total + chunk.length, at]);
-    if (this.marks.length > 64) this.marks.shift();
+    if (this.marks.length > 256) this.marks.shift();
     const { buf, window: W } = this;
     if (chunk.length >= W) buf.set(chunk.subarray(chunk.length - W));
     else {
@@ -129,17 +194,72 @@ class DeviceEngine {
     }
     this.filled = Math.min(W, this.filled + chunk.length);
     this.total += chunk.length;
+    this.ear.push(chunk);
     this._maybeSend();
+    this._maybeCtc();
+  }
+  _maybeCtc() {
+    if (!this.live || !this.ctcReady || this.ctcBusy || this.total - this.ctcSent < this.ctcHop) return;
+    // Nothing to follow until the tracker has found the du'a (through a lapse, the follower's own word).
+    if (this.anchor == null && this.follower?.word == null) return;
+    this.ctcBusy = true;
+    this.ctcSent = this.total;
+    // The latest window, silence before the session's start (buf starts zeroed).
+    const audio = this.buf.slice(this.window - this.ctcWindow);
+    this.ctc.postMessage({ type: "frames", id: this.total, audio }, [audio.buffer]);
+  }
+  _onFrames(data) {
+    this.ctcBusy = false;
+    if (!this.live) return;
+    this.ctcTimes.push(data.ms);
+    if (this.ctcTimes.length === 20 && !params.get("ctc")) {
+      // Too slow for the full model: the small one from the next session. Fast on the small one
+      // (the full one takes ~2.5x as long): back to the full one.
+      const p50 = [...this.ctcTimes].sort((a, b) => a - b)[10];
+      const next = this.ctcModel === CTC_MODEL && p50 > CTC_SLOW_MS ? CTC_FALLBACK
+        : this.ctcModel === CTC_FALLBACK && p50 < CTC_SLOW_MS * 0.3 ? CTC_MODEL : null;
+      if (next) {
+        stored("ctc-model", next);
+        log.event("ctc_model_next", { p50, next });
+      }
+    }
+    const ix = this.tracker.ix;
+    if (this.follower?.ix !== ix) this.follower = new LocalFollower(ix, this.followCfg);
+    const w = this.follower.step(data.frames, data.T, data.C, data.id / SR, this.anchor, this.ear.quiet,
+      (word) => this.tracker.lineMass(word));
+    if (w != null) this.framesAt = data.id;
+    if (log.live) log.event("ctc", { end: data.id / SR, ms: data.ms, delay: (this.total - data.id) / SR,
+      word: w, anchor: this.anchor });
+    if (w != null) {
+      const wd = ix.words[w];
+      // On a line's last word with the reciter silent: the next line is previewed, and stays
+      // previewed until the word changes (a breath in the pause doesn't switch it off and on).
+      const [, hi] = ix.duaWordSpan[wd.dua];
+      const eol = w + 1 >= hi || ix.wordSegment[w + 1] !== ix.wordSegment[w];
+      if (eol && (this.ear.quiet ?? 0) > this.tracker.cfg.stillAfter) this.previewWord = w;
+      const pause = eol && this.previewWord === w;
+      this.onUpdate({ word: true, dua: ix.duaIds[wd.dua], segment: wd.segment, token: wd.token, ms: data.ms, pause });
+    }
+    this._maybeCtc();
   }
   _maybeSend() {
     // Skip stale hops rather than queue them: only the newest window matters.
-    if (!this.live || this.busy || this.total - this.lastSent < SR) return;
+    if (!this.live || this.busy) return;
+    // While following, a stop is when the anchor matters most (a last word the CTC model didn't hear:
+    // the follower catches up to it, follower.js quietAfter): Whisper runs as soon as the reciter has
+    // been quiet a moment, on a window that holds everything up to the stop, instead of up to 2 s later.
+    const quiet = this.ear.quiet ?? 0;
+    const stopped = this.following && quiet > this.tracker.cfg.stillAfter && quiet < 2
+      && this.lastSent < this.total - quiet * SR;
+    if (!stopped && this.total - this.lastSent < (this.following ? this.anchorHop : SR)) return;
     this.busy = true;
     this.lastSent = this.total;
     const audio = this.buf.slice(this.window - this.filled);
     this.sentAt = clock();
-    this.worker.postMessage({ type: "transcribe", id: this.total, audio, gate: this.gate, filter: this.filter },
-      [audio.buffer]);
+    // The voice level the stop detector compares with, remembered from window to window, and the
+    // seconds since the last update, for how much of them went on pauses (gate.js stopMeasures).
+    this.worker.postMessage({ type: "transcribe", id: this.total, audio, gate: this.gate, filter: this.filter,
+      voiceDb: this.voiceDb, dt: (this.total - this.lastUpdate) / SR }, [audio.buffer]);
   }
   _onText(data) {
     this.busy = false;
@@ -148,10 +268,25 @@ class DeviceEngine {
     this.lastUpdate = data.id;
     // Audio captured while Whisper ran is how far the reciter has moved on: show where they are now.
     const delay = (this.total - data.id) / SR;
-    const lead = params.get("lead") === "0" ? 0 : delay + this.tracker.cfg.displayLead;
-    const quiet = params.get("pauses") === "0" ? 0 : data.quiet ?? 0; // seconds the reciter has been silent (asr-worker.js)
-    const p = this.tracker.update(data.text, dt, lead, quiet);
-    const still = quiet > this.tracker.cfg.stillAfter; // they've stopped: so does the gliding highlight
+    // With the word follower, the tracker's own display shows the evidence, not a prediction: it is
+    // only on screen until the follower's first step (or through a lapse), and a guess ahead that
+    // the follower then took back would be the very jump it is there to stop.
+    const lead = params.get("lead") === "0" || (this.words && this.ctcReady) ? 0 : delay + this.tracker.cfg.displayLead;
+    const cfg = this.tracker.cfg;
+    const quiet = this.noPauses ? 0 : data.quiet ?? 0; // seconds the reciter has been silent (asr-worker.js)
+    if (data.voiceDb != null) this.voiceDb = this.ear.voiceDb = data.voiceDb;
+    // ...and still now, in the audio that arrived while Whisper ran; the pauses in the window's last dt.
+    const quietNow = this.noPauses ? null : this.ear.quiet;
+    const paused = this.noPauses ? null : data.paused ?? null;
+    const p = this.tracker.update(data.text, dt, lead, quiet, quietNow, paused);
+    if (this.words) {
+      // The follower's anchor: where the evidence alone puts them (no lead), once the du'a is found.
+      const now = this.tracker.position();
+      this.anchor = now.dua != null ? now.word : null;
+    }
+    // They've stopped: so does the gliding highlight; a while ago: it may go back to where they stopped.
+    const still = quiet > cfg.stillAfter || quietNow > cfg.stillAfter;
+    const back = Math.max(quiet, quietNow ?? 0) > cfg.retreatAfter;
     if (log.live) {
       // `now_*`: where the evidence alone puts them (no lead, no holding through
       // pauses), to tell recognition errors from display ones.
@@ -160,7 +295,8 @@ class DeviceEngine {
       // when the window's audio was captured, sent, received, done, and (event "visible") shown.
       const captured = this.capturedAt(data.id);
       const g = data.gate;
-      log.event("hop", { end: data.id / SR, asr_ms: data.ms, text: data.text, quiet, dt, lead,
+      log.event("hop", { end: data.id / SR, asr_ms: data.ms, text: data.text, quiet, quiet_now: quietNow, paused,
+        voice_db: this.voiceDb, dt, lead,
         dua: p.dua, seg: p.segment, token: p.token, eol: p.atLineEnd, dua_p: p.duaConfidence, seg_p: p.segmentConfidence,
         now_seg: now.segment, now_token: now.token, unknown: this.tracker.null, speed: this.tracker.speed,
         cand: cands(p.candidates), gate: g?.policy ?? this.gate, ran: g ? g.run : null, skip: data.skip ?? null,
@@ -175,7 +311,7 @@ class DeviceEngine {
       });
     }
     this.firstText = false;
-    this.onUpdate({ dua: p.dua, segment: p.segment, token: p.token, speed: still ? 0 : this.tracker.speed, unknown: this.tracker.null, pause: p.atLineEnd && (!data.text || still), heard: data.text, ms: data.ms,
+    this.onUpdate({ dua: p.dua, segment: p.segment, token: p.token, speed: still ? 0 : this.tracker.speed, back, unknown: this.tracker.null, pause: p.atLineEnd && (!data.text || still), heard: data.text, ms: data.ms,
       candidates: p.candidates.map(([id, prob]) => ({ id, p: prob })), sameAs: p.sameAs || [] });
     this._maybeSend();
   }
@@ -199,11 +335,26 @@ function setState(s) {
 async function init() {
   const corpus = await fetch("corpus.json").then((r) => r.json());
   for (const d of corpus) state.duas[d.id] = d;
+  kids.init(state.duas, {
+    openPicker,
+    pick: (id) => {
+      closePicker();
+      state.chosen = id;
+      begin(micSource);
+    },
+    again: (id) => {
+      end("again");
+      state.chosen = id;
+      begin(micSource);
+    },
+    home: () => end("done"),
+  });
   const mode = await fetch("api/mode").then((r) => (r.ok ? r.json() : null)).catch(() => null);
   state.mode = mode;
   state.engine = mode?.mode === "server"
     ? new ServerEngine()
-    : new DeviceEngine(corpus, params.get("model") || "whisper-base-aug-v4");
+    // Trained with synthetic ordinary voices, at an 8 s context (docs/results/synthetic_voices.md, phone_speed.md).
+    : new DeviceEngine(corpus, params.get("model") || "whisper-base-syn-v5-ctx8ft");
   log.upload = log.enabled && !!mode?.sessions;
   $("footnote").textContent = state.engine.kind === "device"
     ? (log.upload ? "Runs on this device. Debug sessions go to this server." : "Runs entirely on this device. No audio leaves it.")
@@ -646,9 +797,12 @@ async function begin(makeSource) {
     screen: [innerWidth, innerHeight, devicePixelRatio], audio_rate: state.ctx.sampleRate, load_ms: state.engine.loadMs,
     mic: track && { label: track.label, rate: mic.sampleRate, echo: mic.echoCancellation, noise: mic.noiseSuppression,
       agc: mic.autoGainControl },
-    tracker: state.engine.tracker?.cfg,
+    tracker: state.engine.tracker?.cfg, chunk: CHUNK,
+    cores: navigator.hardwareConcurrency, isolated: self.crossOriginIsolated,
+    words: state.engine.words ? { model: state.engine.ctcModel, hop: state.engine.ctcHop / SR,
+      anchor_hop: state.engine.anchorHop / SR, ...FOLLOW_DEFAULTS, ...state.engine.followCfg } : null,
   });
-  const node = new AudioWorkletNode(state.ctx, "capture");
+  const node = new AudioWorkletNode(state.ctx, "capture", { processorOptions: { chunk: CHUNK } });
   node.port.onmessage = (e) => {
     const x = e.data.x ?? e.data;
     log.audio(x);
@@ -666,12 +820,14 @@ async function begin(makeSource) {
 
 // While the du'a is being found, the star answers the reciter's voice: it glows
 // and swells as they recite, turns a little faster, and breathes when they pause.
-// voice.js turns the microphone into a calm 0..1 level; here a soft spring sits
-// between that level and the size, and only transform and opacity change, which
-// the compositor animates without repainting.
+// Once it's found, the small seal in the top bar carries on the same way, so the
+// page still shows that it hears. voice.js turns the microphone into a calm 0..1
+// level; here a soft spring sits between that level and the size, and only
+// transform and opacity change, which the compositor animates without repainting.
 function meter() {
   const girih = document.querySelector(".girih");
   const glow = document.querySelector(".voice-glow");
+  const seal = document.querySelector(".live svg");
   const { analyser } = state;
   const spectrum = new Float32Array(analyser.frequencyBinCount);
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -681,8 +837,10 @@ function meter() {
   let spin = 3, angle = 0; // deg/s and deg
   let last = performance.now();
   const frame = (now) => {
-    if (document.body.dataset.state !== "listening" || !state.source) {
-      girih.style.transform = glow.style.opacity = "";
+    const listening = document.body.dataset.state === "listening";
+    if ((!listening && document.body.dataset.state !== "following") || !state.source) {
+      girih.style.transform = glow.style.opacity = seal.style.transform = seal.style.opacity = "";
+      kids.voice(null);
       return;
     }
     const dt = Math.min(0.1, (now - last) / 1000); // a background tab can stall for seconds
@@ -698,10 +856,14 @@ function meter() {
     spin += (3 + 24 * level - spin) * (1 - Math.exp(-dt / 0.5)); // drifts at 3 deg/s, up to 27 while reciting
     angle = (angle + spin * dt) % 360;
 
-    glow.style.opacity = Math.min(1, level * 1.15).toFixed(3);
-    if (!still) {
-      const breath = 0.015 * Math.sin((now / 1000) * (2 * Math.PI / 4.5)) * (1 - level);
-      girih.style.transform = `rotate(${angle.toFixed(2)}deg) scale(${(1 + 0.12 * size + breath).toFixed(4)})`;
+    const breath = 0.015 * Math.sin((now / 1000) * (2 * Math.PI / 4.5)) * (1 - level);
+    if (kids.on) kids.voice(listening, level, size, now, still); // Noor, instead of the star and the seal
+    else if (listening) {
+      glow.style.opacity = Math.min(1, level * 1.15).toFixed(3);
+      if (!still) girih.style.transform = `rotate(${angle.toFixed(2)}deg) scale(${(1 + 0.12 * size + breath).toFixed(4)})`;
+    } else {
+      seal.style.opacity = (0.45 + 0.55 * Math.min(1, level * 1.15)).toFixed(3);
+      if (!still) seal.style.transform = `rotate(${angle.toFixed(2)}deg) scale(${(1 + 0.22 * size + breath).toFixed(4)})`;
     }
     requestAnimationFrame(frame);
   };
@@ -720,7 +882,9 @@ function end(reason) {
   if (state.room?.readyState === 1) state.room.send(JSON.stringify({ ended: true }));
   log.end(reason).then(showSessions);
   Object.assign(state, { node: null, source: null, stream: null, dua: null, segment: null, chosen: null, hl: null,
-    preview: false, guessesShown: "" });
+    preview: false, guessesShown: "", guessSeen: new Map(), lapse: 0 });
+  document.body.classList.remove("holding");
+  kids.reset();
   $("guesses").hidden = true;
   $("menu").hidden = true;
   $("hint").textContent = "Tap to begin";
@@ -742,7 +906,7 @@ function showListening() {
   $("listen-msg").textContent = "Begin reciting";
 }
 
-// ?words=ctc: word messages place the line and word directly (no glide) while they
+// The word follower: its messages place the line and word directly (no glide) while they
 // keep coming; the tracker's updates still identify the du'a and drive the rest.
 function renderWord(u) {
   state.wordAt = performance.now();
@@ -750,7 +914,28 @@ function renderWord(u) {
   if (!state.wordLive) return; // not locked yet, or the tracker changed du'a: its updates lead
   state.hl = null; // stops the glide loop
   if (u.segment !== state.segment) moveTo(state.duas[u.dua], u.segment);
-  paintWords(u.token);
+  catchUp(u.token);
+  if (u.pause != null) preview(u.pause);
+}
+
+// The follower catching up several words at once (it fell behind on words it didn't hear): run
+// the highlight through them quickly rather than snapping over them.
+function catchUp(token) {
+  clearTimeout(state.catchTimer);
+  const from = state.token;
+  if (from == null || token == null || token <= from + 1 || state.perLine) return paintWords(token);
+  let t = from;
+  const next = () => {
+    paintWords(++t);
+    if (t < token) state.catchTimer = setTimeout(next, 70);
+  };
+  next();
+}
+
+function preview(on) {
+  state.lines.get(state.segment + 1)?.classList.toggle("coming", on);
+  if (on !== !!state.preview) log.event("preview", { on });
+  state.preview = on;
 }
 
 // "I'm here": the tapped line is where the reciter is. The tracker restarts there
@@ -769,6 +954,10 @@ function render(u) {
     $("heard").textContent = u.heard || "…";
     $("latency").textContent = `${Math.round(u.ms)} ms`;
   }
+  // Through a lapse the page holds still; from the second update the top seal
+  // redraws itself, as on the listening screen, so the stillness reads as searching.
+  state.lapse = u.dua ? 0 : (state.lapse || 0) + 1;
+  document.body.classList.toggle("holding", !!state.dua && state.lapse >= 2);
   if (!u.dua) {
     if (state.dua) return; // hold the last place through a brief lapse in confidence
     const waited = Date.now() - state.listeningSince;
@@ -796,9 +985,7 @@ function render(u) {
     glide(u);
   }
   showSameAs(u.sameAs || []);
-  state.lines.get((words ? state.segment : u.segment) + 1)?.classList.toggle("coming", !!u.pause);
-  if (!!u.pause !== !!state.preview) log.event("preview", { on: !!u.pause });
-  state.preview = !!u.pause;
+  if (!words || u.pause == null) preview(!!u.pause); // while the follower places words, it previews too
 }
 
 // The du'a is found: the listening star opens out while the text rises in
@@ -833,6 +1020,7 @@ function listenMsg(text) {
 function openPicker() {
   $("search").value = "";
   fillPicker("");
+  kids.fillShelf();
   $("picker").hidden = false;
   $("search").focus();
 }
@@ -975,6 +1163,7 @@ function showToday() {
       state.chosen = id;
       begin(micSource);
     };
+    kids.chip(b, id);
     return b;
   }));
 }
@@ -1055,8 +1244,20 @@ function setFont(key, remember = true) {
   scrollToNow();
 }
 
+// A guess stays offered for GUESS_KEEP_MS after its likelihood falls, faded: an ordinary voice
+// gives the phone's Whisper a few good windows and then poor ones, and the chip was gone before
+// it could be tapped (l8s3: Dua Kumayl at 0.70 for 2 s, then nothing for the rest of the session).
+const GUESS_KEEP_MS = 12000;
+
 function showGuesses(candidates) {
-  const likely = candidates.filter((c) => c.p >= 0.08).slice(0, 3);
+  const now = Date.now();
+  const seen = (state.guessSeen ??= new Map());
+  for (const c of candidates) if (c.p >= 0.08) seen.set(c.id, { p: Math.max(c.p, seen.get(c.id)?.p ?? 0), at: now });
+  for (const [id, g] of seen) if (now - g.at > GUESS_KEEP_MS) seen.delete(id);
+  const current = candidates.filter((c) => c.p >= 0.08);
+  const kept = [...seen].filter(([id]) => !current.some((c) => c.id === id))
+    .sort((a, b) => b[1].p - a[1].p).map(([id]) => ({ id, p: 0, kept: true }));
+  const likely = [...current, ...kept].slice(0, 3);
   const top = likely[0]?.p || 1;
   const shown = likely.map((c) => c.id).join(" ");
   if (shown !== (state.guessesShown ?? "")) log.event("guesses", { ids: likely.map((c) => c.id) });
@@ -1067,7 +1268,7 @@ function showGuesses(candidates) {
       const d = state.duas[c.id];
       const b = document.createElement("button");
       b.className = "chip";
-      b.style.opacity = (0.45 + 0.55 * (c.p / top)).toFixed(2); // the likeliest stands out as it firms up
+      b.style.opacity = (0.45 + 0.55 * (c.p / top)).toFixed(2); // the likeliest stands out as it firms up; kept ones fade
       b.textContent = d.name_en;
       const ar = document.createElement("span");
       ar.className = "ar";
@@ -1078,6 +1279,7 @@ function showGuesses(candidates) {
         state.engine.lock(c.id);
         $("guesses").hidden = true;
       };
+      kids.chip(b, c.id);
       return b;
     }),
   );
@@ -1120,7 +1322,24 @@ function buildText(dua) {
       state.lines.set(s.id, ln);
       return ln;
     }),
+    closing(),
   );
+  kids.hang(dua);
+}
+
+// Under the last line, the seal the recitation began with; it draws itself
+// once the last line is recited (finishing() below).
+function closing() {
+  const end = Object.assign(document.createElement("div"), { className: "end", id: "end" });
+  end.setAttribute("aria-hidden", "true");
+  end.innerHTML = '<svg viewBox="-50 -50 100 100"><use href="#khatam" x="-50" y="-50" width="100" height="100"/></svg>';
+  return end;
+}
+
+function finishing(on) {
+  $("end")?.classList.toggle("done", on);
+  state.lines?.get(state.duas[state.dua]?.segments.at(-1).id)?.classList.toggle("sealed", on); // its rosette gilded too
+  kids.finished(on, state.dua, !!state.stream);
 }
 
 // The sources' transliterations come in several styles (ALL CAPS, backticks
@@ -1156,6 +1375,7 @@ function setWords(ln, split) {
 }
 
 function moveTo(dua, segment) {
+  clearTimeout(state.catchTimer); // a catch-up run belongs to the line it started on
   const prev = state.lines.get(state.segment);
   if (prev) setWords(prev, false);
   state.segment = segment;
@@ -1164,6 +1384,8 @@ function moveTo(dua, segment) {
   log.event("line", { seg: segment, idx });
   $("progress").style.width = `${((idx + 1) / dua.segments.length) * 100}%`;
   saveProgress(dua, idx);
+  kids.progress(idx);
+  finishing(state.perLine && idx === dua.segments.length - 1); // word by word: at the last word (paintWords)
   for (const [id, ln] of state.lines) {
     ln.classList.toggle("now", id === segment);
     ln.classList.toggle("past", id < segment);
@@ -1177,15 +1399,27 @@ function moveTo(dua, segment) {
 // Between updates the highlight glides at the reciter's pace (display.js)
 // instead of hopping a word or two once a second.
 function glide(u) {
+  clearTimeout(state.catchTimer);
   const n = state.lines.get(state.segment).querySelectorAll(".wd").length;
   if (u.token == null || !n || params.get("glide") === "0") return paintWords(u.token);
   state.hl ??= new Highlight();
-  state.hl.update(performance.now() / 1000, `${u.dua}:${u.segment}`, u.token, 0, n, u.speed ?? 1);
+  state.pace = u.speed ?? 1;
+  state.hl.update(performance.now() / 1000, `${u.dua}:${u.segment}`, u.token, 0, n, state.hushed ? 0 : state.pace,
+    !!u.back);
   if (state.gliding) return;
   state.gliding = true;
   const frame = () => {
     if (!state.hl?.line || !state.lines?.get(state.segment)) return (state.gliding = false);
-    paintWords(state.hl.word(performance.now() / 1000));
+    const t = performance.now() / 1000;
+    // Between updates, the page's own stop detector: the reciter stopped (or went on) since the last one.
+    const q = state.engine?.ear?.quiet;
+    const hushed = q != null && q > DEFAULTS.stillAfter;
+    if (hushed !== !!state.hushed) {
+      state.hushed = hushed;
+      state.hl.pace(t, hushed ? 0 : state.pace);
+      log.event("hush", { on: hushed });
+    }
+    paintWords(state.hl.word(t));
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
@@ -1195,11 +1429,13 @@ function paintWords(token) {
   if (state.perLine || token === state.token) return;
   state.token = token;
   log.event("word", { token });
-  for (const span of state.lines.get(state.segment).querySelectorAll(".wd")) {
+  const spans = state.lines.get(state.segment).querySelectorAll(".wd");
+  for (const span of spans) {
     const i = Number(span.dataset.i);
     span.classList.toggle("said", i < token);
     span.classList.toggle("w", i === token);
   }
+  if (state.segment === state.duas[state.dua].segments.at(-1).id) finishing(token >= spans.length - 1);
 }
 
 // Keeps the recited line centred. The old line shrinks and the new one grows over

@@ -23,6 +23,7 @@ import json
 import random
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,9 +56,15 @@ def load_yt_rows(teacher: str, rec) -> list[tuple[float, str]]:
     return [(r["t"], "" if _looks_hallucinated(r["text"]) else r["text"]) for r in rows]
 
 
+# Persian and Urdu letter forms some duas.org texts use (يا as یا, اللهم as اَللّٰہُمَّ): the
+# Arabic letters Whisper writes. Without this the letters fell out of the labels (یا -> ا).
+_PERSIAN = str.maketrans({"ی": "ي", "ک": "ك", "گ": "ك", "ہ": "ه", "ھ": "ه", "ۂ": "ه", "ۃ": "ة",
+                          "ے": "ي", "ۓ": "ي"})
+
+
 def whisper_style(token: str) -> str:
     """Reference token -> the undiacritized spelling Whisper writes."""
-    t = strip_diacritics(token).replace("ٱ", "ا")
+    t = strip_diacritics(unicodedata.normalize("NFKC", token)).translate(_PERSIAN).replace("ٱ", "ا")
     return _NOT_LETTER.sub("", t)
 
 

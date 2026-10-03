@@ -34,6 +34,10 @@ as > 0.3 s quiet. `asr.quiet_at_end` now counts a 32 ms frame as sound if Silero
 speech **or** it is 6 dB above the window's floor (10th-percentile frame energy, and
 never below -70 dBFS). That brings the false-silence rate to 4.2% (train: 8.8% to 1.4%).
 
+*Since 2026-09-30* the energy term also has to come within 15 dB of the reciter's voice: a
+phone's automatic gain control turns the room hiss up once they stop, and against the floor
+alone that read as recitation for seconds on end ([stops.md](stops.md)).
+
 The -70 dBFS clamp came from the tester's own recording. The headset (or the
 browser's noise suppression) outputs exact zeros between words, so against a floor of
 digital silence a faint click 0.7 s after they stopped counted as sound. The clamp

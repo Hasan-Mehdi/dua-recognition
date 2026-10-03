@@ -25,3 +25,38 @@ def test_new_logs_separate_skips_from_empty_text_and_report_age():
     assert "vad_reject 5" in out and "below_floor 5" in out and "empty 5" in out and "ran, text 5" in out
     assert "25% of hops under the -45 dBFS floor" in out
     assert "p95" in out and "evidence age" in out
+
+
+def test_retrack_swaps_in_the_display_lead_being_tried(monkeypatch):
+    """Sessions log each update's lead (delay + the page's display_lead). A tried
+    display_lead must replace the logged one, not be ignored (it was, before 2026-09-29)."""
+    from dua_recognition import tracker as T
+    from dua_recognition.corpus import load_all
+
+    duas = {k: v for k, v in load_all().items() if k in ("duasorg-namaz-e-wahshat", "dua-aahad")}
+    seen = []
+    real = T.Tracker.update
+
+    def spy(self, transcript, dt, lead=0.0, quiet=0.0, **kw):
+        seen.append(round(lead, 3))
+        return real(self, transcript, dt, lead, quiet, **kw)
+
+    monkeypatch.setattr(T.Tracker, "update", spy)
+    log = {"tracker": {"displayLead": 0.5}, "events": [
+        {"t": 2.8, "type": "hop", "end": 2.0, "dt": 1.0, "lead": 1.3, "text": "الله لا إله إلا هو"},
+        {"t": 3.8, "type": "hop", "end": 3.0, "dt": 1.0, "lead": 1.3, "text": "الحي القيوم"}]}
+    sr.retrack(log, duas, {})  # as logged: the page's own leads
+    sr.retrack(log, duas, {"display_lead": 0.0})
+    sr.retrack(log, duas, {"display_lead": 0.25}, as_logged=False)
+    assert seen == [1.3, 1.3, 0.8, 0.8, 1.05, 1.05]
+
+
+def test_logged_config_reads_the_pages_settings():
+    log = {"tracker": {"kappaSearch": 1.2, "displayLead": 0.5, "leadCrossQuiet": None, "backConfirm": 1,
+                       "nullRateLocked": None, "speeds": [0.5, 1.0], "notAField": 3}}
+    cfg = sr.logged_config(log)
+    assert cfg == {"kappa_search": 1.2, "display_lead": 0.5, "lead_cross_quiet": float("inf"), "back_confirm": 1,
+                   "null_rate_locked": None, "speeds": (0.5, 1.0),
+                   # not in this log: the page didn't have them yet, so they were off
+                   "lead_cross_words": float("inf"), "seek_pins_line": False, "keep_dua_confidence": None,
+                   "retreat_in_line": False, "still_catch_up": False, "pause_motion": False}

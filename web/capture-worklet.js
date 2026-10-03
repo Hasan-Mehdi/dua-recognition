@@ -1,12 +1,14 @@
-// Resample whatever the AudioContext runs at down to 16 kHz mono and post
-// ~250 ms Float32 chunks ({x, t}) to the page, which forwards them over the WebSocket.
+// Resample whatever the AudioContext runs at down to 16 kHz mono and post Float32 chunks
+// ({x, t}) to the page, which forwards them over the WebSocket. Chunks are `chunk` samples
+// (processorOptions; 4000 = 250 ms until 2026-10-01): every word the page reacts to waits for
+// its chunk to fill, on average half a chunk.
 class Capture extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
     this.ratio = sampleRate / 16000;
     this.pos = 0; // fractional read position into the incoming stream
     this.prev = 0; // last sample of the previous block, for interpolation
-    this.out = new Float32Array(4000);
+    this.out = new Float32Array(options?.processorOptions?.chunk || 4000);
     this.n = 0;
   }
 

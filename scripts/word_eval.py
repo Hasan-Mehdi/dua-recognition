@@ -79,7 +79,9 @@ def hmm_updates(ix, rows, costs, quiet, cfg, delay, lead_mode="fixed", stale=Non
         ups.append((t + delay, p.dua, p.segment, p.word, rng, 0.0 if q > tr.cfg.still_after else tr.speed))
         if anchors is not None:
             now = tr.position()
-            anchors.append((t, now.word if now.dua is not None else None))
+            w = now.word if now.dua is not None else None
+            # ...and the belief in each line of that du'a, for the follower's jump rule (jump_mass).
+            anchors.append((t, w, tr.line_masses(int(ix.word_dua[w])) if w is not None else None))
     return ups
 
 

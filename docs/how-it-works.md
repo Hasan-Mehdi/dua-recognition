@@ -61,11 +61,14 @@ recitation. The hidden state is the word being recited, across all du'as.
   gone back a few (reciters repeat lines), and with a small "teleport" probability
   jumped anywhere, so it recovers if someone skips ahead or switches du'a.
 - *Pauses:* each window also reports how long the reciter has been silent (a voice
-  detector, or loudness over the window's floor, which catches the long melodic notes
-  voice detectors miss). The belief moves only for time they were making sound, and the
-  display doesn't run on into the next line while they're silent. After a second of
-  silence it steps back if it already had. Majlis mode, for a professional who breathes
-  between lines, keeps running on ([pauses.md](results/pauses.md)).
+  detector, or loudness over the window's floor that comes within 15 dB of the reciter's
+  voice: the long melodic notes voice detectors miss count, the room hiss a phone turns up
+  once they stop doesn't). The belief moves only for time they were making sound, and the
+  display doesn't run on into the next line while they're silent. The page also listens
+  to the audio that arrived while Whisper ran, so an update shown after they stopped
+  doesn't predict them any further. After a second of silence it steps back if it already
+  had. Majlis mode, for a professional who breathes between lines, keeps running on
+  ([pauses.md](results/pauses.md), [stops.md](results/stops.md)).
 - *Speed and tempo:* how far "a few words" is comes from the human timings
   (a Poisson mixture over the train reciters' speeds), and the tracker keeps a weight
   per speed that adapts to the reciter in front of it: a slow, melodic reciter and a
@@ -114,13 +117,44 @@ crowd-sourced recitations ([`voice_eval.py`](../scripts/voice_eval.py)):
 | large-v3-turbo, fine-tuned (server) | 15.4% |
 | large-v3-turbo, stock | 22.8% |
 | whisper-small, fine-tuned | 27.2% |
-| **whisper-base, fine-tuned (phone)** | **29.9%** |
+| **whisper-base, fine-tuned + synthetic voices (phone)** | **24.7%** |
+| whisper-base, fine-tuned, reciters only | 29.9% |
 | whisper-base, earlier fine-tune (fewer voices, no speed/VTLP/SpecAugment) | 38.7% |
+
+The phone model's training set includes 15 hours of synthetic speech: 312 of RetaSy's own
+volunteers (none of them in the test clips), cloned by a zero-shot TTS
+([OmniVoice](https://huggingface.co/k2-fsa/OmniVoice)) reading the du'as at an unhurried
+pace ([synthetic_voices.md](results/synthetic_voices.md)). Retrained without them, the same
+recipe scores 32.3%, so the synthetic voices remove about a quarter of the errors on
+everyday voices, including on verses no synthetic clip ever read.
+
+Whisper pads every input to 30 s, while the app sends 6 s windows. The phone model is
+therefore cut to an 8 s context and fine-tuned there for one epoch: four times less work
+per update in the browser, and 24.1% on the RetaSy clips that fit in 8 s
+([phone_speed.md](results/phone_speed.md)).
 
 ## Word by word
 
-Between tracker updates, the highlight glides across the line at the reciter's speed
-([`display.py`](../src/dua_recognition/display.py), [display_lead.md](results/display_lead.md)).
-An experimental follower instead reads word positions from a wav2vec2 CTC model's frames
-([`follower.py`](../src/dua_recognition/follower.py), opt-in with `?words=ctc` on the
-server; [follower.md](results/follower.md), [follower_reliability.md](results/follower_reliability.md)).
+A transcript once a second has no timing inside it, and reaches the screen a second or more
+after its audio. So on the phone a second, small model listens too: the encoder of the phone's
+Whisper with one layer onto the alphabet, trained from a 300 M-parameter wav2vec2 (itself
+tuned on ordinary voices), giving
+letter probabilities every 20 ms for the latest 2 s, up to ten times a second
+([`ctc_student.py`](../src/dua_recognition/ctc_student.py)). The word follower
+([`follower.py`](../src/dua_recognition/follower.py), `web/follower.js`) scores those frames
+against the words around the current one and moves to the word whose letters were just heard.
+A pause leaves it on the last word said, because the frames after it are silence; nothing is
+predicted, so nothing has to be taken back. The tracker still finds the du'a and anchors the
+follower. On held-out reciters at the phone's delay, the right word is lit 79% of the time
+instead of 35%, and the display practically never steps back a line (once in 224 minutes of
+recitation, against 114 times), at the cost of line changes ~0.4 s later
+([phone_follower.md](results/phone_follower.md)). On the phone the follower's own compute is
+most of its delay; with 2 s windows, a step every 0.1 s and audio in 50 ms chunks, a word is lit
+~0.28 s after it starts instead of ~0.44 s. Going back to the start of a line costs it a fixed
+amount rather than a price per word, so a reader who says a line again is followed back
+([phone_latency.md](results/phone_latency.md)).
+
+The server runs the same follower on the same small model. Without it (`?words=off`), the
+highlight glides across the line at the reciter's speed between tracker updates and stops the
+moment the page hears them stop ([`display.py`](../src/dua_recognition/display.py),
+[display_lead.md](results/display_lead.md), [stops.md](results/stops.md)).

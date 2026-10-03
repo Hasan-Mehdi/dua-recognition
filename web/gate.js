@@ -130,29 +130,123 @@ export async function decide(audio, policy, vadProbs) {
   return { ...out, run: false, reason: "vad_reject" };
 }
 
-// Seconds since the reciter last made a sound (asr.quiet_at_end): a frame is sound if
-// Silero says speech (>= 0.35) or it's 6 dB over the window's floor; sound = >= 3 frames.
-export async function quietAtEnd(audio, vadProbs, tailS = 3.0) {
-  const x = audio.subarray(audio.length % FRAME);
-  const nTail = Math.min(x.length, Math.floor((tailS * SR) / FRAME) * FRAME);
-  if (!nTail) return tailS;
-  const db = frameDb(x);
-  if (rmsDb(x.subarray(x.length - nTail)) < SILENCE_DBFS) return tailS; // below the floor
-  // Never below -70 dBFS: noise suppression outputs exact zeros between words (see asr.py).
-  const floor = Math.max(-70, percentile(db, 10));
-  const probs = await vadProbs(x.slice(x.length - nTail), true);
-  const k = probs.length;
-  let lastEnd = -1;
+// -- The stop detector (asr.quiet_at_end, asr.QuietMeter, asr.LiveQuiet) -------------------
+// A 32 ms frame of the window's last 3 s is sound if Silero says speech (>= 0.35), or it is
+// 6 dB over the window's floor AND within QUIET_REL_DB of the reciter's voice (the median
+// frame Silero is sure of, from at least VOICE_MIN_FRAMES, remembered from window to window
+// by the caller); sound = a run of >= 3 frames. A phone's gain control turns the room up
+// by 10-15 dB once the reciter stops, and against the floor alone that hiss read as someone
+// still reciting (docs/results/stops.md). relDb null = the floor alone, as before.
+export const QUIET_REL_DB = 15;
+export const VOICE_MIN_FRAMES = 16;
+export const LIVE_REL_DB = 15;
+export const MIN_PAUSE = 0.3; // TrackerConfig.still_motion_after
+
+// The reciter's voice in dBFS (asr.voice_level), or null.
+export function voiceLevel(probs, db, minFrames = VOICE_MIN_FRAMES) {
+  const voiced = [];
+  for (let i = 0; i < probs.length; i++) if (probs[i] >= 0.5) voiced.push(db[i]);
+  if (voiced.length < Math.max(1, minFrames)) return null;
+  voiced.sort((x, y) => x - y);
+  const m = voiced.length >> 1;
+  return voiced.length % 2 ? voiced[m] : (voiced[m - 1] + voiced[m]) / 2;
+}
+
+// Frame spans [start, end) of sound (asr._sound_runs).
+function soundRuns(probs, db, floor, relDb, voiceDb) {
+  let bar = Math.max(floor, -70) + 6; // never below -70 dBFS: noise suppression outputs exact zeros
+  if (relDb != null) {
+    const voice = voiceDb ?? voiceLevel(probs, db);
+    bar = voice != null ? Math.max(bar, voice - relDb) : Infinity;
+  }
+  const runs = [];
   let start = -1;
-  for (let i = 0; i <= k; i++) {
-    const active = i < k && (probs[i] >= 0.35 || db[db.length - k + i] >= floor + 6);
+  for (let i = 0; i <= probs.length; i++) {
+    const active = i < probs.length && (probs[i] >= 0.35 || db[i] >= bar);
     if (active && start < 0) start = i;
     else if (!active && start >= 0) {
-      if (i - start >= 3) lastEnd = i;
+      if (i - start >= 3) runs.push([start, i]);
       start = -1;
     }
   }
-  return (lastEnd < 0 ? k : k - lastEnd) * (FRAME / SR);
+  return runs;
+}
+
+// Seconds of the last `seconds` of n frames spent in silences of at least minPause (asr._paused).
+function pausedIn(runs, n, seconds, minPause) {
+  const step = FRAME / SR;
+  const lo = Math.max(0, n - Math.round(seconds / step));
+  const edges = [0, ...runs.flat(), n];
+  let out = 0;
+  for (let i = 0; i < edges.length; i += 2) {
+    const [a, b] = [edges[i], edges[i + 1]];
+    if ((b - a) * step >= minPause) out += Math.max(0, b - Math.max(a, lo));
+  }
+  return out * step;
+}
+
+// One window's stop measures (asr.QuietMeter called on it): seconds since the reciter last
+// made a sound, the seconds of the last dt spent in pauses (null without dt), and the voice
+// level to remember (this window's if it had enough speech, else the one given).
+export async function stopMeasures(audio, vadProbs, { voiceDb = null, dt = null, relDb = QUIET_REL_DB,
+  minPause = MIN_PAUSE, tailS = 3.0 } = {}) {
+  const x = audio.subarray(audio.length % FRAME);
+  const nTail = Math.min(x.length, Math.floor((tailS * SR) / FRAME) * FRAME);
+  if (!nTail || rmsDb(x.subarray(x.length - nTail)) < SILENCE_DBFS) { // below the floor
+    return { quiet: tailS, paused: dt, voiceDb };
+  }
+  const all = frameDb(x);
+  const floor = percentile(all, 10);
+  const probs = await vadProbs(x.slice(x.length - nTail), true);
+  const k = probs.length;
+  const db = all.subarray(all.length - k);
+  const v = voiceLevel(probs, db);
+  const voice = v ?? voiceDb;
+  const runs = soundRuns(probs, db, floor, relDb, voice);
+  const quiet = (runs.length ? k - runs[runs.length - 1][1] : k) * (FRAME / SR);
+  const paused = dt == null ? null : Math.min(dt, pausedIn(runs, k, dt, minPause));
+  return { quiet, paused, voiceDb: voice };
+}
+
+// Seconds since the reciter last made a sound (asr.quiet_at_end, stateless: the window's own voice).
+export async function quietAtEnd(audio, vadProbs, tailS = 3.0, relDb = QUIET_REL_DB) {
+  return (await stopMeasures(audio, vadProbs, { tailS, relDb })).quiet;
+}
+
+// Seconds the reciter has been silent, on the audio the page holds right now (asr.LiveQuiet):
+// the window's quiet is a second or two old by the time its update is shown. Loudness alone
+// (Silero is busy in the worker): a frame is sound if it comes within relDb of the voice level
+// the worker last measured; sound = a run of >= 3 frames. null until a voice level is known.
+export class LiveQuiet {
+  constructor(relDb = LIVE_REL_DB) {
+    this.relDb = relDb;
+    this.rest = new Float32Array(0);
+    this.voiceDb = null;
+    this.n = 0; // frames heard
+    this.run = 0; // frames in the current run of sound
+    this.lastEnd = 0; // frames heard when a run of 3+ was last sounding
+  }
+
+  push(chunk) {
+    const x = new Float32Array(this.rest.length + chunk.length);
+    x.set(this.rest);
+    x.set(chunk, this.rest.length);
+    const k = Math.floor(x.length / FRAME);
+    for (let f = 0; f < k; f++) {
+      let e = 0;
+      for (let i = f * FRAME; i < (f + 1) * FRAME; i++) e += x[i] * x[i];
+      const d = 10 * Math.log10(e / FRAME + 1e-12);
+      this.n += 1;
+      const sound = this.voiceDb != null && d >= this.voiceDb - this.relDb;
+      this.run = sound ? this.run + 1 : 0;
+      if (this.run >= 3) this.lastEnd = this.n;
+    }
+    this.rest = x.slice(k * FRAME);
+  }
+
+  get quiet() {
+    return this.voiceDb == null ? null : ((this.n - this.lastEnd) * FRAME) / SR;
+  }
 }
 
 // asr._looks_hallucinated, for logging (and ?filter=1). The Python version uses zlib's

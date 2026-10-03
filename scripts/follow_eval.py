@@ -50,10 +50,13 @@ from dua_recognition.tracker import TrackerConfig  # noqa: E402
 
 CTC = ROOT / "data" / "cache" / "ctc"
 ITEMS = ROOT / "data" / "cache" / "follow_items"
+RE_OUT = ROOT / "data" / "cache" / "repeat"
+JUMP_OUT = ROOT / "data" / "cache" / "jumps"
 SMOOTH = {"ease": 1.0, "speed_scale": 1.2}  # page mode (web/app.js defaults)
 
 
 MIN_SCORE = -1.5  # word truth kept for scoring: line score at least this (flowing set)
+CTC_SUFFIX = "_w3_h0.2"  # CTC dump: window and hop (--ctc-window, --ctc-hop)
 
 
 def _files_sig(*dirs: Path, pattern: str = "*") -> list:
@@ -75,13 +78,23 @@ def set_key(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool, 
 
     ref = hashlib.sha256(" ".join(w.text for w in ix.words).encode("utf-8")).hexdigest()
     if pauses:
-        d = pe.OUT / (asr + ("" if split == "test" else f"@{split}"))
+        d = set_dir() / (asr + ("" if split == "test" else f"@{split}"))
         inputs = _files_sig(d, pattern="*.json") + _files_sig(d / f"ctc-{ctc_dir}")
     else:
         inputs = _files_sig(ev.WINDOWS / asr, ev.WORD_TRUTH, CTC / ctc_tag, ROOT / "data" / "cache" / "quiet",
                             ROOT / "data" / "cache" / "stale")
-    parts = [repr(cfg), ref, asr, split, ctc_tag, ctc_dir, pauses, f"{delay:g}", MIN_SCORE, inputs]
+    parts = [repr(cfg), ref, asr, split, ctc_tag, ctc_dir, pauses, f"{delay:g}", MIN_SCORE, inputs,
+             "anchors+line masses"]  # anchors carry the tracker's line beliefs since 2026-10-02
     return hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()[:12]
+
+
+REPEATS = False  # --repeats: the pause-set code reads scripts/repeat_eval.py's set instead
+JUMPS = False  # --jumps: ...or scripts/jump_eval.py's (lines out of order)
+
+
+def set_dir() -> Path:
+    return JUMP_OUT if JUMPS else RE_OUT if REPEATS else pe.OUT
+ANCHOR_EVERY = 1  # --anchor-every: the follower hears every n-th tracker update (1 s windows)
 
 
 def load_set(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool, cfg, delay,
@@ -90,7 +103,9 @@ def load_set(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, pauses: bool,
     keyed by set_key so a changed configuration or reference never reuses a stale set."""
     ctc = ctc_dir if pauses else ctc_tag
     key = set_key(ix, asr, split, ctc_tag, ctc_dir, pauses, cfg, delay)
-    f = ITEMS / f"{asr}_{split}_{ctc}_{'pauses' if pauses else 'flowing'}_{delay:g}_{key}.pkl"
+    sfx = "" if CTC_SUFFIX == "_w3_h0.2" else CTC_SUFFIX
+    kind = "jumps" if pauses and JUMPS else "repeats" if pauses and REPEATS else "pauses" if pauses else "flowing"
+    f = ITEMS / f"{asr}_{split}_{ctc}{sfx}_{kind}_{delay:g}_{key}.pkl"
     if cache and f.exists():
         return pickle.loads(f.read_bytes())
     items = load_set_uncached(ix, asr, split, ctc_tag, ctc_dir, pauses, cfg, delay)
@@ -106,7 +121,7 @@ def load_set_uncached(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, paus
         _, data = we.load(asr, split)
         for rec, rows, costs, stale, truth, quiet in data:
             good = [w for w in truth if w[3] >= MIN_SCORE]
-            f = CTC / ctc_tag / f"{rec.audio_id}_w3_h0.2.npz"
+            f = CTC / ctc_tag / f"{rec.audio_id}{CTC_SUFFIX}.npz"
             if not good or not f.exists():
                 continue
             anchors = []
@@ -117,10 +132,10 @@ def load_set_uncached(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, paus
                           "lines": [(t, s) for t, s in rec.starts if t < t_end], "pauses": [], "pause_s": 0.0})
         return items
     recs = {r.audio_id: r for d in ev.load_all().values() for r in ev.load_recordings(d)}
-    d = pe.OUT / (asr + ("" if split == "test" else f"@{split}"))
+    d = set_dir() / (asr + ("" if split == "test" else f"@{split}"))
     for jf in sorted(d.glob("*.json")):
         r = json.loads(jf.read_text(encoding="utf-8"))
-        f = d / f"ctc-{ctc_dir}" / f"{jf.stem}_w3_h0.2.npz"
+        f = d / f"ctc-{ctc_dir}" / f"{jf.stem}{CTC_SUFFIX}.npz"
         if not f.exists():
             continue
         lo = ix.dua_word_span[ix.dua_ids.index(r["dua"])][0]
@@ -137,14 +152,63 @@ def load_set_uncached(ix, asr: str, split: str, ctc_tag: str, ctc_dir: str, paus
         ups = we.hmm_updates(ix, r["rows"], costs, r["quiet"], cfg, delay, "fixed", None, still=True,
                              anchors=anchors, letters=letters)
         end = r["rows"][-1][0] + delay
+        lines = r.get("lines") or [(shift(t), s) for t, s in recs[r["audio_id"]].starts]
         items.append({"id": r["audio_id"], "dua": r["dua"], "ups": ups, "anchors": anchors, "good": truth,
                       "ticks": np.arange(truth[0][1], end, 0.1), "ctc": f,
-                      "lines": [(shift(t), s) for t, s in recs[r["audio_id"]].starts if shift(t) < end],
-                      "pauses": [[s, lo + w] for s, w in r["pauses"]], "pause_s": P})
+                      "lines": [(t, s) for t, s in lines if t < end],
+                      "pauses": [[s, lo + w] for s, w in r["pauses"]], "pause_s": P,
+                      "repeats": r.get("repeats", []), "jumps": r.get("jumps", []),
+                      "program": r.get("program")})
     return items
 
 
 _TOKEN_META: dict = {}
+_QUIET: dict = {}
+_RECS: dict = {}
+
+
+def item_quiet(it: dict) -> tuple[np.ndarray, np.ndarray]:
+    """The page's stop detector (asr.LiveQuiet) over the item's audio, as (times, seconds without
+    voice): 32 ms frames, sound within 15 dB of the voice level, runs of 3+. The voice level is the
+    recording's 95th-percentile frame level (the page remembers it from Whisper's windows)."""
+    key = (it["id"], it.get("pause_s", 0.0), len(it.get("pauses", [])), len(it.get("repeats", [])),
+           len(it.get("program") or []))
+    if key in _QUIET:
+        return _QUIET[key]
+    from faster_whisper.audio import decode_audio
+
+    if it["id"] not in _RECS:
+        _RECS.update({r.audio_id: r for d in ev.load_all().values() for r in ev.load_recordings(d)})
+    rec = _RECS[it["id"]]
+    y = decode_audio(str(rec.path), sampling_rate=16000)
+    if it.get("program"):  # the reading out of order (jump_eval.py)
+        import jump_eval
+
+        y = jump_eval.build_audio(y, [tuple(x) for x in it["program"]])
+    elif it.get("repeats"):  # the spliced audio (repeat_eval.py: the same points from the same truth)
+        import repeat_eval as re_
+
+        if "ix" not in _RECS:
+            _RECS["ix"] = ev.CorpusIndex(ev.load_all())
+        ix = _RECS["ix"]
+        y, _ = re_.spliced(y, re_.repeat_points(pe.good_words(rec, ix), ix))
+    elif it.get("pauses"):
+        P = it["pause_s"]
+        y = pe.paused_audio(y, [s - P * j for j, (s, _) in enumerate(it["pauses"])], P)
+    F = 512
+    fr = y[: y.size // F * F].reshape(-1, F).astype(np.float64)
+    db = 10 * np.log10((fr * fr).mean(axis=1) + 1e-12)
+    sound = db >= np.percentile(db, 95) - 15.0
+    q = np.empty(db.size)
+    run, last = 0, 0
+    for i, snd in enumerate(sound):
+        run = run + 1 if snd else 0
+        if run >= 3:
+            last = i + 1
+        q[i] = (i + 1 - last) * F / 16000
+    out = ((np.arange(db.size) + 1) * F / 16000, q)
+    _QUIET[key] = out
+    return out
 
 
 def token_meta(d: Path) -> dict:
@@ -170,14 +234,14 @@ def follow_updates(ix, it: dict, fcfg: FollowerConfig, hmm_delay: float, f_delay
         meta = token_meta(Path(it["ctc"]).parent)
         lp = expand(lp, z["cols"], meta["width"])
         fol = TokenFollower(ix, meta, fcfg, word_tokens=[t for d in ix.dua_ids for t in meta["word_tokens"][d]])
-    anchors = it["anchors"]
+    anchors = it["anchors"][::ANCHOR_EVERY]  # the page runs Whisper every 2 s while following (anchorhop)
     at = [a[0] + hmm_delay for a in anchors]  # when each tracker result is available
     lead_at = [u[0] for u in it["ups"]]  # page mode's (lead) position, as it reaches the screen
     starts = [w[1] for w in it["good"]]
     hop_frames = int(round((ts[1] - ts[0]) / fol.frame_s)) if len(ts) > 1 else 10
     ups = []
     for k, t in enumerate(ts):
-        j = bisect.bisect_right(at, t) - 1
+        ja = j = bisect.bisect_right(at, t) - 1
         hmm_word = anchors[j][1] if j >= 0 else None
         if oracle_anchor:
             i = bisect.bisect_right(starts, t) - 1
@@ -188,7 +252,16 @@ def follow_updates(ix, it: dict, fcfg: FollowerConfig, hmm_delay: float, f_delay
             x = lp[k + rc, : max(0, nf[k + rc] - rc * hop_frames)]
         else:
             x = lp[k, : nf[k]]
-        w = fol.step(x, float(t), hmm_word, lead_word=lead_word)
+        lm = None
+        if ja >= 0 and len(anchors[ja]) > 2 and anchors[ja][2] is not None and anchors[ja][1] is not None:
+            masses, first_line = anchors[ja][2], int(fol._line_no[ix.dua_word_span[ix.word_dua[anchors[ja][1]]][0]])
+            lm = lambda w, m=masses, f=first_line: float(m[int(fol._line_no[w]) - f])  # noqa: E731
+        qn = None
+        if getattr(fcfg, "line_quiet", 0) > 0:
+            qt, qv = item_quiet(it)
+            i = int(np.searchsorted(qt, t, side="right")) - 1
+            qn = float(qv[i]) if i >= 0 else None
+        w = fol.step(x, float(t), hmm_word, lead_word=lead_word, quiet_now=qn, line_mass=lm)
         if steps is not None:
             steps.append((float(t), w))
         if w is None:
@@ -214,8 +287,9 @@ def line_entries(ix, it: dict, shown: list) -> list[float | None]:
     return out
 
 
-def pause_stats(ix, it: dict, shown: list) -> list[bool]:
-    """Per tick inside a pause: is a later line than the one just finished on screen?"""
+def pause_stats(ix, it: dict, shown: list) -> list[tuple[bool, bool]]:
+    """Per tick inside a pause: is a later line than the one just finished on screen? Is a word
+    before the last one said on screen (the line's last word never lit)?"""
     starts = [w[1] for w in it["good"]]
     out = []
     for tick, w in zip(it["ticks"], shown):
@@ -225,12 +299,62 @@ def pause_stats(ix, it: dict, shown: list) -> list[bool]:
         if i < 0:
             continue
         tw = it["good"][i][0]
-        out.append(bool(ix.word_segment[w] != ix.word_segment[tw] and w > tw))
+        out.append((bool(ix.word_segment[w] != ix.word_segment[tw] and w > tw), bool(w < tw)))
     return out
 
 
+def repeat_stats(ix, it: dict, shown: list) -> list[tuple]:
+    """Per spoken repeat (the reader goes back and says a line again): how long after it begins
+    the display is back at the line's start (on its first or second word; None: not before the
+    repeat ends), and the share of the repeat's ticks showing the word being said."""
+    ticks, good = it["ticks"], it["good"]
+    starts = [w[1] for w in good]
+    out = []
+    for a, b, s in it.get("repeats", []):
+        i0, i1 = np.searchsorted(ticks, [a, b])
+        first = next((w for w, t0, _, _ in good if abs(t0 - a) < 0.05), None)
+        lag, ok = None, []
+        for i in range(i0, min(i1, len(ticks))):
+            w = shown[i]
+            if lag is None and w is not None and first is not None and first <= w <= first + 1:
+                lag = float(ticks[i] - a)
+            j = bisect.bisect_right(starts, ticks[i]) - 1
+            if j >= 0:
+                ok.append(w == good[j][0])
+        out.append((lag, float(np.mean(ok)) if ok else 0.0))
+    return out
+
+
+def jump_stats(ix, it: dict, shown: list) -> list[float | None]:
+    """Per jump (the reader goes to another line of the du'a): seconds from the first word of the
+    line jumped to until the display is on that line, or None if not before the next jump."""
+    ticks = it["ticks"]
+    seg = [None if w is None else int(ix.word_segment[w]) for w in shown]
+    jumps = it.get("jumps", [])
+    out = []
+    for k, (a, s, _) in enumerate(jumps):
+        end = jumps[k + 1][0] if k + 1 < len(jumps) else ticks[-1]
+        i0, i1 = np.searchsorted(ticks, [a - 0.5, end])
+        out.append(next((float(ticks[i] - a) for i in range(i0, min(i1, len(ticks))) if seg[i] == s), None))
+    return out
+
+
+def line_acc(ix, it: dict, shown: list) -> tuple[int, int]:
+    """Ticks inside a recited word's line showing that line, and ticks counted."""
+    starts = [w[1] for w in it["good"]]
+    ok = n = 0
+    for tick, w in zip(it["ticks"], shown):
+        i = bisect.bisect_right(starts, tick) - 1
+        if i < 0:
+            continue
+        n += 1
+        ok += w is not None and int(ix.word_segment[w]) == int(ix.word_segment[it["good"][i][0]])
+    return ok, n
+
+
 def score(ix, items, lane: str, fcfg=None, hmm_delay=0.5, f_delay=0.1) -> dict:
-    offs, jerks, minutes, entries, nxt, covered, n_ticks = [], 0, 0.0, [], [], 0, 0
+    offs, jerks, minutes, entries, nxt, covered, n_ticks, reps = [], 0, 0.0, [], [], 0, 0, []
+    jl, l_ok, l_n = [], 0, 0
     for it in items:
         if lane == "hmm":
             r = we.replay_ticks(ix, it["dua"], it["ups"], it["good"], it["ticks"], SMOOTH)
@@ -244,14 +368,29 @@ def score(ix, items, lane: str, fcfg=None, hmm_delay=0.5, f_delay=0.1) -> dict:
         n_ticks += len(r["shown"])
         entries += line_entries(ix, it, r["shown"])
         nxt += pause_stats(ix, it, r["shown"])
+        reps += repeat_stats(ix, it, r["shown"])
+        jl += jump_stats(ix, it, r["shown"])
+        a, b = line_acc(ix, it, r["shown"])
+        l_ok, l_n = l_ok + a, l_n + b
     o = np.array(offs)
+    jf = [x for x in jl if x is not None]
+    rep_lags = [x for x, _ in reps if x is not None]
     found = [x for x in entries if x is not None]
     return {"exact": float(np.mean(o == 0)), "pm1": float(np.mean(np.abs(o) <= 1)), "mean": float(o.mean()),
             "jerks_min": jerks / max(minutes, 1e-9), "shown": covered / max(1, n_ticks),
             "entry_lag": float(np.median(found)) if found else float("nan"),
             "early": float(np.mean([x < -0.3 for x in found])) if found else float("nan"),
             "missed": 1 - len(found) / max(1, len(entries)), "n_lines": len(entries),
-            "pause_next": float(np.mean(nxt)) if nxt else float("nan")}
+            "pause_next": float(np.mean([a for a, _ in nxt])) if nxt else float("nan"),
+            "pause_behind": float(np.mean([b for _, b in nxt])) if nxt else float("nan"),
+            "rep_found": len(rep_lags) / len(reps) if reps else float("nan"),
+            "rep_lag": float(np.median(rep_lags)) if rep_lags else float("nan"),
+            "rep_exact": float(np.mean([f for _, f in reps])) if reps else float("nan"),
+            "line": l_ok / max(1, l_n),
+            "jump_found": len(jf) / len(jl) if jl else float("nan"),
+            "jump_3s": float(np.mean([x is not None and x <= 3.0 for x in jl])) if jl else float("nan"),
+            "jump_lag": float(np.median(jf)) if jf else float("nan"),
+            "jump_lag75": float(np.percentile(jf, 75)) if jf else float("nan")}
 
 
 def _line_first(ix, w: int) -> bool:
@@ -356,22 +495,26 @@ def diag(ix, sets: dict, hmm_delay: float, f_delay: float) -> None:
 def parse_fw(v: str) -> FollowerConfig:
     kind, _, kv = v.partition(" ")
     kw = {k: float(x) for k, x in (a.split("=") for a in kv.split(",") if a)}
-    for k in ("max_jump", "back_words", "ahead_words", "confirm_steps"):
+    for k in ("max_jump", "back_words", "ahead_words", "confirm_steps", "leap_confirm", "back_min", "back_confirm", "ahead_words_reanchor", "restart_lines", "quiet_words", "line_confirm", "jump_confirm"):
         if k in kw:
             kw[k] = int(kw[k])
-    if "onset_confirm" in kw:
-        kw["onset_confirm"] = bool(kw["onset_confirm"])
+    for k in ("onset_confirm", "word_starts", "ahead_stuck", "reset_stuck", "jump_seg"):
+        if k in kw:
+            kw[k] = bool(kw[k])
     return replace(FollowerConfig(), **kw)
 
 
 def fmt(name: str, m: dict) -> str:
     return (f"{name:55s} | {m['exact']:.1%} | {m['pm1']:.1%} | {m['mean']:+.2f} | {m['jerks_min']:.2f} | "
             f"{m['shown']:.1%} | {m['entry_lag']:+.2f} s | {m['early']:.1%} | {m['missed']:.1%} | "
-            f"{m['pause_next']:.1%}")
+            f"{m['pause_next']:.1%} | {m['pause_behind']:.1%}"
+            + (f" | {m['rep_found']:.1%} | {m['rep_lag']:+.2f} s | {m['rep_exact']:.1%}" if m["rep_found"] == m["rep_found"] else "")
+            + (f" | line {m['line']:.1%} | jumps found {m['jump_found']:.1%}, within 3 s {m['jump_3s']:.1%}, "
+               f"lag median {m['jump_lag']:+.2f} s, p75 {m['jump_lag75']:+.2f} s" if m["jump_found"] == m["jump_found"] else ""))
 
 
 HEADER = ("lane | word exact | ±1 | mean off | jerks/min | shown | line entry median | >0.3 s early | "
-          "missed | next line in pause")
+          "missed | next line in pause | behind in pause [| repeats: back at line start | lag | word exact in repeats]")
 
 GRID = {"window_s": [1.5, 2.0, 3.0], "beta_back": [1.0, 3.0, 10.0], "max_jump": [2, 4], "temp": [1.0, 3.0],
         "reset_after": [1.0, 3.0]}
@@ -384,15 +527,29 @@ def main() -> None:
     ap.add_argument("--ctc-dir", help="pause set: ctc-<name> folder (default: --ctc)")
     ap.add_argument("--split", choices=["test", "train"], default="test")
     ap.add_argument("--pauses", action="store_true", help="the pause benchmark (scripts/pause_eval.py)")
+    ap.add_argument("--repeats", action="store_true", help="the repeat benchmark (scripts/repeat_eval.py)")
+    ap.add_argument("--jumps", action="store_true", help="lines out of order (scripts/jump_eval.py)")
+    ap.add_argument("--tracker", default="", help="TrackerConfig overrides for the tracker lane, k=v,...")
+    ap.add_argument("--anchor-every", type=int, default=1, help="anchor the follower on every n-th tracker update")
     ap.add_argument("--delay", type=float, default=0.5, help="tracker (Whisper) delay, s")
     ap.add_argument("--follow-delay", type=float, default=0.1, help="follower compute delay, s")
     ap.add_argument("--grid", action="store_true", help="also run the tuning grid")
     ap.add_argument("--diag", action="store_true",
                     help="where the line-entry lag comes from: flowing + pause sets of --split")
     ap.add_argument("--no-cache", action="store_true", help="rebuild the pickled eval set")
+    ap.add_argument("--ctc-window", type=float, default=3.0, help="CTC dump window, s (dump_ctc.py --window)")
+    ap.add_argument("--ctc-hop", type=float, default=0.2, help="CTC dump hop, s (dump_ctc.py --hop)")
     ap.add_argument("variants", nargs="*", help='follower settings: "fw k=v,..."')
     args = ap.parse_args()
+    global CTC_SUFFIX, REPEATS, ANCHOR_EVERY, JUMPS
+    CTC_SUFFIX = f"_w{args.ctc_window:g}_h{args.ctc_hop:g}"
+    REPEATS = args.repeats
+    JUMPS = args.jumps
+    ANCHOR_EVERY = args.anchor_every
+    args.pauses = args.pauses or args.repeats or args.jumps
     cfg = TrackerConfig()
+    if args.tracker:
+        cfg = replace(cfg, **{k: json.loads(v) for k, v in (a.split("=") for a in args.tracker.split(","))})
     ix = ev.CorpusIndex(ev.load_all())
     t0 = time.time()
     if args.diag:

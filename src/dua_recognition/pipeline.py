@@ -6,7 +6,7 @@ behind real time, stale hops are skipped rather than queued: only the newest
 window matters, and the tracker is told how much time actually passed.
 
 With `words="ctc"` (and a ctc.CtcModel), a second, faster loop runs beside it:
-every 0.2 s the word follower (follower.py) scores the last 3 s of a CTC
+every 0.1 s the word follower (follower.py) scores the last 3 s of a CTC
 model's frames, anchored on the tracker's position, and says which word is
 being recited (word_step). Opt-in: docs/results/follower.md.
 """
@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .align import CorpusIndex
-from .asr import DEFAULT_MODEL, SAMPLE_RATE, quiet_at_end, transcribe_batch
+from .asr import DEFAULT_MODEL, SAMPLE_RATE, LiveQuiet, QuietMeter, transcribe_batch
 from .corpus import Dua
 from .follower import FollowerConfig, LocalFollower
 from .tracker import Position, Tracker, TrackerConfig
@@ -29,6 +29,9 @@ class Update:
     transcript: str
     position: Position
     quiet: float = 0.0  # seconds the reciter had been silent at the window's end
+    quiet_now: float | None = None  # ...and when the update was ready (asr.LiveQuiet; None: not known)
+    paused: float | None = None  # seconds since the last update spent in pauses (asr.QuietMeter)
+    voice_db: float | None = None  # the voice level the stop detector compares with
 
 
 @dataclass
@@ -51,12 +54,12 @@ class StreamingRecognizer:
         prompt_bias: bool = True,
         vad: bool = False,  # hurts in noisy rooms at current thresholds (docs/results/comparison.md)
         lead: bool = True,  # show the predicted current position (docs/results/display_lead.md)
-        pauses: bool = True,  # tell the tracker when the reciter stops (docs/results/pauses.md)
+        pauses: bool = True,  # tell the tracker when the reciter stops (docs/results/pauses.md, stops.md)
         index: CorpusIndex | None = None,
         words: str | None = None,  # "ctc": also follow word by word (word_step), with `ctc`
         ctc=None,  # a ctc.CtcModel
         follower: FollowerConfig | None = None,
-        word_hop: float = 0.2,
+        word_hop: float = 0.1,
         word_window: float = 3.0,
     ):
         self.duas = duas
@@ -86,6 +89,10 @@ class StreamingRecognizer:
         self._wlast = 0  # ...and at the last word step
         self._anchor: int | None = None  # the tracker's evidence position (no lead), for the follower
         self._lead_word: int | None = None  # ...and the word it displays
+        # The stop detector: per window (remembering the voice level), and on the audio as it
+        # arrives, which goes on while a window is being transcribed.
+        self._meter = QuietMeter()
+        self._ear = LiveQuiet()
         if self.follower is not None:
             self.follower.reset()
 
@@ -111,6 +118,8 @@ class StreamingRecognizer:
         samples = np.asarray(samples, dtype=np.float32).reshape(-1)
         self._buf = np.concatenate([self._buf, samples])[-max(self.window, self.word_window) :]
         self._total += samples.size
+        if self.pauses:
+            self._ear.push(samples)
 
     @property
     def due(self) -> bool:
@@ -135,17 +144,23 @@ class StreamingRecognizer:
         window = self._buf[-self.window :].copy()
         end = self._total
         text = transcribe_batch([window], model=self.model, prompts=[prompt], vad=self.vad)[0]
-        quiet = quiet_at_end(window) if self.pauses else 0.0
+        quiet = self._meter(window, dt) if self.pauses else 0.0
+        paused = self._meter.paused if self.pauses else None
         # Audio that arrived while transcribing (the web server pushes
-        # concurrently) is how far the reciter has moved on since `end`.
+        # concurrently) is how far the reciter has moved on since `end`,
+        # or how long they have been still.
         delay = (self._total - end) / SAMPLE_RATE
+        quiet_now = None
+        if self.pauses:
+            self._ear.voice_db = self._meter.voice_db
+            quiet_now = self._ear.quiet
         pos = self.tracker.update(text, dt, lead=delay + self.tracker.cfg.display_lead if self.lead else 0.0,
-                                  quiet=quiet)
+                                  quiet=quiet, quiet_now=quiet_now, paused=paused)
         if self.follower is not None:
             now = self.tracker.position()  # the evidence position, as word_eval.hmm_updates anchors it
             self._anchor = now.word if now.dua is not None else None
             self._lead_word = pos.word if pos.dua is not None else None
-        return Update(end / SAMPLE_RATE, text, pos, quiet)
+        return Update(end / SAMPLE_RATE, text, pos, quiet, quiet_now, paused, self._meter.voice_db)
 
     @property
     def word_due(self) -> bool:

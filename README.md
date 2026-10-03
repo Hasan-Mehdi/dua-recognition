@@ -28,7 +28,7 @@
 - **Names the du'a** from anywhere in a recitation, among 505 du'as and ziyarat, usually within 10 s
 - **Follows line and word**, with the Arabic, transliteration and English side by side
 - **Handles real recitation:** repeated refrains, shared passages, long melodic notes and pauses
-- **Private on-device mode:** fine-tuned Whisper runs in the phone's browser, so no audio leaves the phone
+- **Private on-device mode:** fine-tuned Whisper runs in the phone's browser, a new result about once a second, so no audio leaves the phone
 - **Majlis mode:** one phone drives other phones or a projector through a QR code
 - **Easy to read:** five Arabic typefaces, adjustable text size, word or line highlighting, favourites
 
@@ -40,18 +40,22 @@ replayed exactly as the live system hears it.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/tracker-dark.svg">
-    <img src="docs/tracker-light.svg" width="720" alt="Phone model with and without the tracker, on the same audio: correct line 46.3% to 84.8%, within one line 70.9% to 96.2%, refrain lines 6.5% to 87.8%, wrong du'a shown 13.5% to 0.5%">
+    <img src="docs/tracker-light.svg" width="720" alt="Phone model with and without the tracker, on the same audio: correct line 47.0% to 85.4%, within one line 71.4% to 96.3%, refrain lines 6.5% to 88.6%, wrong du'a shown 12.9% to 0.5%">
   </picture>
 </p>
 
 | model | runs on | correct line | ±1 line | refrain lines | wrong du'a | named in 10 s |
 |---|---|---:|---:|---:|---:|---:|
-| **whisper-base, fine-tuned** | phone browser | **84.8%** | **96.2%** | **87.8%** | 0.5% | **92%** |
+| **whisper-base, fine-tuned** | phone browser | **85.4%** | **96.3%** | 88.6% | 0.5% | **93%** |
 | large-v3-turbo, fine-tuned | server | 84.0% | 96.3% | 88.7% | 0.4% | 92% |
 | large-v3-turbo, stock | server | 81.5% | 96.1% | 82.6% | 0.4% | 91% |
 
-On everyday, non-professional voices, the phone model's character error rate is 29.9%
-(15.4% for fine-tuned turbo). → [Full evaluation](docs/evaluation.md)
+The phone model is trained with synthetic ordinary voices as well as reciters, and it
+listens to an 8 s window instead of Whisper's padded 30 s, which makes it four times
+faster in the browser. On everyday, non-professional voices its character error rate is
+24.1%, down from 30.0% without the synthetic voices
+([synthetic_voices.md](docs/results/synthetic_voices.md),
+[phone_speed.md](docs/results/phone_speed.md)). → [Full evaluation](docs/evaluation.md)
 
 ## Quick start
 
@@ -80,11 +84,17 @@ flowchart LR
     B --> C["<b>Align</b><br/>against all 505 texts<br/>136,503 words in ~3 ms"]
     C --> D["<b>HMM tracker</b><br/>predicts where<br/>the reciter is"]
     D --> E(["du'a · line · word"])
+    A -- "last 3 s,<br/>~4 times a second" --> F["<b>CTC letters</b><br/>every 20 ms"]
+    F --> G["<b>Word follower</b>"]
+    D -- "du'a, anchor" --> G
+    G --> E
 ```
 
 A single window's text can't tell repeats of a refrain apart. The tracker predicts where the
 reciter should be by now, the way score followers track sheet music, and that settles which
-repeat it is. It adapts to the reciter's tempo and waits through pauses.
+repeat it is. It adapts to the reciter's tempo and waits through pauses. On the phone, a small
+model also hears letters as they are said, and the word follower lights the word just heard
+rather than a prediction of it.
 
 <p align="center">
   <img src="docs/explainer.gif" width="640" alt="Animated explainer: evidence from one window matches all 14 repetitions of a refrain; multiplying by the tracker's prediction leaves only the right one">

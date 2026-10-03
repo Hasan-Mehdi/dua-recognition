@@ -19,8 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -40,12 +38,14 @@ def main() -> None:
 
     src = Path(args.model).resolve()
     out = ROOT / "web" / "models" / (args.name or src.name)
+    # A shortened context (scripts/shorten_context.py): optimum's dummy audio is 30 s unless told.
+    pre = src / "preprocessor_config.json"
+    chunk = json.loads(pre.read_text())["chunk_length"] if pre.exists() else 30
+    shapes = {} if chunk == 30 else {"nb_max_frames": 100 * chunk, "audio_sequence_length": 16000 * chunk}
+    from optimum.exporters.onnx import main_export  # the optimum-cli launcher exits 1 silently on this machine
+
     with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run(
-            [str(Path(sys.executable).with_name("optimum-cli")), "export", "onnx", "-m", str(src),
-             "--task", "automatic-speech-recognition-with-past", "--device", "cpu", tmp],
-            check=True,
-        )
+        main_export(str(src), output=tmp, task="automatic-speech-recognition-with-past", device="cpu", **shapes)
         tmp = Path(tmp)
         (out / "onnx").mkdir(parents=True, exist_ok=True)
         for name in ("encoder_model", "decoder_model_merged"):

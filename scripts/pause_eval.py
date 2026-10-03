@@ -16,6 +16,20 @@ word timings (scripts/word_truth.py), with the pauses reported separately.
 A variant is `base[;smooth k=v,...][;cfg k=v,...][;still][;silero]`: `still`
 feeds the tracker how long the reciter has been silent (asr.quiet_at_end),
 `silero` uses the voice detector alone for that instead of voice-or-energy.
+
+The stop detector as it is now (docs/results/stops.md) needs `quiet2` first:
+
+    python scripts/pause_eval.py quiet2 --tag whisper-base-aug-v4 --split train [--agc 12]
+
+which measures, on the paused audio, the window's quiet with the voice-relative
+rule (asr.QuietMeter), the pauses since the last update, and the page's live
+detector (asr.LiveQuiet); --agc N turns each inserted pause up by N dB over its
+first 1.8 s, as a phone's automatic gain control does once the reciter stops
+(stored separately, as "q2@agcN"). Then the flags `q2` (that quiet; `old` the
+old rule's on the same audio; `agc` for the turned-up pauses), `paused` (the belief moves only for time not in pauses),
+`live` (the tracker hears the live detector at the moment each update is
+shown, and the glide stops while it says they are silent) and `back` (after
+retreat_after of silence an update may take the highlight back in its line).
 """
 from __future__ import annotations
 
@@ -105,7 +119,7 @@ def build_ctc(args, out_dir: Path) -> None:
         out = cdir / f"{f.stem}_w{args.ctc_window:g}_h{args.ctc_hop:g}.npz"
         if out.exists():
             continue
-        m = m or CtcModel(args.ctc_model)
+        m = m or __import__('dua_recognition.ctc_student', fromlist=['load_ctc']).load_ctc(args.ctc_model)
         r = json.loads(f.read_text(encoding="utf-8"))
         P = r["pause_s"]
         y = decode_audio(str(recs[r["audio_id"]].path), sampling_rate=SR)
@@ -186,6 +200,55 @@ def build(args) -> None:
             print(f"{dua.id:28s} {rec.reciter[:20]:20s} {len(pts):3d} pauses  {len(fresh):5d} new windows", flush=True)
 
 
+def agc_ramp(n: int, gain_db: float, hold: float = 0.3, rise: float = 1.5) -> np.ndarray:
+    """Gain over a pause of n samples: flat for `hold` s, then up by gain_db over `rise` s."""
+    t = np.arange(n) / SR
+    return (10 ** (np.clip((t - hold) / rise, 0.0, 1.0) * gain_db / 20)).astype(np.float32)
+
+
+def quiet2(args) -> None:
+    """The stop detector's measures on the built paused audio (see the module doc)."""
+    from faster_whisper.audio import decode_audio
+
+    from dua_recognition.asr import LiveQuiet, QuietMeter
+
+    recs = {rec.audio_id: rec for dua in ev.load_all().values() for rec in ev.load_recordings(dua)}
+    d = OUT / (args.tag + ("" if args.split == "test" else f"@{args.split}"))
+    key = "q2" + (f"@agc{args.agc:g}" if args.agc else "")
+    for f in sorted(d.glob("*.json")):
+        r = json.loads(f.read_text(encoding="utf-8"))
+        if key in r and "quiet_old" in r[key]:
+            continue
+        P = r["pause_s"]
+        y = decode_audio(str(recs[r["audio_id"]].path), sampling_rate=SR)
+        y2 = paused_audio(y, [s - P * j for j, (s, _) in enumerate(r["pauses"])], P)
+        if args.agc:
+            for s, _ in r["pauses"]:
+                a = int(s * SR)
+                y2[a : a + int(P * SR)] *= agc_ramp(min(int(P * SR), y2.size - a), args.agc)
+        meter, old, live = QuietMeter(), QuietMeter(rel_db=None), LiveQuiet()
+        quiet, quiet_old, paused, voice = [], [], [], {}
+        for t, _ in r["rows"]:
+            w = y2[int(max(0, t - WINDOW) * SR) : int(t * SR)]
+            quiet.append(round(meter(w, 1.0), 3))
+            quiet_old.append(round(old(w), 3))
+            paused.append(round(meter.paused, 3))
+            voice[t] = meter.voice_db
+        series, k, pending = [], 0, sorted(voice)
+        chunk = 4000
+        for a in range(0, y2.size - chunk + 1, chunk):
+            live.push(y2[a : a + chunk])
+            now = (a + chunk) / SR
+            while k < len(pending) and pending[k] + 1.0 <= now:  # the worker's voice level, a second later
+                if voice[pending[k]] is not None:
+                    live.voice_db = voice[pending[k]]
+                k += 1
+            series.append(None if live.quiet is None else round(live.quiet, 3))
+        r[key] = {"quiet": quiet, "quiet_old": quiet_old, "paused": paused, "live": series, "live_step": chunk / SR}
+        f.write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
+        print(f"  {key} {f.stem}", flush=True)
+
+
 def parse_variant(v: str):
     parts = v.split(";")
     cfg, smooth, flags = TrackerConfig(), {"ease": 1.0, "speed_scale": 1.2}, set()
@@ -207,26 +270,53 @@ def score(ix, data, cfg, smooth, flags, delay: float) -> dict:
     for r in data:
         truth = r["truth"]
         starts = [w[1] for w in truth]
-        quiet = r["quiet_silero" if "silero" in flags else "quiet"] if "still" in flags else [0.0] * len(r["rows"])
+        m2 = r.get("q2@agc12" if "agc" in flags else "q2") if flags & {"q2", "paused", "live", "old"} else None
+        if flags & {"q2", "paused", "live", "old"} and m2 is None:
+            raise SystemExit("run `pause_eval.py quiet2` first (with --agc 12 for `agc`)")
+        if "old" in flags:  # the old rule (floor + 6 dB) on the same audio (with `agc`: turned-up pauses)
+            quiet = m2["quiet_old"]
+        elif "q2" in flags:
+            quiet = m2["quiet"]
+        else:
+            quiet = r["quiet_silero" if "silero" in flags else "quiet"] if "still" in flags else [0.0] * len(r["rows"])
+        paused = m2["paused"] if "paused" in flags else [None] * len(r["rows"])
+
+        def live_at(t: float):
+            if "live" not in flags:
+                return None
+            i = int(t / m2["live_step"]) - 1  # the chunks the page holds by then
+            return m2["live"][i] if 0 <= i < len(m2["live"]) else None
+
         tr = Tracker(ix, cfg)
         hl = Highlight(**smooth)
         ups = []
-        for (t, _), c, n, q in zip(r["rows"], r["costs"], r["letters"], quiet):
-            p = tr.update_costs(c, 1.0, delay + cfg.display_lead, n_letters=n, quiet=q)
+        for (t, _), c, n, q, pz in zip(r["rows"], r["costs"], r["letters"], quiet, paused):
+            qn = live_at(t + delay)
+            p = tr.update_costs(c, 1.0, delay + cfg.display_lead, n_letters=n, quiet=q, quiet_now=qn, paused=pz)
             rng = None
             if p.word is not None:
                 lo, hi = ix.dua_word_span[ix.word_dua[p.word]]
                 ws = np.flatnonzero(ix.word_segment[lo:hi] == p.segment) + lo
                 rng = (int(ws[0]), int(ws[-1]) + 1)
-            ups.append((t + delay, p.dua, p.segment, p.word, rng, 0.0 if q > cfg.still_after else tr.speed))
+            still = q > cfg.still_after or (qn is not None and qn > cfg.still_after)
+            back = "back" in flags and max(q, qn or 0.0) > cfg.retreat_after
+            ups.append((t + delay, p.dua, p.segment, p.word, rng, 0.0 if still else tr.speed, back))
         k, prev = 0, None
         ticks = np.arange(truth[0][1], r["rows"][-1][0] + delay, 0.1)
         pauses = r["pauses"]
         shown_at = []
+        stopped, speed_now = False, 0.0
         for tick in ticks:
+            if "live" in flags and hl.line is not None:
+                qn = live_at(tick)
+                now_still = qn is not None and qn > cfg.still_after
+                if now_still != stopped:
+                    stopped = now_still
+                    hl.pace(tick, 0.0 if stopped else speed_now)
             while k < len(ups) and ups[k][0] <= tick:
-                _, dua, seg, word, rng, speed = ups[k]
-                hl.update(ups[k][0], dua, seg, word, rng or (0, 0), speed)
+                _, dua, seg, word, rng, speed, back = ups[k]
+                speed_now = speed
+                hl.update(ups[k][0], dua, seg, word, rng or (0, 0), 0.0 if stopped else speed, back=back)
                 k += 1
             shown = hl.word(tick) if hl.line and hl.line[0] == r["dua"] else None
             shown_at.append(shown)
@@ -283,14 +373,22 @@ def main() -> None:
     b.add_argument("--ctc-model", help="instead: dump this CTC model's posteriors over the already built paused audio")
     b.add_argument("--ctc-window", type=float, default=3.0)
     b.add_argument("--ctc-hop", type=float, default=0.2)
+    q = sub.add_parser("quiet2")
+    q.add_argument("--tag", required=True)
+    q.add_argument("--split", choices=["test", "train"], default="test")
+    q.add_argument("--agc", type=float, default=0.0, help="dB the inserted pauses rise by (a phone's AGC)")
     s = sub.add_parser("score")
     s.add_argument("--tag", required=True)
     s.add_argument("--delay", type=float, default=0.5)
     s.add_argument("--split", choices=["test", "train"], default="test")
     s.add_argument("variants", nargs="+")
     args = ap.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8")
     if args.cmd == "build":
         build(args)
+        return
+    if args.cmd == "quiet2":
+        quiet2(args)
         return
     ix = ev.CorpusIndex(ev.load_all())
     d = OUT / (args.tag + ("" if args.split == "test" else f"@{args.split}"))

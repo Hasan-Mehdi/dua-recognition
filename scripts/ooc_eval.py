@@ -54,12 +54,12 @@ def main() -> None:
             if rows:
                 recs.append((rec, rows))
     minus = {d: ev.CorpusIndex({k: v for k, v in duas.items() if k != d}) for d in {r.dua_id for r, _ in recs}}
+    # Aligned as read (evaluate.LazyCosts): held, the costs of every window against the
+    # full corpus and its leave-one-out copy took 12 GB with 505 texts.
     cache = {}
     for rec, rows in recs:
-        cache[rec.audio_id] = (
-            [full.word_costs(t) if t else None for _, t in rows],
-            [minus[rec.dua_id].word_costs(t) if t else None for _, t in rows],
-        )
+        texts = [t for _, t in rows]
+        cache[rec.audio_id] = (ev.LazyCosts(full, texts), ev.LazyCosts(minus[rec.dua_id], texts))
     print(f"{len(recs)} recordings ({args.split}), ASR {asr}")
     for sets in args.set or [[]]:
         cfg = replace(TrackerConfig(), **{k: float(v) for k, v in (s.split("=", 1) for s in sets)})
