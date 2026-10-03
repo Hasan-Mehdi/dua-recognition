@@ -86,6 +86,10 @@ class StreamConfig:
     # recitation the tracker can't place is likely a text it doesn't know, not a lull.
     lapse_voice: float = 4.0
     lapse_quiet: float = 1.0
+    # A du'a change counts once the tracker has held the new du'a this long (0 = at once). Texts that
+    # share a passage (Ayat al-Kursi in Namaz-e-Wahshat and Eid-e-Mubahila) flip the tracker's du'a for a
+    # moment, and starting over there showed a line of the other text.
+    switch_s: float = 2.0
     # A beam (0 = off: every line every frame, too slow for Kumayl on a phone): after each step only
     # lines holding at least `beam` of the belief, `beam_margin` lines either side (back and skip
     # moves land there), the shown word's line and every line the tracker puts `propose_mass` on
@@ -500,6 +504,9 @@ class StreamFollower:
         self._t_stream = None  # end time of the last committed frame
         self._last_anchor_t = None
         self._lapse_since = None
+        self._lapse_voice = 0.0
+        self._switch_to = None  # a du'a the tracker moved to, and since when
+        self._switch_since = None
 
     def _dua(self, d: int) -> _Dua:
         if d not in self._duas:
@@ -748,7 +755,14 @@ class StreamFollower:
         else:
             self._lapse_since = None
         d = int(ix.word_dua[hmm_word])
-        if d is not None and d != self.dua:
+        if d == self.dua:
+            self._switch_to = self._switch_since = None
+        elif self.dua is not None and cfg.switch_s > 0:
+            if self._switch_to != d:
+                self._switch_to, self._switch_since = d, t
+            if t - self._switch_since < cfg.switch_s:
+                hmm_word, line_mass, d = self.word, None, self.dua  # not yet: on in the du'a it was in
+        if d != self.dua:
             self._start(d, hmm_word, line_mass)
             self._t_stream = None
         if self.dua is None:

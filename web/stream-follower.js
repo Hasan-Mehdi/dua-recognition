@@ -51,6 +51,9 @@ export const STREAM_DEFAULTS = {
   // recitation the tracker can't place is likely a text it doesn't know, not a lull.
   lapseVoice: 4.0,
   lapseQuiet: 1.0,
+  // A du'a change counts once the tracker has held the new du'a this long (0 = at once): texts that
+  // share a passage flip the tracker's du'a for a moment.
+  switchS: 2.0,
   // The beam (0 = off): only lines holding beam of the belief, beamMargin lines either side, the shown
   // word's line and the tracker's proposals (proposeMass, +-1) are updated (stream_follower.py _prune).
   beam: 1e-6,
@@ -106,6 +109,8 @@ export class StreamFollower {
     this.lastAnchorT = null;
     this.lapseSince = null;
     this.lapseVoice = 0;
+    this.switchTo = null;
+    this.switchSince = null;
     this.active = null;
     this.proposed = null;
     this.ctcProp = null;
@@ -535,7 +540,21 @@ export class StreamFollower {
       hmmWord = this.word;
       lineMass = null;
     } else this.lapseSince = null;
-    const d = ix.wordDua[hmmWord];
+    let d = ix.wordDua[hmmWord];
+    if (d === this.dua) {
+      this.switchTo = null;
+      this.switchSince = null;
+    } else if (this.dua != null && cfg.switchS > 0) {
+      if (this.switchTo !== d) {
+        this.switchTo = d;
+        this.switchSince = t;
+      }
+      if (t - this.switchSince < cfg.switchS) { // not yet: on in the du'a it was in
+        hmmWord = this.word;
+        lineMass = null;
+        d = this.dua;
+      }
+    }
     if (d !== this.dua) {
       this._start(d, hmmWord, lineMass);
       this.tStream = null;

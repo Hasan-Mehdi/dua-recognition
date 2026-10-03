@@ -7,8 +7,12 @@ models, follower.js, tracker.js, the capture worklet, in real time), reads what 
 from its session log (one `ctc` event per follower step, with the word on screen), and scores it
 with bench.metrics, so the two can be compared item for item.
 
-    python scripts/bench_page.py --per-scenario 2 --split test --asr-ms 1200 --ctc-ms 150
-    python scripts/bench_page.py --report page_test
+    python scripts/bench_page.py --per-scenario 1 --split test --variants page_rules: page_stream:follower=stream
+    python scripts/bench_page.py --report --variants page_rules: page_stream:follower=stream
+
+--variants name:query plays every item through each page variant; with --jobs equal to the number of
+variants, the variants of one item play at the same time, so they see the same load on the machine
+(the page runs in real time: a busy CPU delays its models).
 
 --asr-ms / --ctc-ms make each Whisper / CTC step take at least that long (a phone: Whisper
 ~1-2.5 s per update on Hasan's Android, the CTC model ~0.1-0.25 s).
@@ -34,16 +38,18 @@ import bench  # noqa: E402
 OUT = bench.BENCH / "page"
 
 
-def run_one(it: dict, args) -> Path | None:
+def run_one(it: dict, args, name: str | None = None, query: str | None = None) -> Path | None:
     import soundfile as sf
 
-    d = OUT / args.name
+    name = name or args.name
+    query = args.query if query is None else query
+    d = OUT / name
     d.mkdir(parents=True, exist_ok=True)
     wav_in, wav_out = d / f"{it['id']}.in.wav", d / f"{it['id']}.session.wav"
     if wav_out.exists():
         return wav_out
     sf.write(wav_in, bench.render(it), bench.SR, subtype="PCM_16")
-    cmd = ["node", str(ROOT / "scripts" / "page_replay.mjs"), str(wav_in), str(wav_out), args.query]
+    cmd = ["node", str(ROOT / "scripts" / "page_replay.mjs"), str(wav_in), str(wav_out), query]
     if args.asr_ms:
         cmd += ["--asr-ms", str(args.asr_ms)]
     if args.ctc_ms:
@@ -91,6 +97,7 @@ def main() -> None:
     ap.add_argument("--query", default="", help="page URL query, e.g. 'model=...'")
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--report", action="store_true", help="only score what has been played")
+    ap.add_argument("--variants", nargs="*", default=None, help="name:query pairs (default: --name with --query)")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     items = bench.load_items(split=args.split)
@@ -101,32 +108,36 @@ def main() -> None:
     for sc, its in sorted(by.items()):
         rng = random.Random(sc)
         pick += rng.sample(its, min(args.per_scenario, len(its)))
+    variants = [tuple(v.split(":", 1)) for v in args.variants] if args.variants else [(args.name, args.query)]
     if not args.report:
+        tasks = [(it, n, q) for it in pick for n, q in variants]  # an item's variants side by side
         with ThreadPoolExecutor(args.jobs) as ex:
-            list(ex.map(lambda it: run_one(it, args), pick))
+            list(ex.map(lambda x: run_one(x[0], args, x[1], x[2]), tasks))
     import evaluate as ev
 
     ix = ev.CorpusIndex(ev.load_all())
-    page, py = {}, {}
     bench._worker_init({}, {}, bench.ASR_TAG, bench.CTC_TAG, 1.2, 0.15)
-    for it in pick:
-        f = OUT / args.name / f"{it['id']}.session.wav"
-        if not f.exists():
-            continue
-        shown, off = shown_from_log(it, f, ix)
-        m = bench.metrics(it, shown, ix)
-        m.update(scenario=it["scenario"], lane=it["lane"], voice=it["voice"], split=bench.split_of(it["voice"]),
-                 dua=it["dua"], offset=off)
-        page[it["id"]] = m
-        r = bench._score_one(it)
-        if r:
-            py[it["id"]] = r[1]
-    (OUT / f"{args.name}.json").write_text(json.dumps({"page": page, "python": py}, ensure_ascii=False))
-    print(f"{len(page)} items played through the page\n\n== the page (headless Chrome)")
-    print(bench.table(bench.grid_rows(page)))
-    print("\n== the Python replay of the same items")
-    print(bench.table(bench.grid_rows(py)))
+    res = {}
+    for name, _ in variants:
+        page = {}
+        for it in pick:
+            f = OUT / name / f"{it['id']}.session.wav"
+            if not f.exists():
+                continue
+            shown, off = shown_from_log(it, f, ix)
+            m = bench.metrics(it, shown, ix)
+            m.update(scenario=it["scenario"], lane=it["lane"], voice=it["voice"], split=bench.split_of(it["voice"]),
+                     dua=it["dua"], offset=off)
+            page[it["id"]] = m
+        res[name] = page
+        (OUT / f"{name}.json").write_text(json.dumps({"page": page}, ensure_ascii=False))
+    both = set.intersection(*(set(r) for r in res.values())) if res else set()
+    for name, page in res.items():
+        print(f"\n== {name} (real page, headless Chrome): {len(both)} items played by every variant")
+        print(bench.table(bench.grid_rows({k: v for k, v in page.items() if k in both})))
 
 
 if __name__ == "__main__":
     main()
+
+

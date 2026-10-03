@@ -101,6 +101,7 @@ What each piece bought, on dev voices (all scored on the grid, not on the case t
 | beam (12 lines of ~250-830) + the tracker's and the frames' line proposals | Kumayl took 47 ms a step, Abu Hamza 148 ms (desktop JS) | 3.5-4.9 ms a step; jumping around +3-4 pts |
 | hold through a tracker lapse only while silent | an unknown du'a kept the last one on screen | unknown du'a shown 24 -> 14% (dev) |
 | 1 nat off the blank column | ordinary voices and echo give faint letters; the belief rested in the blank after the last word | hall +14 pts, far +11, his voice: line lag 0.93 -> 0.55 s; salawat -17 pts (still +7 over today's phone) |
+| a du'a change counts after 2 s | texts sharing a passage (Ayat al-Kursi in Namaz-e-Wahshat and Eid-e-Mubahila) flipped the tracker's du'a for a moment | his sessions: wrong du'a 3.5 -> 2.0%, on line 76 -> 78%; a real switch followed 2 s later |
 
 Tried and dropped: weighing the tracker more (0.6, 1.0: no gain, more lost time); a "push" from the
 tracker when the decoder stalls (no gain in echo, +3.6 jumps/10 min when readers go back); a lower
@@ -112,27 +113,28 @@ with or without the beam).
 
 ## Result: held-out voices (test split)
 
-Decoder (defaults above) against today's phone, the same 405 items (799 minutes, 32 voices, all lanes):
+Decoder (the defaults above) against today's phone, the same 405 items (799 minutes, 32 voices):
 
 | | today's phone | stream decoder |
 |---|---:|---:|
-| on the reader's line | 84% | **88%** |
+| on the reader's line | 83% | **87%** |
 | right word | 60% | **67%** |
-| jumps where the reader isn't /10 min | 3.4 | **2.8** |
+| jumps where the reader isn't /10 min | 3.4 | **2.7** |
 | early moves /10 min | 3.5 | **2.8** |
 | lost (4+ s off the line) /10 min | 4.2 | **1.6** |
 | go-back / skip / jump followed within 3 s | 58% | **74%** |
-| stays put through pause / talk / salawat | 70% | **85%** |
-| line-change lag | 0.43 s | 0.41 s |
-| du'a found within 10 s | 80% | 80% |
+| stays put through pause / talk / salawat | 69% | **85%** |
+| line-change lag | 0.43 s | **0.41 s** |
+| du'a found within 10 s | 80% | 79% |
 | unknown du'a: some du'a shown | 21% | 28% |
 
-By cell (23 with readings to score): time on the line is better in 20 and equal in 3 (plain reading,
-starting mid-du'a, fast); lost time is lower or equal in all of them. Where it isn't better: a few more
-false jumps in plain reading and pauses (+0.4 and +0.9 /10 min), the unknown-du'a case (+7 pts), and
-jumping around the du'a, where following within 3 s dropped 6 pts. Dev voices agree (on line +4, lost -2.0 /10 min,
-follows +18, stays put +20). On Hasan's own sessions (35 items): on line 68 -> 76%, lost 7.7 -> 4.5,
-follows 47 -> 85%, same line lag (0.55 s), but jumps 2.8 -> 4.9 /10 min.
+By cell (23 with readings to score): time on the line is better in 17, equal in 5 and a point lower in
+1 (starting mid-du'a, 89 vs 90%); lost time is lower or equal in all of them. Where it isn't better: a few more false jumps in plain reading and pauses (+0.2 and +1.1 /10 min),
+early moves in talk (+1.8 /10 min), the unknown-du'a case (+7 pts), finding the du'a in some conditions
+(the 2 s du'a-change rule: stumble -6, hall -6, phone call -7 pts), and jumping around the du'a, where
+following within 3 s dropped 6 pts. Dev voices agree (on line +4, lost -2.1 /10 min, follows +17, stays
+put +20). On Hasan's own sessions (35 items): on line 68 -> 78%, lost 7.7 -> 3.8, follows 47 -> 85%,
+stays put 78 -> 87%, line lag 0.55 -> 0.51 s; jumps 2.8 -> 3.8 /10 min.
 
 ## Outside the follower
 
@@ -142,9 +144,9 @@ follows 47 -> 85%, same line lag (0.55 s), but jumps 2.8 -> 4.9 /10 min.
   fake microphone (`scripts/capture_check.mjs firefox`) is fine, as was the same headset in Firefox 156,
   so it is that device in that browser. The page now measures audio seconds per real second
   (`checkClock`, logged as `clock`) and tells the reader past 15% off; `session_report.py` prints it.
-- **Missing du'as.** The harvest found 114 h in 1,362 recordings of texts the app doesn't have: Du'a
-  al-Sabah (408 recordings, 35 h, as many as some of the most-recorded du'as the app has), Du'a
-  al-'Adeelah (52), Du'a al-'Asharat (44), 14 of the 15 Munajat. Their text is in
+- **Missing du'as.** As of 2026-10-03 02:30 the harvest has 1,214 recordings (145 h) of texts the app
+  doesn't have: Du'a al-Sabah (194 recordings, 37 h, the 19th most-recorded text of 409), Du'a
+  al-'Adeelah (68), Du'a al-'Asharat (51), 14 of the 15 Munajat (22-38 each). Their text is in
   `data/harvest/extra_texts.json` (Mafatih). Someone reciting them now gets nothing, or a wrong du'a.
 - **fp16 on silence.** The CTC student under GPU autocast returns NaN for a window of digital zeros. It
   only touched the bench's GPU pass (7 items, recomputed in fp32); the phone runs fp32. The decoder
