@@ -15,6 +15,9 @@ Voices (lanes):
     harvest  uploaders the harvest keeps out of all training (harvest_label.py export's
              val side: sha1(uploader) % 100 < 3); labels are the CTC teacher's forced
              alignment, lines it placed confidently only
+    mafatih  the same uploaders reading the texts added from Mafatih (mafatih_corpus.py:
+             Sabah, 'Adeelah, 'Asharat, Munajat 2-15), in the reading scenarios only;
+             `sources --lane mafatih` adds them without touching the rest of the grid
 
 Scenarios: how they read (flow, start mid-du'a, pauses, talking in between, salawat in
 between, repeating a line, going back 1-3 lines, skipping ahead, jumping around, stumbling
@@ -58,6 +61,7 @@ ASR_TAG = "whisper-base-syn-v5-ctx8ft"
 CTC_TAG = "ctc-student-base-v6"
 CTC_WINDOW, CTC_HOP = 2.0, 0.1
 MIN_LINES = 6  # a source is a run of at least this many consecutive, fully timed lines
+MORE_OOC = 40  # out-of-corpus readings from uploaders outside the held-out side (sources_harvest)
 SALAWAT = "اللهم صل على محمد وآل محمد"
 
 # What "usable" means, per metric (score prints pass/fail against these).
@@ -235,15 +239,30 @@ def sources_testsets(ix, which: str) -> list[dict]:
 
 def sources_harvest(ix) -> tuple[list[dict], list[dict]]:
     """Held-out uploaders' runs of confidently placed lines; and spans of du'as the app's
-    corpus doesn't have (training-only Mafatih texts) as out-of-corpus readings."""
+    corpus doesn't have (training-only Mafatih texts) as out-of-corpus readings. The
+    Mafatih texts the corpus has since taken in (mafatih_corpus.py) are lane "mafatih":
+    their alignments carried over word by word to the corpus's own lines. The held-out
+    side has few readings of texts the app lacks, so the out-of-corpus readings add one
+    each from up to MORE_OOC other uploaders (listed in test_voices.json by `sources`, so
+    training exports leave them out too; the phone's models predate the harvest)."""
     from harvest_label import HARVEST, LABELS, _meta_index, _reciter, read_jsonl
+    from mafatih_corpus import book_words
 
     from dua_recognition.text import normalize
 
+    added = book_words()
     metas = _meta_index()
     voices = {(r["platform"], r["id"]): r for r in read_jsonl(HARVEST / "voices.jsonl")}
     side = lambda rc: int(hashlib.sha1(rc.encode()).hexdigest()[:8], 16) % 100 < 3  # noqa: E731
-    out, ooc = [], []
+    out, ooc, more = [], [], {}
+
+    def ooc_source(res, si, sp, meta, audio, rc, good):
+        return {"sid": f"harvest:{res['platform']}:{res['id']}:{si}", "lane": "harvest", "audio": str(audio),
+                "dua": None, "text_id": sp["dua"], "voice": rc,
+                "lines": [{"seg": ln["seg"], "words": [], "from": ln["start"] - 0.05, "to": ln["end"] + 0.1}
+                          for ln in good],
+                "tags": {"platform": res["platform"], "title": meta.get("title", "")[:120]}}
+
     for lab in sorted(LABELS.glob("*/*.json")):
         if lab.name.endswith(".captions.json"):
             continue
@@ -253,19 +272,45 @@ def sources_harvest(ix) -> tuple[list[dict], list[dict]]:
             continue
         meta, audio = metas[key]
         rc = _reciter(res["platform"], meta)
-        if not side(rc) or voices.get(key, {}).get("verdict") != "ok":
+        if voices.get(key, {}).get("verdict") != "ok":
+            continue
+        if not side(rc):
+            if rc in more or any(sp["dua"] in added for sp in res["spans"]):
+                continue
+            for si, sp in enumerate(res["spans"]):
+                good = [ln for ln in sp["lines"] if ln["ok"]]
+                if sp["usable"] and sp["dua"] and sp["dua"] not in ix.dua_ids and len(good) >= 8:
+                    more[rc] = ooc_source(res, si, sp, meta, audio, rc, good)
+                    break
             continue
         for si, sp in enumerate(res["spans"]):
             if not sp["usable"]:
                 continue
+            add = added.get(sp["dua"])
+            if add:
+                lo = ix.dua_word_span[ix.dua_ids.index(add["dua"])][0]
+                timed: dict[int, list] = {}  # two book words can be one of ours (a separate وَ joined on)
+                for ln in sp["lines"]:
+                    o = add["off"].get(ln["seg"])
+                    if not ln["ok"] or o is None or add["words"][o:o + len(ln["words"])] != ln["words"]:
+                        continue
+                    for j, (a, b) in enumerate(ln["times"]):
+                        w = add["local"].get(o + j)
+                        if w is not None:
+                            t = timed.setdefault(lo + w, [a, b])
+                            t[0], t[1] = min(t[0], a), max(t[1], b)
+                words = [[w, a, b, 0.0] for w, (a, b) in timed.items()]
+                runs = sorted(_line_runs(sorted(words, key=lambda w: w[1]), ix), key=len, reverse=True)
+                for k, run in enumerate(runs[:2]):
+                    if len(run) >= MIN_LINES:
+                        out.append({"sid": f"harvest:{res['platform']}:{res['id']}:{si}.{k}", "lane": "mafatih",
+                                    "audio": str(audio), "dua": add["dua"], "voice": rc, "lines": run,
+                                    "tags": {"platform": res["platform"], "title": meta.get("title", "")[:120]}})
+                continue
             if sp["dua"] not in ix.dua_ids:
                 good = [ln for ln in sp["lines"] if ln["ok"]]
                 if len(good) >= 8:
-                    ooc.append({"sid": f"harvest:{res['platform']}:{res['id']}:{si}", "lane": "harvest",
-                                "audio": str(audio), "dua": None, "text_id": sp["dua"], "voice": rc,
-                                "lines": [{"seg": ln["seg"], "words": [], "from": ln["start"] - 0.05,
-                                           "to": ln["end"] + 0.1} for ln in good],
-                                "tags": {"platform": res["platform"], "title": meta.get("title", "")[:120]}})
+                    ooc.append(ooc_source(res, si, sp, meta, audio, rc, good))
                 continue
             d = ix.dua_ids.index(sp["dua"])
             lo, hi = ix.dua_word_span[d]
@@ -287,6 +332,7 @@ def sources_harvest(ix) -> tuple[list[dict], list[dict]]:
                 out.append({"sid": f"harvest:{res['platform']}:{res['id']}:{si}.{k}", "lane": "harvest",
                             "audio": str(audio), "dua": sp["dua"], "voice": rc, "lines": run,
                             "tags": {"platform": res["platform"], "title": meta.get("title", "")[:120]}})
+    ooc += [more[rc] for rc in sorted(more, key=lambda rc: hashlib.sha1(rc.encode()).hexdigest())[:MORE_OOC]]
     return out, ooc
 
 
@@ -330,15 +376,38 @@ def cmd_sources(args) -> None:
     from dua_recognition.align import encode
 
     ix = ev.CorpusIndex(ev.load_all())
+
+    def tag(srcs):
+        for s in srcs:
+            letters = sum(len(encode(ix.words[w[0]].text)) for ln in s["lines"] for w in ln["words"])
+            inside = sum(ln["words"][-1][2] - ln["words"][0][1] for ln in s["lines"])
+            s["tags"]["rate"] = round(letters / max(inside, 1e-6), 2)
+            s["tags"]["n_lines"] = len(s["lines"])
+
+    BENCH.mkdir(parents=True, exist_ok=True)
+    if args.lane:  # just these sources; the rest of sources.jsonl (and the grid built on it) kept as is
+        hv, ooc = sources_harvest(ix)
+        if args.lane == "ooc":
+            srcs, keep = ooc, [s for s in load_sources() if s["dua"]]
+        else:
+            srcs = [s for s in hv if s["lane"] == args.lane]
+            keep = [s for s in load_sources() if s["lane"] != args.lane]
+            tag(srcs)
+        with (BENCH / "sources.jsonl").open("w", encoding="utf-8") as f:
+            for s in keep + srcs:
+                f.write(json.dumps(s, ensure_ascii=False) + "\n")
+        tv = json.loads((BENCH / "test_voices.json").read_text(encoding="utf-8"))
+        recs = {(r["source"], r["rec"]) for r in tv["recordings"]} | {tuple(s["sid"].split(":")[1:3]) for s in srcs}
+        tv["recordings"] = [{"source": p, "rec": r} for p, r in sorted(recs)]
+        (BENCH / "test_voices.json").write_text(json.dumps(tv, indent=0), encoding="utf-8")
+        h = sum(ln["to"] - ln["from"] for s in srcs for ln in s["lines"]) / 3600
+        print(f"{args.lane}: {len(srcs)} sources, {len({s['voice'] for s in srcs})} voices, "
+              f"{len({s['dua'] or s['text_id'] for s in srcs})} texts, {h:.1f} h; test recordings listed {len(recs)}")
+        return
     srcs = sources_testsets(ix, "studio") + sources_testsets(ix, "majlis") + sources_user(ix)
     hv, ooc = sources_harvest(ix)
     srcs += hv
-    for s in srcs:
-        letters = sum(len(encode(ix.words[w[0]].text)) for ln in s["lines"] for w in ln["words"])
-        inside = sum(ln["words"][-1][2] - ln["words"][0][1] for ln in s["lines"])
-        s["tags"]["rate"] = round(letters / max(inside, 1e-6), 2)
-        s["tags"]["n_lines"] = len(s["lines"])
-    BENCH.mkdir(parents=True, exist_ok=True)
+    tag(srcs)
     with (BENCH / "sources.jsonl").open("w", encoding="utf-8") as f:
         for s in srcs + ooc:
             f.write(json.dumps(s, ensure_ascii=False) + "\n")
@@ -644,14 +713,14 @@ def sc_combo(src, ix, rng, **_):
 
 # scenario -> (program builder, effects, lanes it runs on, tempo)
 SCENARIOS = {
-    "flow": (sc_flow, [], ("user", "studio", "majlis", "harvest"), 1.0),
-    "midstart": (sc_midstart, [], ("studio", "majlis", "harvest"), 1.0),
-    "pause": (sc_pause, [], ("user", "studio", "majlis", "harvest"), 1.0),
-    "talk": (sc_talk, [], ("user", "studio", "harvest"), 1.0),
+    "flow": (sc_flow, [], ("user", "studio", "majlis", "harvest", "mafatih"), 1.0),
+    "midstart": (sc_midstart, [], ("studio", "majlis", "harvest", "mafatih"), 1.0),
+    "pause": (sc_pause, [], ("user", "studio", "majlis", "harvest", "mafatih"), 1.0),
+    "talk": (sc_talk, [], ("user", "studio", "harvest", "mafatih"), 1.0),
     "salawat": (sc_salawat, [], ("studio", "harvest"), 1.0),
-    "repeat": (sc_repeat, [], ("user", "studio", "majlis", "harvest"), 1.0),
-    "back": (sc_back, [], ("user", "studio", "majlis", "harvest"), 1.0),
-    "skip": (sc_skip, [], ("user", "studio", "majlis", "harvest"), 1.0),
+    "repeat": (sc_repeat, [], ("user", "studio", "majlis", "harvest", "mafatih"), 1.0),
+    "back": (sc_back, [], ("user", "studio", "majlis", "harvest", "mafatih"), 1.0),
+    "skip": (sc_skip, [], ("user", "studio", "majlis", "harvest", "mafatih"), 1.0),
     "jumps": (sc_jumps, [], ("studio", "harvest"), 1.0),
     "stumble": (sc_stumble, [], ("studio", "harvest"), 1.0),
     "switch": (sc_switch, [], ("studio", "harvest"), 1.0),
@@ -767,11 +836,16 @@ def split_of(voice: str) -> str:
 
 
 def load_items(scenarios=None, split: str = "all") -> list[dict]:
+    from mafatih_corpus import TEXTS
+
+    taken_in = {t[0] for t in TEXTS}  # no longer unknown du'as: lane "mafatih" reads them
     out = []
     for f in sorted((BENCH / "items").glob("*/*.json")):
         if scenarios and f.parent.name not in scenarios:
             continue
         it = json.loads(f.read_text(encoding="utf-8"))
+        if it.get("text_id") in taken_in:
+            continue
         if split == "all" or split_of(it["voice"]) == split:
             out.append(it)
     return out
@@ -1300,7 +1374,14 @@ def cmd_score(args) -> None:
     items = load_items(args.scenarios, args.split)
     if args.lane:
         items = [it for it in items if it["lane"] == args.lane]
-    cfg_kw = {k: json.loads(v) for k, v in (a.split("=") for a in args.tracker.split(",") if a)}
+    import evaluate as ev
+
+    have = set(ev.load_all())  # (DUA_CORPUS_DIR: an older corpus, without the texts added since)
+    n = len(items)
+    items = [it for it in items if all(w[0] in have for w in it["words"])]
+    if len(items) < n:
+        print(f"{n - len(items)} items left out: their du'a isn't in this corpus", flush=True)
+    cfg_kw ={k: json.loads(v) for k, v in (a.split("=") for a in args.tracker.split(",") if a)}
     fw_kw = {}
     for a in (x for x in args.fw.split(",") if x):
         k, v = a.split("=")
@@ -1355,7 +1436,8 @@ def cmd_report(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("sources")
+    src = sub.add_parser("sources")
+    src.add_argument("--lane", choices=["mafatih", "ooc"], help="rebuild just these sources (ooc: out of corpus)")
     b = sub.add_parser("build")
     b.add_argument("scenarios", nargs="*")
     b.add_argument("--harvest-per-cell", type=int, default=30)

@@ -180,6 +180,7 @@ du'as).
   doesn't have: Du'a al-Sabah (194 recordings, 37 h, the 19th most-recorded text of 409), Du'a
   al-'Adeelah (68), Du'a al-'Asharat (51), 14 of the 15 Munajat (22-38 each). Their text is in
   `data/harvest/extra_texts.json` (Mafatih). Someone reciting them now gets nothing, or a wrong du'a.
+  Added later that day: see "Texts added from Mafatih" below.
 - **fp16 on silence.** The CTC student under GPU autocast returns NaN for a window of digital zeros. It
   only touched the bench's GPU pass (7 items, recomputed in fp32); the phone runs fp32. The decoder
   treats a non-finite frame as no evidence anyway.
@@ -191,5 +192,57 @@ du'as).
 - **Echo and distance** (hall 77-82% on line, far 76-83%): both models hear little; a model problem
   (heavier reverberation in training), not a follower one.
 - **Unknown du'as** shown 14-28% of the time; adding the missing popular du'as is the larger fix.
+  (Since done; with a broader set of unknown texts it is 44%, see below.)
 - **Talk between lines**: early moves 10-14 /10 min.
 - **Jumping around the du'a**: 64-68% on line.
+
+## Texts added from Mafatih (2026-10-03)
+
+Hasan: "can we add those duas?" The 17 texts the harvest has most recordings of and the app lacked are
+now in the corpus (522 texts): Du'a al-Sabah, al-'Adeelah, al-'Asharat and Munajat 2-15 (ids
+`mafatih-*`, built by `scripts/mafatih_corpus.py`).
+
+- **Text**: the decoded Mafatih (Iranian print). Spelling set to the corpus's, word by word by how the
+  other texts write each word (ى/ي, hamza seats, madda written as shadda, lost maddas, ta marbuta) so the
+  generated reading is right ("fī", not "fā"; "Ilāhī", not "Ilhā"); ~70 decoder typos and glued or broken
+  words fixed by name; the Persian instructions inside 'Asharat ("ten times", "then say") removed, each
+  repeated phrase a line of its own. No English: DuaPlayer, duas.org and duas.pro don't have these texts.
+- **Lines**: the book breaks lines mid-phrase. Lines are cut where reciters stop: from the harvest's
+  alignments (205 recordings of Sabah, 77-81 of 'Asharat and 'Adeelah, 25-40 of each Munajat; held-out
+  voices left out), the share of recordings whose pause after a word is among that recording's longest
+  quarter (a fixed 0.35 s marks a breath after nearly every word in the chanted Munajat), cut by a
+  dynamic programme at 3-9 words a line, particles and calls never ending one. Where no recording was
+  placed (each text's first book line, two stretches of 'Asharat, one of 'Adeelah) and where the stops
+  split a phrase, the lines are set by hand; every line of the 17 was read through.
+- **Bench**: lane `mafatih` (`sources --lane mafatih`): held-out uploaders' readings of the added texts,
+  their harvest alignments carried word by word to the new lines; 31 runs, 12 voices (Sabah 21,
+  'Adeelah 6, 'Asharat 2, Muti'een 2; the other Munajat have no held-out run of 6+ whole lines), in the
+  7 reading scenarios: 212 items, 9.1 h. The out-of-corpus items whose text was taken in are left out
+  of `ooc` (load_items).
+
+Stream decoder (`--display stream`), the same items scored with the 505-text corpus (`DUA_CORPUS_DIR`)
+and with 522 (results `c505`, `c522`):
+
+| | 505 texts | 522 texts |
+|---|---:|---:|
+| existing grid (1,454 items): on line | 87% | 87% |
+| found within 10 s / wrong du'a | 84% / 1.5% | 84% / 1.5% |
+| jumps / early / lost per 10 min | 2.09 / 2.32 / 2.35 | 2.09 / 2.32 / 2.35 (cells move <= 0.07) |
+| **added texts (lane mafatih, 212 items)**: on line | (not in the app) | **94%** |
+| found within 10 s / wrong du'a | | **96% / 0.2%** |
+| jumps / early / lost per 10 min | | 1.04 / 2.69 / 0.51 |
+| follows a move within 3 s / stays put | | 89% / 86% |
+
+In flow alone: 96% on line, no jumps, 97% found within 10 s. The lane is mostly Sabah (21 of 31
+runs), and these uploaders read cleanly; it says the texts and lines work, not that these du'as are
+easier than the rest.
+
+**Unknown du'as, rebuilt.** 22 of the 25 out-of-corpus sources were readings of exactly these texts,
+so `ooc` was left with one item. `sources --lane ooc` now adds one reading each from up to 40 uploaders
+outside the held-out side (`MORE_OOC`; added to `test_voices.json` so training exports drop them; the
+phone's models predate the harvest): 45 sources, 43 voices, 24 texts, mostly ziyarat (al-Kazim,
+al-Ridha, Fatima, Baqi', Jami'a Saghira, Al-Yasin). 30 items: some du'a is shown **44%** of the time,
+with 505 texts and with 522 (`ooc505`, `ooc522`). Part of it is fair: these ziyarat share whole lines
+with ones the app has, and some recordings run into a text it does have (one titled Al-Yasin, one
+Nudba). The truth here is the labeller's "no corpus text", noisier than the other lanes.
+

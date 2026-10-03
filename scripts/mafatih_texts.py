@@ -69,6 +69,8 @@ def main() -> None:
     corpus = set()
     held = set()
     for k, dua in duas.items():
+        if k.startswith("mafatih-"):  # made from these blocks (mafatih_corpus.py), whose labels must still resolve
+            continue
         w = [x for s in dua.segments for x in normalize(s.arabic).split()]
         g = set(zip(w, w[1:], w[2:]))
         corpus |= g
