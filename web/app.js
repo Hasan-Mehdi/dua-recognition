@@ -523,7 +523,7 @@ function followConfig() {
   return { ...(following() === "reciter" ? RECITER : {}), ...urlCfg("tc") };
 }
 
-// ?sc=nextMargin:3,nextHold:0.5 / ?tc=keepInPassage:true (a;b;c for lists): stream decoder and
+// ?sc=nextMargin:0 / ?tc=switchConfirm:3,switchSure:0.9 (a;b;c for lists): stream decoder and
 // tracker settings for page runs (scripts/bench_page.py variants); the session log echoes both.
 function urlCfg(key) {
   const val = (x) => (x === "true" ? true : x === "false" ? false : Number.isNaN(Number(x)) ? x : Number(x));

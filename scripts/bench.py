@@ -1097,7 +1097,7 @@ def _same_text(shown: list, truth_word: list, ix, k: int) -> list:
 
 # TrackerConfig fields added after the tracker cache was built, with the value that changes
 # nothing: left out of the cache key while at it, so adding a switch keeps every cached run.
-_LATE_FIELDS = {"keep_in_passage": False, "switch_confirm": 0, "switch_hold_mass": 0.05, "switch_sure": None}
+_LATE_FIELDS = {"switch_confirm": 0, "switch_hold_mass": 0.05, "switch_sure": None}
 
 
 class _ConfigKey:
@@ -1503,7 +1503,7 @@ def cmd_score(args) -> None:
         elif ";" in v:
             sc_kw[k] = tuple(float(x) for x in v.split(";"))
         else:
-            sc_kw[k] = int(v) if k in ("line_steps", "next_steps", "gate_words", "switch_show_steps") else float(v)
+            sc_kw[k] = int(v) if k in ("line_steps", "next_steps", "gate_words") else float(v)
     init = (cfg_kw, fw_kw, asr_tag, ctc_tag, args.delay, args.follow_delay, args.display, sc_kw, args.same_text)
     results = {}
     with Pool(args.workers, initializer=_worker_init, initargs=init) as pool:

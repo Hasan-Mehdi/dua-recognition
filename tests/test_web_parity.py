@@ -57,14 +57,14 @@ def test_js_tracker_matches_python(tmp_path, lead, drop, pauses, pop, shared):
     rng = random.Random(3)
     quiet = [rng.choice([0.0, 0.0, 0.0, 0.2, 0.7, 1.5, 3.0]) if pauses else 0.0 for _ in texts]
     rules = {"still_motion_after": 0.3, "lead_cross_quiet": 0.25, "retreat_after": 1.0} if pauses else {}
-    rules |= {"keep_in_passage": True, "switch_confirm": 2, "switch_sure": 0.9} if shared else {}
+    rules |= {"switch_confirm": 2, "switch_sure": 0.9} if shared else {}
     tracker = Tracker(CorpusIndex(corpus), TrackerConfig(**rules, popularity=pop))
     expected = []
     for t, q in zip(texts, quiet):
         p = tracker.update(t, 1.0, lead, quiet=q)
         expected.append([p.dua, p.segment, p.word])
     js_rules = json.dumps({**({"stillMotionAfter": 0.3, "leadCrossQuiet": 0.25, "retreatAfter": 1.0} if pauses else {}),
-                           "popularity": pop, **({"keepInPassage": True, "switchConfirm": 2, "switchSure": 0.9} if shared else {})})
+                           "popularity": pop, **({"switchConfirm": 2, "switchSure": 0.9} if shared else {})})
 
     payload = [{"id": d.id, "name_en": d.name_en, "name_ar": d.name_ar, "rec": d.recordings,
                 "segments": [{"id": s.id, "ar": s.arabic} for s in d.segments]} for d in corpus.values()]

@@ -85,7 +85,7 @@ def main() -> None:
     items = bench.load_items(args.scenarios or None, split=args.split)
     if args.lane:
         items = [i for i in items if i["lane"] == args.lane]
-    sc_kw = _kv(args.sc, ints=("line_steps", "next_steps", "gate_words", "switch_show_steps"))
+    sc_kw = _kv(args.sc, ints=("line_steps", "next_steps", "gate_words"))
     init = (_kv(args.tracker), {}, bench.ASR_TAG, bench.CTC_TAG, 1.2, 0.15, "stream", sc_kw, args.same_text)
     rows = []
     with Pool(args.workers, initializer=_init, initargs=init) as pool:

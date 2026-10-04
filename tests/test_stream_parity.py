@@ -85,7 +85,7 @@ def test_numba_equals_numpy():
 @pytest.mark.parametrize("extra", [{}, {"trackerWeight": 0.0, "nextSteps": 1}, {"quietPen": 0.0, "interjection": ""},
                                    {"nextMargin": 3.0, "nextHold": 0.5, "gateWords": 2},
                                    {"nextMargin": 2.0, "nextHold": 0.3, "nextSlack": 0.5, "gateTentative": False},
-                                   {"switchShowSteps": 2, "_flip": True}, {"_flip": True}])
+                                   {"_flip": True}, {"_flip": True, "nextMargin": 0.0}])
 def test_js_stream_matches_python(tmp_path, extra):
     extra = dict(extra)
     flip = extra.pop("_flip", False)  # the tracker reports another du'a for a while (a shared passage)
@@ -118,10 +118,9 @@ def test_js_stream_matches_python(tmp_path, extra):
     py_cfg = StreamConfig(tracker_weight=js_cfg["trackerWeight"], next_steps=js_cfg["nextSteps"],
                           quiet_pen=js_cfg["quietPen"],
                           interjections=(js_cfg["interjection"],) if js_cfg["interjection"] else (),
-                          next_margin=js_cfg.get("nextMargin", 0.0), next_hold=js_cfg.get("nextHold", 0.5),
+                          next_margin=js_cfg.get("nextMargin", 3.0), next_hold=js_cfg.get("nextHold", 0.3),
                           next_slack=js_cfg.get("nextSlack", 1.0),
-                          gate_words=js_cfg.get("gateWords", 2), gate_tentative=js_cfg.get("gateTentative", True),
-                          switch_show_steps=js_cfg.get("switchShowSteps", 0))
+                          gate_words=js_cfg.get("gateWords", 2), gate_tentative=js_cfg.get("gateTentative", True))
 
     def mass_fn(anchor):
         if anchor is None:

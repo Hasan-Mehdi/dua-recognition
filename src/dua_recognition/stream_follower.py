@@ -90,13 +90,16 @@ class StreamConfig:
     # belief's word, at least `gate_words`) over the same words of the lines they could be instead:
     # line k again, k-1..k-3 back, k+2..k+4 ahead, by `next_margin` nats (each alternative's belief
     # with its own transition cost taken back off, so the prior doesn't decide); or after `next_hold`
-    # s of steps in a row with no alternative ahead by more than `next_slack` nats. An alternative
+    # s of audio, steps in a row, with no alternative ahead by more than `next_slack` nats (seconds,
+    # not steps: on a phone the steps come 0.15-0.2 s apart). An alternative
     # that reads the same words up to the belief's word (refrains: every line of Baha opens alike)
     # can't be told apart by listening yet and is left out; with none left the move is shown as
     # without the gate.
     # Alternatives out of the beam count as absent: with only those, only the hold can commit.
-    next_margin: float = 0.0
-    next_hold: float = 0.5
+    # On since 2026-10-04 (margin 3, hold 0.3; next_margin 0 = off): on held-out voices jumps -23%,
+    # early moves -26%, lines entered 0.06 s later (docs/results/jumps.md).
+    next_margin: float = 3.0
+    next_hold: float = 0.3
     next_slack: float = 1.0
     gate_words: int = 2
     gate_tentative: bool = True  # judge on the newest, tentative frames too (False: committed only)
@@ -109,9 +112,6 @@ class StreamConfig:
     # share a passage (Ayat al-Kursi in Namaz-e-Wahshat and Eid-e-Mubahila) flip the tracker's du'a for a
     # moment, and starting over there showed a line of the other text.
     switch_s: float = 2.0
-    # ...and then its word is shown once it holds line_p of the belief for this many steps (0 = at
-    # once): the belief seeded from the tracker's lines may still sit on the wrong one.
-    switch_show_steps: int = 0
     # A beam (0 = off: every line every frame, too slow for Kumayl on a phone): after each step only
     # lines holding at least `beam` of the belief, `beam_margin` lines either side (back and skip
     # moves land there), the shown word's line and every line the tracker puts `propose_mass` on
@@ -535,7 +535,8 @@ class StreamFollower:
         self.word: int | None = None
         self._cand: int | None = None
         self._cand_n = 0
-        self._gate_n = 0  # steps in a row a move into the next line has leant on the frames
+        self._gate_s = 0.0  # audio (s) a move into the next line has leant on the frames, steps in a row
+        self._t_step: float | None = None  # the last step's time
         self._t_stream = None  # end time of the last committed frame
         self._last_anchor_t = None
         self._lapse_since = None
@@ -638,10 +639,8 @@ class StreamFollower:
                 self.L[a:b] = NEG
                 self.B[a:b] = NEG
             self.active = on.astype(np.uint8)
-        self._cand, self._cand_n, self._gate_n = None, 0, 0
-        if self.word is None or self.cfg.switch_show_steps <= 0:
-            self.word = int(hmm_word)
-        # else the old du'a's word stays on screen until _step sees the new one hold (switch_show_steps)
+        self._cand, self._cand_n, self._gate_s = None, 0, 0.0
+        self.word = int(hmm_word)
 
     def _advance(self, L, B, F, IL, IB, frames: np.ndarray):
         dd = self._dua(self.dua)
@@ -794,6 +793,9 @@ class StreamFollower:
         (the page's stop detector); `quiet_then`: the same `lookahead` earlier (None: quiet_now
         less the lookahead). Returns the word to show (None: nothing)."""
         ix, cfg = self.ix, self.cfg
+        # the audio this step adds (the page's steps come further apart on a slow phone)
+        dt = cfg.hop if self._t_step is None else min(max(t - self._t_step, 0.0), 1.0)
+        self._t_step = t
         if hmm_word is None:  # the tracker has lost the du'a: a lull, a long pause, or a text it doesn't know
             if self.dua is None:
                 return None
@@ -806,8 +808,6 @@ class StreamFollower:
                 self.reset()
                 return None
             hmm_word = self.word  # carry on in the du'a it was in
-            if ix.word_dua[hmm_word] != self.dua:  # (a du'a change not shown yet: on in the new one)
-                hmm_word = self._dua(self.dua).lo
         else:
             self._lapse_since = None
         d = int(ix.word_dua[hmm_word])
@@ -847,8 +847,7 @@ class StreamFollower:
         # stalled while the reader sounds, the tracker well ahead (or on another line): push
         if (cfg.push_p > 0 and self._shown_since is not None and t - self._shown_since >= cfg.stuck_s
                 and quiet_now is not None and quiet_now < cfg.quiet_s and self.word is not None
-                and hmm_word is not None and ix.word_dua[hmm_word] == self.dua
-                and ix.word_dua[self.word] == self.dua and self._lapse_since is None):
+                and hmm_word is not None and ix.word_dua[hmm_word] == self.dua and self._lapse_since is None):
             dd0 = self._dua(self.dua)
             ahead = hmm_word - self.word >= cfg.push_words
             other = dd0.line_of_word[hmm_word - dd0.lo] != dd0.line_of_word[self.word - dd0.lo] and hmm_word > self.word
@@ -866,25 +865,16 @@ class StreamFollower:
         pw, pf = self.posterior(L, B, F, IL, IB)
         dd = self._dua(self.dua)
         if pf > 0.5:  # talking, or something else: hold
-            self._cand, self._cand_n, self._gate_n = None, 0, 0
+            self._cand, self._cand_n, self._gate_s = None, 0, 0.0
             return self.word
         best = int(np.argmax(pw))
         w = dd.lo + best
         cur = self.word
         if cur is None or ix.word_dua[cur] != self.dua:
-            if cur is None or cfg.switch_show_steps <= 0:
-                self.word = w
-                return w
-            if pw[best] < cfg.line_p:  # a du'a change: the old du'a stays on screen until this holds
-                self._cand, self._cand_n = None, 0
-                return cur
-            self._cand_n = self._cand_n + 1 if self._cand == w else 1
-            self._cand = w
-            if self._cand_n >= cfg.switch_show_steps:
-                self.word, self._cand, self._cand_n = w, None, 0
-            return self.word
+            self.word = w
+            return w
         if w == cur:
-            self._cand, self._cand_n, self._gate_n = None, 0, 0
+            self._cand, self._cand_n, self._gate_s = None, 0, 0.0
             return cur
         k = int(dd.line_of_word[cur - dd.lo])
         same_line = dd.line_of_word[best] == k
@@ -897,7 +887,7 @@ class StreamFollower:
         else:
             need_p, need_n = cfg.line_p, cfg.line_steps
         if pw[best] < need_p:
-            self._cand, self._cand_n, self._gate_n = None, 0, 0
+            self._cand, self._cand_n, self._gate_s = None, 0, 0.0
             return cur
         self._cand_n = self._cand_n + 1 if self._cand == w else 1
         self._cand = w
@@ -905,12 +895,12 @@ class StreamFollower:
         if into_next and cfg.next_margin > 0:
             pg = pw if cfg.gate_tentative else self.posterior(self.L, self.B, self.F, self.IL, self.IB)[0]
             m = self._next_margin(dd, k, pg, best)
-            self._gate_n = self._gate_n + 1 if m >= -cfg.next_slack else 0
-            gate = m >= cfg.next_margin or self._gate_n >= int(cfg.next_hold / cfg.hop + 0.5)
+            self._gate_s = self._gate_s + dt if m >= -cfg.next_slack else 0.0
+            gate = m >= cfg.next_margin or self._gate_s >= cfg.next_hold - 1e-3
         else:
-            self._gate_n = 0
+            self._gate_s = 0.0
         if self._cand_n >= need_n and gate:
-            self.word, self._cand, self._cand_n, self._gate_n = w, None, 0, 0
+            self.word, self._cand, self._cand_n, self._gate_s = w, None, 0, 0.0
         return self.word
 
     def _next_margin(self, dd: _Dua, k: int, pw: np.ndarray, best: int) -> float:

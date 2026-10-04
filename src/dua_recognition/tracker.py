@@ -186,12 +186,11 @@ class TrackerConfig:
     # min_dua_confidence, the bar to appear): a threshold with hysteresis.
     keep_dua_confidence: float | None = None
     # Texts that read a passage word for word (Ayat al-Kursi in Namaz-e-Wahshat, Eid-e-Mubahila and
-    # Sahifa 54): keep_in_passage holds the du'a on screen while the passage is shared even if it
-    # was never told apart (else the pick among identical texts flips update by update), and
-    # another du'a replaces the one on screen only once it has stood alone on top for
+    # Sahifa 54): another du'a replaces the one on screen only once it has stood alone on top for
     # switch_confirm updates in a row while the one on screen still holds switch_hold_mass (at
-    # the end of the passage the other text led for one update).
-    keep_in_passage: bool = False
+    # the end of the passage the other text led for one update). Off (0): it fixed Hasan's
+    # Namaz-e-Wahshat sessions but held Ramadan day 16 over Iftitah on held-out voices
+    # (docs/results/jumps.md).
     switch_confirm: int = 0
     switch_hold_mass: float = 0.05
     # ...unless it has clearly won: at this much of the belief it replaces the one on screen at once
@@ -647,7 +646,7 @@ class Tracker:
                     self._alone_cand, self._found_alone = None, True
             else:
                 self._alone_cand, self._found_alone = None, True
-        elif self._reported in group and (self._found_alone or cfg.keep_in_passage):
+        elif self._reported in group and self._found_alone:
             d = self._reported
         else:
             d = min(group, key=lambda g: self._likeliest(g) - ix.dua_word_span[g][0])

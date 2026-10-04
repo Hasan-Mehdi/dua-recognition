@@ -47,8 +47,8 @@ export const STREAM_DEFAULTS = {
   nextP: 0.6,
   nextSteps: 2,
   // Into the next line on evidence (nextMargin 0 = off): see StreamConfig.next_margin.
-  nextMargin: 0,
-  nextHold: 0.5,
+  nextMargin: 3,
+  nextHold: 0.3,
   nextSlack: 1.0,
   gateWords: 2,
   gateTentative: true,
@@ -60,7 +60,6 @@ export const STREAM_DEFAULTS = {
   // A du'a change counts once the tracker has held the new du'a this long (0 = at once): texts that
   // share a passage flip the tracker's du'a for a moment.
   switchS: 2.0,
-  switchShowSteps: 0, // ...then its word shows once it holds lineP this many steps (StreamConfig)
   // The beam (0 = off): only lines holding beam of the belief, beamMargin lines either side, the shown
   // word's line and the tracker's proposals (proposeMass, +-1) are updated (stream_follower.py _prune).
   beam: 1e-6,
@@ -112,7 +111,8 @@ export class StreamFollower {
     this.word = null;
     this.cand = null;
     this.candN = 0;
-    this.gateN = 0; // steps in a row a move into the next line has leant on the frames
+    this.gateS = 0; // audio (s) a move into the next line has leant on the frames, steps in a row
+    this.tStep = null; // the last step's time
     this.tStream = null;
     this.lastAnchorT = null;
     this.lapseSince = null;
@@ -243,9 +243,8 @@ export class StreamFollower {
     }
     this.cand = null;
     this.candN = 0;
-    this.gateN = 0;
-    // else the old du'a's word stays on screen until step() sees the new one hold (switchShowSteps)
-    if (this.word == null || this.cfg.switchShowSteps <= 0) this.word = hmmWord;
+    this.gateS = 0;
+    this.word = hmmWord;
   }
 
   static _copy(st) {
@@ -563,6 +562,9 @@ export class StreamFollower {
   _step(frames, T, C, t, hmmWord, quietNow = null, lineMass = null, anchorT = null, quietThen = null) {
     const ix = this.ix;
     const cfg = this.cfg;
+    // the audio this step adds (steps come further apart on a slow phone)
+    const dt = this.tStep == null ? cfg.hop : Math.min(Math.max(t - this.tStep, 0), 1);
+    this.tStep = t;
     if (hmmWord == null) {
       if (this.dua == null) return null;
       if (this.lapseSince == null) {
@@ -575,7 +577,6 @@ export class StreamFollower {
         return null;
       }
       hmmWord = this.word;
-      if (ix.wordDua[hmmWord] !== this.dua) hmmWord = this._dua(this.dua).lo; // a du'a change not shown yet
       lineMass = null;
     } else this.lapseSince = null;
     let d = ix.wordDua[hmmWord];
@@ -618,8 +619,7 @@ export class StreamFollower {
     this.steps++;
     // stalled while the reader sounds, the tracker well ahead (or on a later line): push
     if (cfg.pushP > 0 && this.shownSince != null && t - this.shownSince >= cfg.stuckS && quietNow != null
-        && quietNow < cfg.quietS && this.word != null && ix.wordDua[hmmWord] === this.dua
-      && ix.wordDua[this.word] === this.dua && this.lapseSince == null) {
+        && quietNow < cfg.quietS && this.word != null && ix.wordDua[hmmWord] === this.dua && this.lapseSince == null) {
       const ahead = hmmWord - this.word >= cfg.pushWords;
       const other = dd0(this).lineOfWord[hmmWord - dd0(this).lo] !== dd0(this).lineOfWord[this.word - dd0(this).lo]
         && hmmWord > this.word;
@@ -640,7 +640,7 @@ export class StreamFollower {
     if (pf > 0.5) {
       this.cand = null;
       this.candN = 0;
-      this.gateN = 0;
+      this.gateS = 0;
       return this.word;
     }
     let best = 0;
@@ -648,28 +648,13 @@ export class StreamFollower {
     const w = dd.lo + best;
     const cur = this.word;
     if (cur == null || ix.wordDua[cur] !== this.dua) {
-      if (cur == null || cfg.switchShowSteps <= 0) {
-        this.word = w;
-        return w;
-      }
-      if (pw[best] < cfg.lineP) {
-        this.cand = null;
-        this.candN = 0;
-        return cur;
-      }
-      this.candN = this.cand === w ? this.candN + 1 : 1;
-      this.cand = w;
-      if (this.candN >= cfg.switchShowSteps) {
-        this.word = w;
-        this.cand = null;
-        this.candN = 0;
-      }
-      return this.word;
+      this.word = w;
+      return w;
     }
     if (w === cur) {
       this.cand = null;
       this.candN = 0;
-      this.gateN = 0;
+      this.gateS = 0;
       return cur;
     }
     const lineB = dd.lineOfWord[best];
@@ -692,7 +677,7 @@ export class StreamFollower {
     if (pw[best] < needP) {
       this.cand = null;
       this.candN = 0;
-      this.gateN = 0;
+      this.gateS = 0;
       return cur;
     }
     this.candN = this.cand === w ? this.candN + 1 : 1;
@@ -701,16 +686,16 @@ export class StreamFollower {
     if (intoNext && cfg.nextMargin > 0) {
       const pg = cfg.gateTentative ? pw : this.posterior(this.st).pw;
       const m = this._nextMargin(dd, lineC, pg, best);
-      this.gateN = m >= -cfg.nextSlack ? this.gateN + 1 : 0;
-      gate = m >= cfg.nextMargin || this.gateN >= Math.floor(cfg.nextHold / cfg.hop + 0.5);
+      this.gateS = m >= -cfg.nextSlack ? this.gateS + dt : 0;
+      gate = m >= cfg.nextMargin || this.gateS >= cfg.nextHold - 1e-3;
     } else {
-      this.gateN = 0;
+      this.gateS = 0;
     }
     if (this.candN >= needN && gate) {
       this.word = w;
       this.cand = null;
       this.candN = 0;
-      this.gateN = 0;
+      this.gateS = 0;
     }
     return this.word;
   }

@@ -138,8 +138,8 @@ export const DEFAULTS = {
   // line stays until the evidence passes it; a step back waits for a second update; once locked,
   // "not in the corpus" needs worse windows; a du'a on screen stays down to a lower bar.
   leadCrossWords: Infinity, seekPinsLine: true, backConfirm: 2, nullRateLocked: 0.55, keepDuaConfidence: null,
-  // Shared passages (TrackerConfig.keep_in_passage / switch_confirm / switch_hold_mass).
-  keepInPassage: false, switchConfirm: 0, switchHoldMass: 0.05, switchSure: null,
+  // Shared passages (TrackerConfig.switch_confirm / switch_hold_mass / switch_sure).
+  switchConfirm: 0, switchHoldMass: 0.05, switchSure: null,
   // Stops (TrackerConfig.retreat_in_line / still_catch_up in tracker.py): after a second of
   // silence a highlight ahead of the evidence in its own line steps back too; while silent the
   // display may still move forward to the evidence.
@@ -542,7 +542,7 @@ export class Tracker {
         this.aloneCand = null;
         this.foundAlone = true;
       }
-    } else if (group.includes(this.reported) && (this.foundAlone || cfg.keepInPassage)) {
+    } else if (group.includes(this.reported) && this.foundAlone) {
       d = this.reported;
     } else {
       const offset = (g) => this._likeliest(g) - ix.duaWordSpan[g][0];
