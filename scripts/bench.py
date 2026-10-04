@@ -1050,27 +1050,43 @@ def _worker_init(cfg_kw: dict, fw_kw: dict, asr_tag: str, ctc_tag: str, delay: f
 
 
 def _passages(ix, k: int) -> dict:
-    """k-word passages more than one du'a reads: words -> {du'a index: [its last word, ...]}."""
-    text = [w.text for w in ix.words]
+    """k-word passages more than one du'a reads: words -> {du'a index: [its last word, ...]}. Words
+    as the tracker compares texts (tracker._passage_keys: a lone و joined to the word after it, a
+    lone ء to the word before), so Ayat al-Kursi spelled "و لا نوم" in one text and "ولا نوم" in
+    another is the same passage."""
+    from dua_recognition.tracker import _passage_keys
+
+    keys, key_of, spans = _passage_keys([w.text for w in ix.words], ix.dua_word_span)
+    last_word = np.zeros(len(keys), dtype=np.int64)
+    for w, kk in enumerate(key_of):
+        last_word[kk] = max(last_word[kk], w)
+    _W["pkeys"] = (keys, key_of, spans)
     seen: dict = {}
-    for d, (lo, hi) in enumerate(ix.dua_word_span):
-        for e in range(lo + k - 1, hi):
-            seen.setdefault(tuple(text[e - k + 1 : e + 1]), {}).setdefault(d, []).append(e)
+    for d, (k0, k1) in enumerate(spans):
+        for e in range(k0 + k - 1, k1):
+            seen.setdefault(tuple(keys[e - k + 1 : e + 1]), {}).setdefault(d, []).append(int(last_word[e]))
     return {key: v for key, v in seen.items() if len(v) > 1}
+
+
+def _window(ix, w: int, k: int) -> tuple | None:
+    """The k words (_passages' spelling) ending at word w, None if they reach past its du'a's start."""
+    keys, key_of, spans = _W["pkeys"]
+    e = int(key_of[w])
+    return tuple(keys[e - k + 1 : e + 1]) if e - k + 1 >= spans[ix.word_dua[w]][0] else None
 
 
 def _same_text(shown: list, truth_word: list, ix, k: int) -> list:
     """The display moved onto the reader's du'a wherever it shows the same k words the reader's
     du'a reads (Ayat al-Kursi in three texts, the salam passages of the ziyarat): no display
     could tell those apart, and the reader sees their own words."""
-    passages, text, out = _W["passages"], [w.text for w in ix.words], []
+    passages, out = _W["passages"], []
     for s, tw in zip(shown, truth_word):
         if s is None or tw is None or s[0] == ix.dua_ids[ix.word_dua[tw]]:
             out.append(s)
             continue
         w, td = s[2], int(ix.word_dua[tw])
-        whole = w - k + 1 >= ix.dua_word_span[ix.word_dua[w]][0]  # k words inside the shown du'a
-        hits = passages.get(tuple(text[w - k + 1 : w + 1]), {}).get(td) if whole else None
+        win = _window(ix, w, k)  # (None: the k words would reach past the shown du'a's start)
+        hits = passages.get(win, {}).get(td) if win else None
         if not hits:
             out.append(s)
             continue
@@ -1275,9 +1291,8 @@ def metrics(it: dict, shown: list, ix) -> dict:
     m["found_n"] = 1
     m["found_10s"] = int(found is not None and ticks[found] - first <= 10.0)
     if _W.get("same_text"):  # the clock from the first words no other text reads (basmala, salawat first)
-        k, text = _W["same_text"], [w.text for w in ix.words]
-        own = [(w, a) for w, a, _ in gw if w - k + 1 >= ix.dua_word_span[ix.word_dua[w]][0]
-               and tuple(text[w - k + 1 : w + 1]) not in _W["passages"]]
+        k = _W["same_text"]
+        own = [(w, a) for w, a, _ in gw if (win := _window(ix, w, k)) is not None and win not in _W["passages"]]
         if own:
             m["found_d_n"] = 1
             m["found_d10s"] = int(found is not None and ticks[found] - own[0][1] <= 10.0)

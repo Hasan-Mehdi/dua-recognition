@@ -299,7 +299,10 @@ class Tracker:
         self._found_alone = False  # ...and it was told apart from every other text
         self._n_updates = 0
         self._alone_cand: int | None = None  # a du'a standing alone on top, not shown yet...
-        self._alone_first = 0  # ...since this update
+        self._alone_first = 0  # ...since this update...
+        self._alone_last = 0  # ...and last seen alone in this one (position() runs more than once an
+        # update: on the belief ahead for the display and on the evidence; one may still see a shared
+        # passage while the other sees the new du'a alone)
 
     # -- predict ---------------------------------------------------------
     def _locked(self) -> bool:
@@ -635,8 +638,9 @@ class Tracker:
                     and dua_mass[self._reported] >= cfg.switch_hold_mass
                     and (cfg.switch_sure is None or conf < cfg.switch_sure))
             if held:
-                if self._alone_cand != d:
+                if self._alone_cand != d or self._n_updates - self._alone_last > 1:
                     self._alone_cand, self._alone_first = d, self._n_updates
+                self._alone_last = self._n_updates
                 if self._n_updates - self._alone_first + 1 < cfg.switch_confirm:
                     d = self._reported  # not yet: the du'a on screen stays
                 else:
@@ -645,9 +649,7 @@ class Tracker:
                 self._alone_cand, self._found_alone = None, True
         elif self._reported in group and (self._found_alone or cfg.keep_in_passage):
             d = self._reported
-            self._alone_cand = None
         else:
-            self._alone_cand = None
             d = min(group, key=lambda g: self._likeliest(g) - ix.dua_word_span[g][0])
             self._found_alone = False
         self._reported = d

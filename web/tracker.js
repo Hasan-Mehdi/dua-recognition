@@ -205,7 +205,8 @@ export class Tracker {
     this.foundAlone = false; // ...and it was told apart from every other text
     this.nUpdates = 0;
     this.aloneCand = null; // a du'a standing alone on top, not shown yet...
-    this.aloneFirst = 0; // ...since this update
+    this.aloneFirst = 0; // ...since this update...
+    this.aloneLast = 0; // ...and last seen alone in this one (position() runs more than once an update)
     const k = Math.max(1, this.cfg.speeds.length);
     this.tempo = new Float64Array(k).fill(1 / k);
     this.fwdBySpeed = null;
@@ -527,10 +528,11 @@ export class Tracker {
       const held = cfg.switchConfirm > 0 && this.reported != null && d !== this.reported
         && mass[this.reported] >= cfg.switchHoldMass && (cfg.switchSure == null || conf < cfg.switchSure);
       if (held) {
-        if (this.aloneCand !== d) {
+        if (this.aloneCand !== d || this.nUpdates - this.aloneLast > 1) {
           this.aloneCand = d;
           this.aloneFirst = this.nUpdates;
         }
+        this.aloneLast = this.nUpdates;
         if (this.nUpdates - this.aloneFirst + 1 < cfg.switchConfirm) d = this.reported;
         else {
           this.aloneCand = null;
@@ -542,9 +544,7 @@ export class Tracker {
       }
     } else if (group.includes(this.reported) && (this.foundAlone || cfg.keepInPassage)) {
       d = this.reported;
-      this.aloneCand = null;
     } else {
-      this.aloneCand = null;
       const offset = (g) => this._likeliest(g) - ix.duaWordSpan[g][0];
       d = group.reduce((a, b) => (offset(b) < offset(a) ? b : a));
       this.foundAlone = false;
