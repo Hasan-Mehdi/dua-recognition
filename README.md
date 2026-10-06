@@ -26,7 +26,7 @@
 
 ## What it does
 
-- **Names the du'a** from anywhere in a recitation: 522 du'as, ziyarat and munajat, 91% within 10 s
+- **Names the du'a** from anywhere in a recitation: 522 du'as, ziyarat and munajat; 95% within 10 s of the first words no other text shares
 - **Follows the line and the word**, with Arabic, transliteration and English side by side
 - **Keeps up with real reading:** pauses, repeated lines, going back, skipping, talk or a salawat between lines
 - **Practice mode:** checks a reading line by line and marks the lines left out; the text can stay hidden until you say it
@@ -38,19 +38,22 @@
 
 The [scenario bench](docs/evaluation.md#the-scenario-bench) plays voices held out of training
 through 24 ways people read (pauses, repeats, going back, talk between lines, a big hall, a
-distant phone…) and scores what the page shows. Test voices, the page as of 2026-10-04:
+distant phone…) and scores what the page shows. Test voices, the page as of 2026-10-05:
 617 items, 22 h, 55 voices.
 
-| voices | on the line | on the word | du'a named ≤10 s | jumps per 10 min | wrong du'a shown |
+| voices | on the line | on the word | du'a named ≤10 s\* | jumps per 10 min | wrong du'a shown |
 |---|---:|---:|---:|---:|---:|
-| studio reciters | 89% | 75% | 75% | 1.24 | 0.3% |
+| studio reciters | 89% | 75% | 99% | 1.24 | 0.3% |
 | du'a nights (crowd, PA echo) | 93% | 68% | 100% | 2.51 | 0.6% |
-| uploaded recitations | 88% | 64% | 90% | 2.29 | 0.7% |
+| uploaded recitations | 88% | 64% | 92% | 2.29 | 0.7% |
 | Mafatih texts | 94% | 77% | 96% | 0.59 | 0.1% |
-| **all** | **91%** | **71%** | **91%** | **1.49** | **0.4%** |
+| **all** | **91%** | **71%** | **95%** | **1.49** | **0.4%** |
+
+\* Timed from the first words no other text shares. From the start of reading it's 91% (studio 75%):
+many du'as open with words other texts have too.
 
 - **Read straight through:** 96% on the line, 0.22 jumps per 10 minutes.
-- **Weakest:** a phone far from the reader (77% on the line, named within 10 s 53% of the time),
+- **Weakest:** a phone far from the reader (77% on the line, named within 10 s\* 60% of the time),
   a big hall (82%), readers who jump around the du'a (62%), and du'as the app doesn't have,
   which are often shown as one it does ([known limits](docs/evaluation.md#known-limits)).
 - **Practice mode:** catches 93% of lines left out and 97% of forgotten endings; marks 0.12 read
