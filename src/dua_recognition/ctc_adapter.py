@@ -146,6 +146,10 @@ class TokenFollower(LocalFollower):
         sa, sb = self._tok_start[a], self._tok_start[b]
         return self._tok[sa:sb], self._tok_owner[sa:sb]
 
+    def _jump_search(self, lp: np.ndarray, hmm_word: int, line_mass=None) -> None:
+        # The jump search reads the letter model's columns (ix.letters): a token model has none.
+        return None
+
 
 def expand(stored: np.ndarray, cols: np.ndarray, width: int) -> np.ndarray:
     """A dump restricted to `cols` (blank, best non-blank, one du'a's tokens) back to full width."""

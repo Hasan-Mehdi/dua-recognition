@@ -666,8 +666,18 @@ class StreamFollower:
                                 dd.word_first, dd.word_last, dd.line_first_word, dd.line_last_word, dd.line_of_word,
                                 dd.mid_cost, dd.line_start_letter, dd.log_words_in_line,
                                 np.array(cfg, dtype=np.float64), ri, diffi, exiti)
+        # The beam, as _advance_beam: lines outside it start NEG and stay so (what flows into them in a
+        # frame is dropped before the next), else the fallback isn't the page's decoder.
+        off = None
+        if self.cfg.beam > 0 and self.active is not None and not self.active.all():
+            off = self.active == 0
+            off_letter = np.repeat(off, dd.line_hi - dd.line_lo)
         for f in frames:
             L, B, F, IL, IB = _frame_numpy(L, B, F, IL, IB, f / self.cfg.temp, dd, cfg, ri, diffi, exiti)
+            if off is not None:
+                L[off_letter], B[off_letter], F[off] = NEG, NEG, NEG
+                if IL.size:
+                    IL[off], IB[off] = NEG, NEG
             m = max(float(np.max(L)), float(np.max(B)), float(np.max(F)), float(np.max(IL)) if IL.size else NEG,
                     float(np.max(IB)) if IB.size else NEG)
             L, B, F, IL, IB = L - m, B - m, F - m, IL - m, IB - m

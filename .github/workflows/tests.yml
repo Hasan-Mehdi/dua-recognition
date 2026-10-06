@@ -11,5 +11,5 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,web]"  # web: tests/test_server_ear.py imports app/server.py
       - run: pytest -q
