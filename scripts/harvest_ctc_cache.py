@@ -58,8 +58,11 @@ def cut_clips(rows: list[dict], clips: Path, jobs: int) -> list[dict]:
 
     with ThreadPoolExecutor(jobs) as ex:
         out = list(ex.map(one, enumerate(rows)))
-    n_short = sum(1 for r in out if np.load(r["clip"], mmap_mode="r").shape[0] < SR)
-    print(f"  {len(out)} clips cut ({n_short} under 1 s)", flush=True)
+    # A window past a recording's timestamp span cuts to nothing (early yt downloads repeat a chunk):
+    # drop it rather than pair silence with the teacher's letters (4 such rows were in h1).
+    keep = [r for r in out if np.load(r["clip"], mmap_mode="r").shape[0] >= SR]
+    print(f"  {len(out)} clips cut, {len(out) - len(keep)} under 1 s dropped", flush=True)
+    out = keep
     return out
 
 

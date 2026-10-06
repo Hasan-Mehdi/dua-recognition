@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -132,9 +133,28 @@ def frames_path(platform: str, meta: dict) -> Path:
     return FRAMES / platform / f"{meta['id']}.npz"
 
 
-def cmd_frames(args) -> None:
-    from faster_whisper.audio import decode_audio
+def decode_pcm(path) -> np.ndarray:
+    """16 kHz mono float32 of the whole file by the ffmpeg CLI, the decoder the clip cutters use.
+    PyAV (faster_whisper's decode_audio) stopped early in some archive mp3s and aparat m4as (2026-10-04)."""
+    p = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-vn", "-ac", "1", "-ar", str(SR),
+                        "-f", "f32le", "-"], capture_output=True)
+    if p.returncode != 0 and not p.stdout:
+        raise RuntimeError(p.stderr.decode(errors="replace")[-200:])
+    return np.frombuffer(p.stdout, np.float32).copy()
 
+
+def ts_span(path) -> float | None:
+    """The container's timestamp span (ffprobe), which ffmpeg -ss seeks within. Early yt downloads repeat
+    a chunk, so they hold more samples than this span; windows past it cut to nothing."""
+    p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                       capture_output=True, text=True)
+    try:
+        return float(p.stdout.strip())
+    except ValueError:
+        return None
+
+
+def cmd_frames(args) -> None:
     teacher = Teacher(Path(args.model))
     vocab_ids = {t: i for i, t in teacher.inv.items()}
     (FRAMES / "vocab.json").parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +178,7 @@ def cmd_frames(args) -> None:
 
         def _decode(path):
             try:
-                return decode_audio(str(path), sampling_rate=SR), None
+                return decode_pcm(path), None
             except Exception as e:  # noqa: BLE001
                 return None, e
 
@@ -685,7 +705,7 @@ def cmd_export(args) -> None:
     dupes = _duplicates(metas)
     held_voice, hv_stats = _voice_holdout(metas, args.val_pct)
     print(f"voice hold-out: {hv_stats}", flush=True)
-    skipped = {"test voice": 0, "duplicate": 0, "held-out text": 0, "held-out voice": 0}
+    skipped = {"test voice": 0, "duplicate": 0, "held-out text": 0, "held-out voice": 0, "past the end": 0}
     for lab_path in sorted(LABELS.glob("*/*.json")):
         res = json.loads(lab_path.read_text(encoding="utf-8"))
         key = (res["platform"], res["id"])
@@ -717,6 +737,10 @@ def cmd_export(args) -> None:
                 if cap.get("usable"):
                     continue  # the human-timed version wins
             spans = [s for s in res["spans"] if s["usable"]]
+        # More decoded audio than the platform lists: ask the container where seeks stop.
+        end = None
+        if res.get("duration", 0) > float(meta.get("duration") or 0) + 1.0:
+            end = ts_span(audio)
         for sp in spans:
             dua_id = sp["dua"]
             if dua_id in HELD_OUT_DUAS or dua_id in held_ids:
@@ -730,6 +754,9 @@ def cmd_export(args) -> None:
                 tl = toks[dua_id]
                 tf = lambda ln, tl=tl: tl.get(ln["seg"], [])  # noqa: E731
             for s, e, text in _windows(sp["lines"], tf, args.window, args.hop):
+                if end is not None and e > end + 0.25:
+                    skipped["past the end"] += 1
+                    continue
                 rows.append({"audio": str(audio.resolve()), "start": s, "end": e, "text": text, "dua": dua_id,
                              "reciter": reciter, "source": res["platform"], "rec": res["id"]})
                 d = (e - s) / 3600 * (args.hop / args.window if args.hop < args.window else 1)

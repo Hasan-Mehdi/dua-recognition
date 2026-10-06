@@ -133,6 +133,27 @@ of reverb the training added; real echo (majlis) shows none. Not adopted; the mo
 alone) it adds the same: found +1, far +27, hall +12, unknown du'a shown +2 (results `pop05_test_st8`,
 `h2c_pop05_test_st8`).
 
+**The bar was nearly out of reach (checked 2026-10-04).** The perfect ear was scored with the same settings
+(popularity 0.5, `--same-text 8`, the next-line rule off as in the runs above; `truth_pop05_test_st8`).
+Found from the first distinctive words:
+
+| test voices (586 items with a distinctive start) | found≤10s* |
+|---|---:|
+| syn-v5-ctx8ft | 94.0% (551) |
+| h2c | 94.5% (554) |
+| perfect hearing | 96.6% (566) |
+
+Better hearing can move this column by at most 2.6 points (15 items). The +2 bar asked a new ear for
+three quarters of that, and the paired noise is about 0.5 points. h2c's +0.5 says little either way.
+Perfect hearing also lifts on line only 91.3 -> 92.2%. Judge a hearing model by its hearing (CER) and
+by the cells where hearing costs most (far, hall, clip, phone call). Judge it there on real audio:
+those cells are synthetic, and the real-echo majlis lane showed no gain for h2c.
+
+Also checked that day: the harvest's "length mismatch" files didn't corrupt the training clips. The
+mismatch is a timestamp span against the sample count, or PyAV stopping early in a few mp3s. Clips cut
+by ffmpeg line up with the labels within 10 ms, and only 0.7% of the h2c harvest rows come from those
+recordings.
+
 ## The added Mafatih texts, all 17 tested
 
 Lane `mafatih` now has 3+ voices for every added text (uploaders outside the held-out side where
