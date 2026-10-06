@@ -94,7 +94,23 @@ if (cut.status) throw new Error("ffmpeg couldn't cut the clip");
 
 // -- the page, with a recorder where the engine hands it updates ---------------------
 const HOOK = "  await state.engine.start(update);\n";
-const RECORDER = `  const demo = (window.__demo ??= { updates: [], quiet: [] });
+const RECORDER = `  const demo = (window.__demo ??= { updates: [], quiet: [], letters: [] });
+  // What the CTC model heard: each new frame's best column (0 blank, else the letter 0x0620 + c),
+  // at its second in the clip, with the clip's position when the step came back (inside.html).
+  const eng = state.engine, onFrames = eng._onFrames;
+  let heardTo = -1;
+  eng._onFrames = function (data) {
+    const at = $("player").currentTime, hop = (this.ctcWindow || 2 * SR) / SR / data.T;
+    for (let k = 0; k < data.T; k++) {
+      const t = data.id / SR - (data.T - 1 - k) * hop;
+      if (t <= heardTo + 1e-6) continue;
+      let best = 0;
+      for (let c = 1; c < data.C; c++) if (data.frames[k * data.C + c] > data.frames[k * data.C + best]) best = c;
+      demo.letters.push([Number(t.toFixed(3)), best, Number(at.toFixed(3))]);
+      heardTo = t;
+    }
+    return onFrames.call(this, data);
+  };
   await state.engine.start((u) => {
     demo.updates.push({ at: $("player").currentTime, heard: state.engine.total / SR, u: JSON.parse(JSON.stringify(u)) });
     update(u);
@@ -158,7 +174,8 @@ await page.waitForFunction(async (n) => {
   return list.length > n && list.at(-1).ended;
 }, { timeout: 60_000, polling: 500 }, before);
 
-const demo = await page.evaluate(() => ({ updates: window.__demo.updates, quiet: window.__demo.quiet }));
+const demo = await page.evaluate(() => ({ updates: window.__demo.updates, quiet: window.__demo.quiet,
+  letters: window.__demo.letters }));
 // The session's log (session-log.js: a "json" RIFF chunk after the audio): what the page showed.
 const wav = Buffer.from(await page.evaluate(async () => {
   const m = await import("/session-log.js");
@@ -191,6 +208,11 @@ writeFileSync(OUT, JSON.stringify({
   quiet: demo.quiet.filter(([, q], i, a) => i === 0 || q !== a[i - 1][1]).map(([at, q]) => [Number(at.toFixed(3)), q == null ? null : Number(q.toFixed(2))]),
   shown: events,
   truth,
+  // Each Whisper update (the window it read ends at `end`; `t` is when it came back) and each CTC
+  // frame's best column, for inside.html.
+  hops: (log?.events ?? []).filter((e) => (e.type ?? e.e) === "hop" && e.skip == null)
+    .map((e) => ({ t: e.t, end: e.end, text: e.text, dua: e.dua, dua_p: e.dua_p })),
+  letters: demo.letters,
 }));
 
 // What the page showed against when the reader got there: the du'a, and each line it entered

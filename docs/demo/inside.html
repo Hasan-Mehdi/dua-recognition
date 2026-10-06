@@ -1,0 +1,282 @@
+<!doctype html>
+<!-- The README's demo (film.mjs --stage inside.html films it): the real app on one phone, replaying
+     a run capture.mjs recorded, and beside it the recording as the two models hear it. The sound
+     comes out of the phone's side, the newest nearest the phone, so the letters read right to left
+     as they were heard:
+       - Whisper's window, gold: the 6 s it last read, with what it heard above it (it names the
+         du'a and anchors the follower; every 2 s while following, as on a phone);
+       - the CTC model's window, pale: the last 2 s, read every 0.1 s, its letters written out
+         under the sound as they come back (the stream decoder places the word from them).
+     No words of its own: what each part is goes in the README's caption.
+
+       node docs/demo/capture.mjs --seconds 40 --out docs/demo/inside-runs/1-tawassul.json
+       node docs/demo/film.mjs --stage inside.html --runs docs/demo/inside-runs --fps 30 --samples 1
+       # -> data/cache/media/inside.mp4 (with the recording's sound: stays local); docs/demo.gif from it -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Inside stage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root { --ink: #efe6d0; --muted: #978f7c; --gold: #d9b46a; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden;
+    background: radial-gradient(90% 110% at 30% 50%, #121a2c, #0b101c 55%, #05070c 100%); }
+  .layer { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: none; }
+
+  /* The phone: the demo's plain modern handset (stage.html), the real app on its screen. */
+  #phone {
+    position: absolute; left: 0; top: 0; width: 418px; height: 872px; padding: 14px; border-radius: 66px;
+    transform-origin: 0 0; transform: translate(118px, 52px) scale(1.12);
+    background: linear-gradient(150deg, #474c59 0%, #1a1d25 12%, #0b0d12 45%, #12151c 80%, #3b404c 100%);
+    box-shadow: inset 0 0 0 1.2px rgba(255, 255, 255, .13), inset 0 0 0 4px #07080b, 0 0 0 1px #020304,
+      0 40px 90px rgba(0, 0, 0, .5);
+  }
+  #phone .key { position: absolute; width: 4px; border-radius: 2px; background: linear-gradient(90deg, #2a2e38, #4a4f5c); }
+  .screen { position: relative; width: 390px; height: 844px; border-radius: 52px; overflow: hidden; background: #0e1320; }
+  .screen iframe { display: block; width: 390px; height: 844px; border: 0; }
+  .glass { position: absolute; inset: 0; border-radius: 52px; pointer-events: none;
+    background: linear-gradient(116deg, transparent 30%, rgba(255, 255, 255, .06) 42%, rgba(255, 255, 255, .02) 52%, transparent 62%); }
+  #fade { background: #05070c; }
+</style>
+</head>
+<body>
+<div class="layer">
+  <div id="phone">
+    <i class="key" style="left:-3px;top:178px;height:34px"></i>
+    <i class="key" style="left:-3px;top:236px;height:62px"></i>
+    <i class="key" style="right:-3px;top:262px;height:96px"></i>
+    <div class="screen">
+      <iframe id="app" title="The app"></iframe>
+      <div class="glass"></div>
+    </div>
+  </div>
+</div>
+<canvas class="layer" id="panel" width="1920" height="1080"></canvas>
+<div class="layer" id="fade"></div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const ease = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
+
+await document.fonts.load('400 48px "Amiri"', "يا زين");
+const runs = await fetch("runs.json").then((r) => r.json()).catch(() => null)
+  ?? [await fetch("inside-runs/1-tawassul.json").then((r) => r.json())];
+const run = runs[0];
+const sounds = await fetch("sounds.json").then((r) => r.json()).catch(() => null);
+
+// -- the plan, in film seconds --------------------------------------------------------------------
+const START = 0.8; // the phone starts listening (the reciter is already heard)
+// 30 s of the run: the du'a named, then lines 41-44 (a GIF over about 10 MB loads slowly on GitHub).
+const END = START + Math.min(run.source.seconds, 30) + 0.6;
+const FADE = 0.6; // in at the start, out at the end: the GIF loops
+
+// -- the panel's geometry ----------------------------------------------------------------------------
+const NOW_X = 660; // the newest sound, by the phone
+const RIGHT = 1868; // the oldest still shown
+const PX = 124; // per second of sound
+const MID = 560, AMP = 92; // the waveform
+const BAR = 0.05; // s per bar
+const WHISPER_S = 6, CTC_S = 2;
+const GOLD = [217, 180, 106], INK = [239, 230, 208], DIM = [151, 143, 124];
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(3)})`;
+
+// The recording's loudness around the clip (film.mjs: 10 ms RMS from rms_from s), one bar per BAR s.
+const bars = (() => {
+  const s = sounds?.[0];
+  if (!s) return { at: () => 0 };
+  const per = Math.round(BAR * s.rms_hz);
+  const out = [];
+  for (let i = 0; i + per <= s.rms.length; i += per) {
+    let e = 0;
+    for (let j = i; j < i + per; j++) e += s.rms[j] * s.rms[j];
+    out.push(Math.sqrt(Math.sqrt(e / per) / s.peak));
+  }
+  return { from: s.rms_from, at: (c) => out[Math.floor((c - s.rms_from) / BAR)] ?? 0 };
+})();
+
+// What the CTC model heard, as it reads it: a letter where the best column turns to a new letter,
+// each with the clip second its step came back. It writes no spaces, and blanks inside a drawn-out
+// word last as long as those between words, so the letters run on and break only at a pause.
+const LETTER_GAP = 1.0;
+const heard = (() => {
+  const out = [];
+  let prev = 0, blankFrom = null;
+  for (const [t, col, at] of run.letters ?? []) {
+    if (col === 0) {
+      blankFrom ??= t;
+      prev = 0;
+      continue;
+    }
+    if (col !== prev) {
+      const gap = blankFrom != null && t - blankFrom >= LETTER_GAP;
+      out.push({ t, at, ch: String.fromCharCode(0x0620 + col), gap });
+    }
+    prev = col;
+    blankFrom = null;
+  }
+  return out;
+})();
+// Runs of letters between gaps: each drawn as one piece of Arabic, its right edge at its first letter.
+function runsUpTo(c) {
+  const out = [];
+  for (const h of heard) {
+    if (h.at > c) break;
+    if (h.gap || !out.length) out.push({ t: h.t, text: "", last: h.at });
+    const r = out[out.length - 1];
+    r.text += h.ch;
+    r.last = h.at;
+  }
+  return out;
+}
+const hops = (run.hops ?? []).filter((h) => h.text && h.text.trim());
+const CTC_FROM = run.letters?.length ? run.letters[0][2] : null;
+
+// -- drawing ----------------------------------------------------------------------------------------
+const cv = $("panel"), g = cv.getContext("2d");
+const xOf = (c, s) => NOW_X + (c - s) * PX; // where second s of the clip is, at clip time c
+function roundRect(x0, y0, x1, y1, r) {
+  g.beginPath();
+  g.roundRect(Math.min(x0, x1), y0, Math.abs(x1 - x0), y1 - y0, r);
+}
+function draw(t) {
+  g.clearRect(0, 0, 1920, 1080);
+  const c = demo.t0 != null ? (performance.now() - demo.t0) / 1000 : t - START; // clip seconds
+  const listening = demo.t0 != null;
+  // The CTC model runs once the du'a is named (the follower needs one): from its first step back.
+  const ctcOn = listening && CTC_FROM != null && c >= CTC_FROM;
+
+  // Whisper's latest window and the one before it, fading.
+  const k = hops.findLastIndex((h) => h.t <= c);
+  const shown = [k - 1, k].filter((i) => i >= 0).map((i) => {
+    const h = hops[i];
+    const newer = hops[i + 1] && hops[i + 1].t <= c ? hops[i + 1].t : null;
+    // One at a time: the old one goes in 0.2 s, the new one comes in after it.
+    const life = newer == null ? ease((c - h.t - 0.15) / 0.3) : 1 - ease((c - newer) / 0.2);
+    return { h, a: life, old: newer != null ? 1 : 0 };
+  }).filter((w) => w.a > 0.002);
+  const inWhisper = (s) => shown.some((w) => w.old === 0 && s <= w.h.end && s >= Math.max(0, w.h.end - WHISPER_S)) ? 1 : 0;
+
+  // The sound: bars from the newest (by the phone) to the oldest shown.
+  const first = Math.floor((c - (RIGHT - NOW_X) / PX) / BAR) * BAR;
+  for (let s = first; s <= c; s += BAR) {
+    const x = xOf(c, s + BAR / 2);
+    if (x < NOW_X - 4 || x > RIGHT + 4) continue;
+    const v = bars.at(s);
+    const h = Math.max(3, v * AMP);
+    const edge = Math.min(ease((x - NOW_X + 4) / 36), ease((RIGHT - x) / 140));
+    const ctc = ctcOn && s >= c - CTC_S && s >= 0 ? 1 : 0;
+    const wh = listening ? inWhisper(s) : 0;
+    const col = ctc ? INK : wh ? GOLD : DIM;
+    g.fillStyle = rgba(col, (ctc ? 0.85 : wh ? 0.9 : 0.42) * edge);
+    g.beginPath();
+    g.roundRect(x - 2.4, MID - h, 4.8, 2 * h, 2.4);
+    g.fill();
+  }
+
+  // Whisper's window and what it heard.
+  g.direction = "rtl";
+  g.textAlign = "center";
+  g.textBaseline = "alphabetic";
+  for (const w of shown) {
+    const x0 = xOf(c, w.h.end), x1 = xOf(c, Math.max(0, w.h.end - WHISPER_S));
+    const edge = ease((RIGHT + 40 - (x0 + x1) / 2) / 260);
+    roundRect(x0 - 10, MID - AMP - 26, x1 + 10, MID + AMP + 26, 22);
+    g.lineWidth = 2;
+    g.strokeStyle = rgba(GOLD, 0.75 * w.a * edge);
+    g.stroke();
+    g.fillStyle = rgba(GOLD, 0.05 * w.a * edge);
+    g.fill();
+    // The text above its window; the one before fades where it is as the next comes in.
+    const cx = clamp((x0 + x1) / 2, NOW_X + 260, RIGHT - 260);
+    g.font = "400 52px Amiri";
+    g.fillStyle = rgba(INK, w.a);
+    g.fillText(w.h.text.trim(), cx, MID - AMP - 66);
+  }
+
+  // The CTC model's window, at the newest sound.
+  if (ctcOn) {
+    const a = ease((c - CTC_FROM) / 0.4);
+    roundRect(xOf(c, c) - 8, MID - AMP - 12, xOf(c, Math.max(0, c - CTC_S)) + 8, MID + AMP + 12, 16);
+    g.lineWidth = 1.6;
+    g.strokeStyle = rgba(INK, 0.55 * a);
+    g.stroke();
+  }
+
+  // Its letters, under the sound, each run from its first letter leftwards as the letters come in.
+  g.textAlign = "right";
+  g.font = "400 38px Amiri";
+  for (const r of runsUpTo(c)) {
+    const x = xOf(c, r.t) + 6;
+    if (x > RIGHT + 300) continue;
+    const fresh = clamp(1 - (c - r.last) / 2.5, 0, 1);
+    const edge = ease((RIGHT + 60 - x) / 240);
+    g.fillStyle = rgba(INK, (0.55 + 0.4 * fresh) * edge);
+    g.fillText(r.text, x, MID + AMP + 92);
+  }
+
+  // The phone's side: the sound comes out from under it.
+  const grad = g.createLinearGradient(NOW_X - 70, 0, NOW_X + 6, 0);
+  grad.addColorStop(0, "rgba(11,16,28,1)");
+  grad.addColorStop(1, "rgba(11,16,28,0)");
+  g.fillStyle = grad;
+  g.fillRect(NOW_X - 70, 0, 76, 1080);
+
+  $("fade").style.opacity = Math.max(1 - ease(t / FADE), ease((t - (END - FADE)) / FADE)).toFixed(3);
+}
+
+// -- the film's handle (film.mjs) -----------------------------------------------------------------------
+const demo = (window.__demo = {
+  c0: null, t0: null, END,
+  plan: [{ voice: 0, tap: START, start: START, found: START + (run.updates.find((u) => u.u.dua)?.at ?? 0), leave: END }],
+  begin() {
+    demo.c0 = performance.now();
+    setTimeout(() => $("app").contentDocument.getElementById("start").click(), START * 1000);
+  },
+  engine() {
+    return {
+      kind: "device", model: "replay", words: true,
+      prepare: () => Promise.resolve(),
+      async start(onUpdate) {
+        demo.t0 = performance.now();
+        for (const r of run.updates) setTimeout(() => onUpdate(r.u), r.at * 1000);
+        this.ear = { get quiet() { return quietAt((performance.now() - demo.t0) / 1000); } };
+      },
+      push() {}, lock() {}, seek() {}, follow() {}, stop() {},
+    };
+  },
+  bandDb() {
+    if (demo.t0 == null || !sounds) return null;
+    const s = sounds[0];
+    const i = Math.floor(((performance.now() - demo.t0) / 1000) * s.band_hz);
+    return s.band_db[clamp(i, 0, s.band_db.length - 1)] ?? -90;
+  },
+  get t() { return demo.c0 == null ? 0 : (performance.now() - demo.c0) / 1000; },
+  get done() { return demo.c0 != null && demo.t >= END; },
+  starts: () => [demo.t0 == null ? null : (demo.t0 - demo.c0) / 1000],
+  mix: () => {
+    const t = demo.t;
+    return [[Number((ease(t / FADE) * (1 - ease((t - (END - FADE)) / FADE))).toFixed(4)), 0]];
+  },
+  motion: 0,
+});
+$("app").src = "/app/index.html?log=0";
+function quietAt(t) {
+  let q = null;
+  for (const [at, v] of run.quiet) { if (at > t) break; q = v; }
+  return q;
+}
+
+const frame = () => {
+  requestAnimationFrame(frame);
+  draw(demo.t);
+};
+requestAnimationFrame(frame);
+draw(0);
+window.__stageReady = true;
+</script>
+</body>
+</html>
