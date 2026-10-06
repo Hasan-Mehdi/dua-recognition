@@ -36,103 +36,104 @@ NARRATOR_TEXT = "الناس يتعلمون الدعاء بالبيت وبالج�
 SPEED = 0.92
 ENGINE = f"omnivoice|{NARRATOR.stem}|speed{SPEED}"
 GAP, AR_GAP = 0.3, 0.4  # seconds between sentences, and around an Arabic phrase
-# The letter model and the decoder bring the most new ideas per second: said slower, with longer
+# The two models and the letter model bring the most new ideas per second: said slower, with longer
 # pauses between sentences.
-SLOW = {"word2", "word3", "dec2", "dec5"}
+SLOW = {"sound2", "model1", "ctc1"}
 SLOW_SPEED, SLOW_GAP = 0.84, 0.6
 TAKES = {"en": 4, "ar": 8}  # tries per segment; Arabic phrases are short and less steady
 GOOD = {"en": 0.93, "ar": 0.92}  # a take this close to the text is kept at once
 
+# Round 8 (2026-10-05): one recitation, followed from start to end (explainer.py). Round 9 (2026-10-06): his
+# recitation is heard, so where he says something the narration no longer says it for him.
 LINES = {
-    # -- what it's for: two questions, two listeners
-    "open1": "At a gathering, one person usually recites the du'a aloud, while everyone else reads along, from a book "
-             "or a phone. Many du'as are long, this one, Dua Tawassul, is a hundred and fifteen lines, and it's easy "
-             "to lose your place.",
-    "open2": "This app listens to the reciter and tries to keep your place for you. To do that, it has two questions to "
-             "answer. Which du'a is this, out of five hundred and twenty-two du'as and ziyarat, the greetings recited "
-             "at shrines? And where in it is he right now, down to the word?",
-    "open3": "Two models listen at the same time, one for each question. Whisper, a speech recognizer, turns the last "
-             "few seconds into text every second or two, and that text is looked for in every du'a. A much smaller "
-             "letter model hears letters ten times a second, and follows him through the du'a Whisper found.",
-    "open4": "Let's take one recording through both. It's Hussein Ghareeb, about five minutes into Dua Tawassul, at "
-             "line thirty-eight. Neither model heard him in training.",
-
-    # -- which du'a: Whisper
-    "hear1": "Every second or so, the app takes the last six seconds of sound, called a window, and draws it as a "
-             "spectrogram. Time runs left to right, pitch from low to high, and the brighter a spot, the louder.",
-    "asr1": "Whisper turns that into text. The app's version is small enough to run on a phone. Out of the box, it "
-            "barely understands recitation, where one word can be drawn out for seconds, so it was trained further, "
-            "on over a hundred hours of recited du'as, and on synthetic voices of ordinary people.",
-    "asr3": "Here's what it heard. [[ar:يَا وَجِيهْ عِنْدَ الله|Yā wajīh ‘inda-llāh.]]",
-    "asr4": "What he actually recited was this. [[ar:يَا وَجِيهًا|Yā wajīhan.]] Close, but not exact, and only half "
-            "the line, because he draws every word out. So nothing after this point takes the text as certain.",
-    "match1": "The app compares the heard text with every du'a it knows. Vowel marks, spellings and spaces are "
-              "simplified on both sides. Then it counts the fewest letters to change, add, or remove, to turn one "
-              "into the other. Here it's one, a missing alif.",
-    "match2": "It does this ending at every one of a hundred and forty thousand words, in about a hundredth of a "
-              "second. Here are the costs across Dua Tawassul: the shorter the bar, the closer the fit.",
-    "dua1": "Every word of every text gets a probability that he's there right now. Before anything is heard, it's "
-            "spread over all the texts, with a little more on the ones people recite most. With each window, places "
-            "that fit well become more likely, and places that fit badly much less.",
-    "dua2": "Add up the probabilities inside each du'a. If you'd walked in at exactly this moment, after one window, "
-            "Dua Tawassul would be ahead, at twenty-nine percent. The app names a du'a only at seventy percent, and "
-            "until then, it offers its best guesses for you to tap.",
-    "dua3": "A second later, it's at ninety-nine point eight percent, and the app names it.",
-    "dua4": "The same probabilities also say roughly where he is in the du'a. That's where the second model takes "
-            "over.",
-
-    # -- where: the letter model and the decoder
-    "word1": "Whisper alone can't keep up with the word. Its text comes only every second or two, with no timing "
-             "inside it, and describes sound that's already a second old.",
-    "word2": "So the letter model listens alongside. It's the listening half of the same Whisper, with one small "
-             "layer added that maps what it hears onto the alphabet. Ten times a second, it takes the last two "
-             "seconds of sound, and for every fiftieth of a second, gives a probability for each letter, or for no "
-             "letter at all.",
-    "word3": "Here it is as he carries on. [[ar:اِشْفَعْ لَنَا عِنْدَ|Ishfa‘ lanā ‘inda.]] Each row is one letter of "
-             "these words, and time runs left to right. The brighter a square, the surer the model is that it heard "
-             "that letter, at that moment.",
-    "dec1": "Two seconds hold a word or two, and many du'as share words, so the letter model doesn't search for the "
-            "du'a. Instead, a decoder follows him through the one Whisper found. It keeps a probability on every "
-            "letter of the du'a, not just the line he's on, and updates it every fiftieth of a second.",
-    "dec2": "Each update asks two things, much as you'd keep your place yourself. Where could he be now, given where "
-            "he was? Reading on costs nothing. Starting the line again costs a little, going back a line or three "
-            "costs more, skipping ahead more still, and anywhere else in the du'a the most. And which of those places "
-            "explains the letters just heard?",
-    "dec3": "Talk that isn't the du'a, and the salawat people say between lines, have places of their own, so they "
-            "don't drag the highlight along. A pause is simply no letters, so the highlight waits on the last word "
-            "said.",
-    "dec4": "Here's what that looks like when a reader goes back. We cut this recording so that after line "
-            "forty-three, he returns to line forty-one, as people reading along often do.",
-    "dec5": "While he takes a breath, nothing new is heard, so the probability stays at the end of line forty-three. "
-            "When he starts again, the first sounds fit several places, and for half a second, the highlight goes to "
-            "the start of line forty-three. A few letters later, line forty-one explains them best, and the highlight "
-            "follows him there, about a second after he began.",
-    "dec6": "Whisper keeps listening as a check, every two seconds on a phone. If he moves to a different du'a, "
-            "Whisper notices first, and the decoder follows once Whisper has held the new one for two seconds.",
-
-    # -- all of it, and how well it works
-    "sum1": "So, Whisper and the probabilities over every du'a find which du'a it is, and roughly where. The letter "
-            "model and the decoder follow him through it, word by word. All of it runs inside the phone's browser, "
-            "so the recitation never has to leave the phone.",
-    "res1": "It was tested on voices kept out of training, reading the way people do: in flow, pausing, talking in "
-            "between, going back, skipping ahead, in quiet rooms and echoing halls.",
-    "res2": "It names the du'a within ten seconds ninety percent of the time. The highlight is on the reader's line "
-            "eighty-seven percent of the time, and on the exact word two times in three. When a reader goes back or "
-            "skips ahead, it follows within three seconds nearly three times in four.",
-    "limits": "It still makes mistakes. When two du'as share a passage word for word, it can't tell them apart until "
-              "they part ways. It does worse in echoing halls, and when a reader jumps around the du'a. And for a "
-              "du'a it doesn't have, it too often shows one it does.",
-    "end": "That's the whole path, from the microphone to the highlighted word.",
+    # -- the reading
+    "open1": "This is Abu Thar Al-Halawaji reciting Du'a al-Iftitah, and an app following him word by word. The models "
+             "in it were never trained on his voice. Here is what the app did with two and a half minutes of his "
+             "recitation, from his first word.",
+    "ahead1": "Along the way, he stops for six seconds, someone talks to him, and later he goes back two lines. People "
+              "reading along do all of these.",
+    # -- how a phone hears, and what the two models are
+    "sound1": "First, how does a phone hear anything at all? Its microphone measures how the air pressure changes, "
+              "sixteen thousand times a second. So the basmala reaches the app as about seventy-five thousand numbers, "
+              "and nothing else.",
+    "sound2": "A list of numbers is hard to read, so both models first turn it into a picture. Every hundredth of a "
+              "second, the app measures how much energy the sound has, from low to high in eighty steps, and draws it "
+              "as one thin column, brighter where there's more. Side by side, the columns show each sound as a shape "
+              "of its own. The s is a faint haze reaching to the top, and a vowel he draws out is a stack of bright "
+              "stripes.",
+    "model1": "Reading those pictures is what the two models do, and both are neural networks. A network is a long chain "
+              "of simple sums, with millions of adjustable numbers that set how much each part counts. In training, "
+              "it's shown recordings together with what was said in them, and those numbers are nudged, a little at a "
+              "time, until what comes out matches.",
+    "whisper1": "The first model is Whisper, made by OpenAI and trained on six hundred and eighty thousand hours of "
+                "speech in many languages. Its first half listens to the picture. Its second half writes down what "
+                "was said, a few letters at a time.",
+    "whisper2": "The app uses a small version, with seventy-four million numbers, so that it runs on a phone. Out of the "
+                "box it barely understands recitation, so it was trained further, on over a hundred hours of recited "
+                "du'as, and on synthetic voices of ordinary people.",
+    "listen1": "On the phone, Whisper gets the last six seconds, once a second, and that's how the app works out which "
+               "du'a this is. The second model listens for letters, ten times a second, and that's how it follows the "
+               "word. More on that one later.",
+    # -- which du'a
+    "find1": "He opens with the basmala and the salawat, and Whisper gets the words right. But sixty-six of the texts "
+             "open with the basmala, and forty-one of them go on with the salawat. The app looks for what Whisper "
+             "wrote in all five hundred and twenty-two texts, and each text where it fits takes a share of the "
+             "probability. After seventeen seconds, the likeliest is Du'a Tawassul, at seven percent.",
+    # find2 and find3 follow his own "Allāhumma innī" and "aftatiḥu th-thanā'a" (explainer.py plays them).
+    "find2": "Three texts carry on with these words, and between them, they now hold most of the probability.",
+    "find3": "Only one text has these words. Iftitah goes to ninety-four percent, past the seventy the app waits for, "
+             "and its name comes up.",
+    # -- which word
+    "word1": "Now it has to keep up with him. Whisper's text arrives more than a second late, with no timing inside "
+             "it, so it can't say which word he's on. The highlight comes from the second model.",
+    "ctc1": "It's Whisper's listening half, with the writing half taken off and one small layer added. For every "
+            "fiftieth of a second of the picture, that layer gives a probability for each Arabic letter, and for no "
+            "letter at all. It learned by copying a far bigger model, with about three hundred million numbers, "
+            "trained on recitation and on ordinary voices.",
+    "ctc2": "Because it never writes words, it's quick, and every letter comes with the moment it was heard. Every "
+            "tenth of a second, it hears the last two seconds again. Here are the letters it found, newest on the "
+            "left, the way Arabic is read.",
+    "lines1": "The app lines those letters up against the text of Iftitah, and keeps a probability for every line. "
+              "Carrying on costs nothing. Saying the line again, going back a few lines, or skipping ahead are "
+              "allowed, but each costs a little, so it takes clear letters to make them happen. In this recitation, "
+              "the highlight typically reached a word about a third of a second after he started it.",
+    # -- what readers do
+    "pause1": "Here he stops for six seconds. Silence brings no letters, so nothing moves the highlight: it stays on "
+              "his last word.",
+    "pause2": "When he starts the next line, it follows him a little over half a second later.",
+    # talk1 comes after the talk has been heard once, at its own speed.
+    "talk1": "That was someone talking to him. The app keeps a place for not reading, and talk is meant to end up there. It "
+             "didn't go there straight away: part of the talk sounded like him starting line nine again, and the "
+             "highlight jumped back to the start of the line. Then more of it went to not reading, and the highlight "
+             "waited there until he came back.",
+    "drop1": "He comes back with line ten, and the highlight follows him. But Whisper's last six seconds were still "
+             "mostly talk, so for a few seconds the app doubted it was hearing Iftitah at all: it might be a du'a it "
+             "doesn't have. The letters kept the highlight on line ten, and once Whisper's window held his words "
+             "again, the doubt was gone.",
+    "back1": "At the end of line twelve, he goes back to line ten. For three tenths of a second, the likeliest line "
+             "was thirteen, the one that usually comes next. But the highlight moves into a new line only once it "
+             "hears that line's words, so it stayed where it was. Then the letters of line ten came in, and it "
+             "followed him back.",
+    "end1": "From there, he reads on to line sixteen. Over the whole recitation, the phone's highlight was on the "
+            "word he was saying about two thirds of the time.",
+    # -- beyond this reading
+    "held1": "That's one reading. On twenty-two hours of recordings from fifty-five voices the models never trained "
+             "on, the du'a was named within ten seconds nine times out of ten, and the highlight was on the reader's "
+             "line about as often. It does worst in echoing halls, with the phone far from the reader, and when "
+             "someone jumps around the du'a. And when someone recites a du'a the app doesn't have, it shows some "
+             "other one about half the time.",
 }
 
-# Islamic words, written for the voice in Arabic script so it says them as an Arabic speaker would.
+# Islamic words and names, written for the voice in Arabic script so it says them as an Arabic speaker would.
 TTS_SPELLING = {
-    "Dua Tawassul": "دعاء التوسل",
-    "Tawassul": "التوسل",
+    "Du'a al-Iftitah": "دعاء الافتتاح",
+    "Iftitah": "الافتتاح",
+    "Du'a Tawassul": "دعاء التوسل",
+    "Abu Thar Al-Halawaji": "أبو ذر الحلواجي",
+    "basmala": "البسملة",
+    "salawat": "الصلوات",
+    "du'as": "أدعية",
     "du'a": "دعاء",
-    "ziyarat": "زيارات",
-    "Hussein Ghareeb": "حسين غريب",
-    "salawat": "صلوات",
 }
 _SPELL = re.compile("|".join(re.escape(k) + r"(?![a-z])" for k in sorted(TTS_SPELLING, key=len, reverse=True)))
 _AR = re.compile(r"\[\[ar:([^|\]]+)\|([^\]]+)\]\]")
@@ -157,22 +158,13 @@ def segments(text: str, key: str = "") -> list[dict]:
 
 # Subtitles show numbers as digits; the voice says the words.
 CAPTION_NUMBERS = [
-    ("five hundred and twenty-two", "522"), ("a hundred and forty thousand", "140,000"),
-    ("all hundred and fifteen", "all 115"), ("a hundred and fifteen", "115"), ("sixteen thousand", "16,000"),
-    ("four hundred and eighty", "480"), ("thirty milliseconds", "30 milliseconds"),
-    ("seventy-four million", "74 million"), ("a hundred hours", "100 hours"), ("thirty-eight", "38"),
-    ("thirty-seven", "37"), ("Fourteen words", "14 words"), ("thirty-one", "31"), ("forty-five", "45"),
-    ("eleven more", "11 more"), ("seventy-six percent", "76%"), ("seventy-nine percent", "79%"),
-    ("sixty-nine percent", "69%"), ("one point two", "1.2"), ("zero point one five", "0.15"),
-    ("zero point six two", "0.62"), ("zero point six", "0.6"), ("zero point five four", "0.54"),
-    ("twenty-two percent", "22%"), ("forty-three percent", "43%"), ("under one percent", "under 1%"),
-    ("eleven percent", "11%"), ("fifty-four percent", "54%"), ("a hundred percent", "100%"),
-    ("a hundred and twenty times", "120 times"), ("fourteen times", "14 times"), ("twenty-nine percent", "29%"),
-    ("ninety-nine point eight percent", "99.8%"), ("seventy percent", "70%"), ("ten seconds", "10 seconds"),
-    ("ninety-three percent", "93%"), ("less than one percent", "less than 1%"), ("eighty-five percent", "85%"),
-    ("within one line, ninety-six", "within one line, 96%"), ("forty-seven percent", "47%"),
-    ("six and a half percent", "6.5%"), ("against eighty-nine", "against 89%"),
-    ("forty-three", "43"), ("forty-one", "41"), ("ninety percent", "90%"), ("eighty-seven percent", "87%"),
+    ("six hundred and eighty thousand", "680,000"), ("five hundred and twenty-two", "522"),
+    ("seventy-five thousand", "75,000"), ("sixteen thousand", "16,000"), ("three hundred million", "300 million"),
+    ("seventy-four million", "74 million"), ("a hundred hours", "100 hours"), ("eighty steps", "80 steps"),
+    ("sixty-six", "66"), ("forty-one", "41"), ("seven percent", "7%"), ("ninety-four percent", "94%"),
+    ("the seventy the app", "the 70% the app"), ("line nine", "line 9"),
+    ("line ten", "line 10"), ("line twelve", "line 12"), ("was thirteen", "was 13"), ("line sixteen", "line 16"),
+    ("twenty-two hours", "22 hours"), ("fifty-five voices", "55 voices"), ("ten seconds", "10 seconds"),
 ]
 
 
@@ -190,10 +182,31 @@ def _tag(key: str) -> str:
 def clip(key: str) -> tuple[Path, float, list[dict]]:
     """The voiced line, its length in seconds and its parts with their times (for subtitles)."""
     path = CACHE / f"{key}-{_tag(key)}.wav"
+    if not path.exists() and os.environ.get("EXPLAINER_STANDIN") == "1":
+        return standin(key)
     if not path.exists():
         raise FileNotFoundError(f"{path.name}: voice the narration first (python docs/anim/narration.py)")
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     return path, meta["duration"], meta["segments"]
+
+
+def standin(key: str) -> tuple[Path, float, list[dict]]:
+    """Silence as long as the line will roughly take to say (2.6 words a second), with its sentences
+    timed in proportion: EXPLAINER_STANDIN=1 renders the scene's layout before the voicing."""
+    import numpy as np
+    import soundfile as sf
+
+    parts, t = segments(LINES[key], key), 0.0
+    for i, seg in enumerate(parts):
+        t += (GAP if i else 0.0)
+        d = len(seg["show"].split()) / (2.6 * (SLOW_SPEED / SPEED if key in SLOW else 1.0)) + 0.3
+        seg.update(start=round(t, 3), end=round(t + d, 3))
+        t += d
+    path = CACHE / "standin" / f"{key}-{_tag(key)}.wav"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(path, np.zeros(int(t * 16000), np.float32), 16000)
+    return path, round(t, 3), parts
 
 
 # -- voicing (needs omnivoice, transformers and a GPU) ------------------------------------------------
