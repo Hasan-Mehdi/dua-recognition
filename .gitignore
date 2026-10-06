@@ -43,3 +43,5 @@ data/testsets/
 data/harvest/
 # scenario bench programs, model outputs, results (junction to D:\dua-data\testbed)
 data/testbed/
+# third-party research downloads (YouTube audio, transcripts, comments)
+data/research/

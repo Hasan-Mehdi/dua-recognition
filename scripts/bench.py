@@ -30,6 +30,12 @@ overdriven mic, phone-call codec, low-bitrate codec, and a combination).
     python scripts/bench.py asr                      # (GPU) Whisper rows, quiet, CTC frames per item
     python scripts/bench.py score --name base        # replay the phone's display, the grid
     python scripts/bench.py score --name x --fw "jump_margin=5" --compare base
+    python scripts/bench.py score --name p --display stream --practice   # + the practice checker
+    python scripts/bench.py practice --name p                           # its table again
+
+Practice mode (docs/results/practice_bench.md) adds mistake scenarios (skipword, skipline,
+ending), built and scored only when asked for: `build/asr skipword skipline ending`, `score
+--practice`.
 
 Every item is a program over source audio (spans, room tone, inserted clips, effects), so
 the audio is rebuilt exactly from the program; nothing but the model outputs is cached.
@@ -450,26 +456,49 @@ def load_sources() -> list[dict]:
     return [json.loads(x) for x in (BENCH / "sources.jsonl").read_text(encoding="utf-8").splitlines() if x]
 
 
+def fresh_source(src: dict, ix) -> dict | None:
+    """sources.jsonl keeps global word ids from the corpus it was built with; texts added since
+    (the Mafatih texts, 2026-10-03) shift the ids of every du'a after them, so an old id can name
+    another du'a's word (ziyarat-ashura's reading came out as sahifa-47's). Each line's words
+    again from its du'a, line id and place in the line; None if a line is no longer cut the same
+    way."""
+    if not src.get("dua") or src["dua"] not in ix.dua_ids:
+        return src
+    d = ix.dua_ids.index(src["dua"])
+    lo, hi = ix.dua_word_span[d]
+    seg = ix.word_segment[lo:hi]
+    lines = []
+    for ln in src["lines"]:
+        ws = np.flatnonzero(seg == ln["seg"]) + lo
+        if len(ws) != len(ln["words"]):
+            return None
+        lines.append(dict(ln, words=[[int(g), a, b] for g, (_, a, b) in zip(ws, ln["words"])]))
+    return dict(src, lines=lines)
+
+
 # ---------------------------------------------------------------- programs
 class Prog:
     """A reading built from source spans. Ops (in output order):
         ["src", a, b]                  source audio a..b (source time)
+        ["src", a, b, fi, fo]          ...faded in over fi s and out over fo s (a word cut out between two)
         ["tone", s]                    s seconds of the source's room tone
         ["clip", kind, ref, rel_db]    a clip from elsewhere (talk / salawat), level-matched
-    Truth is kept in output time: words [dua, local word, start, end], events, still spans."""
+    Truth is kept in output time: words [dua, local word, start, end], events, still spans, and
+    for practice mode the reader's mistakes (errors) and the lines they set out to read (target)."""
 
     def __init__(self, src: dict, ix):
         self.src, self.ix = src, ix
         self.ops, self.t = [], 0.0
-        self.words, self.events, self.still = [], [], []
+        self.words, self.events, self.still, self.errors = [], [], [], []
         self.next_event = None  # the kind of move the next play() makes (back, skip, repeat...)
+        self.target = None  # [dua, first seg, last seg] when the reader meant to read past what they did
 
     def _local(self, w: int) -> list:
         d = int(self.ix.word_dua[w])
         return [self.ix.dua_ids[d], int(w - self.ix.dua_word_span[d][0])]
 
     def play(self, lines: list[dict], a: float | None = None, b: float | None = None, words: list | None = None,
-             event: str | None = None) -> None:
+             event: str | None = None, fade: tuple[float, float] | None = None) -> None:
         """Source audio from the first line's start to the last line's end (or a..b), with the
         words inside it as truth."""
         a = lines[0]["from"] if a is None else a
@@ -481,8 +510,12 @@ class Prog:
         for w, wa, wb in ws:
             if a - 0.01 <= wa and wb <= b + 0.01:
                 self.words.append(self._local(w) + [round(wa + d, 3), round(wb + d, 3)])
-        self.ops.append(["src", round(a, 3), round(b, 3)])
+        self.ops.append(["src", round(a, 3), round(b, 3)] + ([round(fade[0], 3), round(fade[1], 3)] if fade else []))
         self.t += b - a
+
+    def error(self, kind: str, **fields) -> None:
+        """A mistake at the current output time (practice mode's truth)."""
+        self.errors.append({"kind": kind, "t": round(self.t, 3), **fields})
 
     def tone(self, s: float, kind: str = "pause") -> None:
         self.ops.append(["tone", round(s, 3)])
@@ -504,6 +537,8 @@ class Prog:
                 "words": [[d, w, round(a * k, 3), round(b * k, 3)] for d, w, a, b in self.words],
                 "events": [dict(e, t=round(e["t"] * k, 3)) for e in self.events],
                 "still": [[round(a * k, 3), round(b * k, 3), kind] for a, b, kind in self.still],
+                **({"errors": [dict(e, t=round(e["t"] * k, 3)) for e in self.errors]} if self.errors else {}),
+                **({"target": self.target} if self.target else {}),
                 "duration": round(self.t * k, 3), "tags": self.src["tags"], **(extra or {})}
 
 
@@ -727,6 +762,84 @@ def sc_combo(src, ix, rng, **_):
     return _runs_with(src, ix, rng, (3, 6), 180.0, between)
 
 
+# ---------------------------------------------------------------- practice mode: the reader's mistakes
+FADE = 0.008  # s: fade out / in where a word is cut out of the audio
+
+
+def _cut_word(L: list[dict], k: int, ix, rng) -> tuple[int, float, float] | None:
+    """A word of line k to cut out and the source times to cut at (the middles of the gaps
+    around it), or None. Not a line's first or last word (line entry and exit stay as read), at
+    least 3 letters, a word that no line within one of it reads too (a mark there can only mean
+    this one), and gaps on both sides (the alignment's neighbours don't overlap it)."""
+    from dua_recognition.text import normalize
+
+    ws = L[k]["words"]
+    txt = [normalize(ix.words[w[0]].text) for w in ws]
+    nearby = [normalize(ix.words[w[0]].text) for ln in L[max(0, k - 1) : k + 2] for w in ln["words"]]
+    cands = []
+    for j in range(1, len(ws) - 1):
+        pe, (_, a, b), ns = ws[j - 1][2], ws[j], ws[j + 1][1]
+        if len(txt[j].replace(" ", "")) < 3 or nearby.count(txt[j]) > 1 or a < pe or ns < b:
+            continue
+        cands.append((j, (pe + a) / 2, (b + ns) / 2))
+    return rng.choice(cands) if cands else None
+
+
+def sc_skipword(src, ix, rng, **_):
+    """A word left out of every 3rd to 5th line, as a reader who forgot it would: cut out of the
+    audio at the gaps around it (faded), the rest of the reading as it was."""
+    L = _take(src["lines"], 0, 180.0)
+    cuts, k = [], rng.randint(1, 3)
+    while k < len(L):
+        c = _cut_word(L, k, ix, rng)
+        if c is None:
+            k += 1
+            continue
+        cuts.append((k,) + c)
+        k += rng.randint(3, 5)
+    if not cuts:
+        return None
+    p = Prog(src, ix)
+    allw = [w for ln in L for w in ln["words"]]
+    a, fi = L[0]["from"], 0.0
+    for k, j, ca, cb in cuts:
+        p.play(L, a=a, b=ca, words=allw, fade=(fi, FADE))
+        p.error("skipword", word=p._local(L[k]["words"][j][0]))
+        a, fi = cb, FADE
+    p.play(L, a=a, b=L[-1]["to"], words=allw, fade=(fi, 0.0))
+    return p
+
+
+def sc_skipline(src, ix, rng, **_):
+    """A line left out after every 3 to 5 (a forgotten line): a breath, then the line after it."""
+    L = src["lines"]
+
+    def between(p, i, n):
+        if i + 2 >= len(L):
+            return None
+        p.tone(rng.uniform(0.3, 0.8), "breath")
+        p.error("skipline", dua=src["dua"], seg=L[i + 1]["seg"])
+        p.next_event = "skip"
+        return i + 2
+
+    return _runs_with(src, ix, rng, (3, 5), 180.0, between)
+
+
+def sc_ending(src, ix, rng, **_):
+    """The reading stops 1-3 lines before the end it set out to read (a forgotten ending), then
+    room tone. The target runs to that end."""
+    L = _take(src["lines"], 0, 150.0)
+    if len(L) < 6:
+        return None
+    k = rng.choice([1, 1, 2, 3])
+    p = Prog(src, ix)
+    p.play(L[:-k])
+    p.error("ending", dua=src["dua"], segs=[ln["seg"] for ln in L[-k:]])
+    p.tone(8.0)
+    p.target = [src["dua"], L[0]["seg"], L[-1]["seg"]]
+    return p
+
+
 # scenario -> (program builder, effects, lanes it runs on, tempo)
 SCENARIOS = {
     "flow": (sc_flow, [], ("user", "studio", "majlis", "harvest", "mafatih"), 1.0),
@@ -753,7 +866,14 @@ SCENARIOS = {
     "phonecall": (sc_cond, [["codec", "amr"]], ("studio", "harvest"), 1.0),
     "lowbitrate": (sc_cond, [["codec", "opus12"]], ("studio", "harvest"), 1.0),
     "combo": (sc_combo, [["reverb", 0.6, 0.0], ["babble", 15.0]], ("studio", "majlis", "harvest"), 1.0),
+    # practice mode (docs/research/practice-mode-plan-2026-10-04.md): scored with `score --practice`,
+    # left out of the reading grid otherwise
+    "skipword": (sc_skipword, [], ("user", "studio", "harvest", "mafatih"), 1.0),
+    "skipline": (sc_skipline, [], ("user", "studio", "harvest", "mafatih"), 1.0),
+    "ending": (sc_ending, [], ("user", "studio", "harvest", "mafatih"), 1.0),
 }
+PRACTICE_CELLS = {"skipword", "skipline", "ending"}
+NOT_PRACTICE = {"jumps", "switch", "ooc"}  # a reader moving around on purpose, or no text to check against
 
 
 def _talk_clips(n: int = 400) -> list[dict]:
@@ -778,7 +898,7 @@ def cmd_build(args) -> None:
     import evaluate as ev
 
     ix = ev.CorpusIndex(ev.load_all())
-    srcs = load_sources()
+    srcs = [s for s in (fresh_source(s, ix) for s in load_sources()) if s is not None]
     sal = json.loads((BENCH / "salawat.json").read_text(encoding="utf-8"))
     talk = _talk_clips()
     known = [s for s in srcs if s["dua"]]
@@ -851,13 +971,16 @@ def split_of(voice: str) -> str:
     return "dev" if int(hashlib.sha1(voice.encode()).hexdigest()[:8], 16) % 2 == 0 else "test"
 
 
-def load_items(scenarios=None, split: str = "all") -> list[dict]:
+def load_items(scenarios=None, split: str = "all", practice: bool = False) -> list[dict]:
+    """Items of these scenarios (all: the reading grid; the practice cells too with practice)."""
     from mafatih_corpus import TEXTS
 
     taken_in = {t[0] for t in TEXTS}  # no longer unknown du'as: lane "mafatih" reads them
     out = []
     for f in sorted((BENCH / "items").glob("*/*.json")):
         if scenarios and f.parent.name not in scenarios:
+            continue
+        if not scenarios and not practice and f.parent.name in PRACTICE_CELLS:
             continue
         it = json.loads(f.read_text(encoding="utf-8"))
         if it.get("text_id") in taken_in:
@@ -882,6 +1005,21 @@ def _source_window(path: str, a: float, b: float) -> tuple[np.ndarray, float]:
     return _AUDIO_CACHE[key]
 
 
+def fade(x: np.ndarray, fi: float, fo: float) -> np.ndarray:
+    """x with a raised-cosine fade in over fi s and out over fo s (where a word was cut out)."""
+    x = np.array(x, dtype=np.float32)
+    for s, at_start in ((fi, True), (fo, False)):
+        n = min(int(round(s * SR)), x.size)
+        if n <= 0:
+            continue
+        ramp = (0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, n))).astype(np.float32)
+        if at_start:
+            x[:n] *= ramp
+        else:
+            x[-n:] *= ramp[::-1]
+    return x
+
+
 def render(it: dict) -> np.ndarray:
     srcs = [op for op in it["ops"] if op[0] == "src"]
     a0 = min((op[1] for op in srcs), default=0.0)
@@ -892,7 +1030,8 @@ def render(it: dict) -> np.ndarray:
     pieces, tone_at = [], 0
     for op in it["ops"]:
         if op[0] == "src":
-            pieces.append(y_src[int((op[1] - t0) * SR) : int((op[2] - t0) * SR)])
+            x = y_src[int((op[1] - t0) * SR) : int((op[2] - t0) * SR)]
+            pieces.append(fade(x, op[3], op[4]) if len(op) > 3 else x)
         elif op[0] == "tone":
             n = int(op[1] * SR)
             seg = np.tile(tone, int(np.ceil((tone_at + n) / tone.size)) + 1)[tone_at : tone_at + n]
@@ -1029,7 +1168,8 @@ _W: dict = {}
 
 
 def _worker_init(cfg_kw: dict, fw_kw: dict, asr_tag: str, ctc_tag: str, delay: float, f_delay: float,
-                 display: str = "follower", sc_kw: dict | None = None, same_text: int = 0) -> None:
+                 display: str = "follower", sc_kw: dict | None = None, same_text: int = 0,
+                 practice: bool = False) -> None:
     from dataclasses import replace
 
     import evaluate as ev
@@ -1045,6 +1185,8 @@ def _worker_init(cfg_kw: dict, fw_kw: dict, asr_tag: str, ctc_tag: str, delay: f
 
         _W["scfg"] = replace(StreamConfig(), **sc_kw)
     _W["same_text"] = same_text
+    _W["practice"] = practice
+    _W["practice_cfar"] = float(os.environ.get("PRACTICE_CFAR", "-40")) if practice else None
     if same_text:
         _W["passages"] = _passages(_W["ix"], same_text)
 
@@ -1164,7 +1306,14 @@ def replay(it: dict) -> list[tuple] | None:
                  None if w is None else int(ix.word_segment[w]), w, None, 0.0) for t, w, _ in anchors]
     elif mode == "stream":  # the stream decoder (stream_follower.py), anchored on the tracker
         fit["quiet"] = (z["t"], z["q"])
+        if _W.get("practice") and it["scenario"] not in NOT_PRACTICE:
+            # practice mode: the reader picked the du'a and where to start, so the display is pinned to it
+            tg = practice_target(it, ix)
+            if tg is not None:
+                fit["pin"] = (tg[0], _dua_lines(ix, tg[0])[2][tg[1]])
         fups = stream_updates(ix, fit)
+        if _W.get("practice"):  # the practice checker reads the display's steps (_score_one)
+            _W["fups"] = fups
     else:  # the phone: the CTC word follower anchored on the tracker (or on the truth: "oracle")
         fe._QUIET[(it["id"], 0.0, 0, 0, 0)] = (z["t"], z["q"])
         fups = fe.follow_updates(ix, fit, fcfg, _W["delay"], _W["f_delay"], oracle_anchor=mode == "oracle")
@@ -1186,7 +1335,14 @@ def stream_updates(ix, fit: dict) -> list[tuple]:
 
     z = np.load(fit["ctc"])
     lp, nf, ts = z["lp"], z["n_frames"], z["t"]
-    sf = StreamFollower(ix, _W.get("scfg") or StreamConfig())
+    cfg = _W.get("scfg") or StreamConfig()
+    if fit.get("pin") is not None and _W.get("practice_cfar") is not None:
+        from dataclasses import replace
+
+        # practice mode reads on from where the reader chose: no jumps across the du'a (back 1-3 lines,
+        # a restart and skips ahead stay), so a repeated block can't pull the highlight to its other copy
+        cfg = replace(cfg, c_far=_W["practice_cfar"])
+    sf = StreamFollower(ix, cfg)
     qt, qv = fit["quiet"]
 
     def quiet_at(t: float) -> float | None:
@@ -1194,18 +1350,22 @@ def stream_updates(ix, fit: dict) -> list[tuple]:
         return float(qv[i]) if i >= 0 else None
     anchors = fit["anchors"]
     at = [a[0] + _W["delay"] for a in anchors]
+    pin = fit.get("pin")  # practice mode: (du'a, first word) the reader chose; the tracker's other du'as unheard
     ups = []
     for k, t in enumerate(ts):
         j = bisect.bisect_right(at, t) - 1
         w_anchor = anchors[j][1] if j >= 0 else None
+        a_t = at[j] if j >= 0 else None
         lm = None
         if j >= 0 and len(anchors[j]) > 2 and anchors[j][2] is not None and w_anchor is not None:
             masses = anchors[j][2]
             first = sf._dua(int(ix.word_dua[w_anchor]))
             line0 = int(_line_no(ix)[first.lo])
             lm = lambda w, m=masses, f=line0: float(m[int(_line_no(ix)[w]) - f])  # noqa: E731
+        if pin is not None and (w_anchor is None or int(ix.word_dua[w_anchor]) != pin[0]):
+            w_anchor, lm, a_t = (pin[1] if sf.dua is None else sf.word), None, None
         w = sf.step(lp[k, : nf[k]].astype(np.float32), float(t), w_anchor, quiet_now=quiet_at(t), line_mass=lm,
-                    anchor_t=at[j] if j >= 0 else None, quiet_then=quiet_at(t - sf.cfg.lookahead))
+                    anchor_t=a_t, quiet_then=quiet_at(t - sf.cfg.lookahead))
         if w is None:
             ups.append((t + _W["f_delay"], None, None, None, None, 0.0))
         else:
@@ -1396,6 +1556,326 @@ def metrics(it: dict, shown: list, ix) -> dict:
     return m
 
 
+# ---------------------------------------------------------------- practice mode: the v0 checker
+def _cache(ix, name: str) -> dict:
+    """A cache that lives on the corpus index itself. One keyed by the index's id() hands a new index
+    an old one's entries once Python reuses the id (the tests build many small corpora)."""
+    return ix.__dict__.setdefault(f"_bench_{name}", {})
+
+
+def _dua_lines(ix, d: int) -> tuple[list[int], dict[int, int], list[int]]:
+    """A du'a's line ids in order, line id -> its index, and each line's first (global) word."""
+    cache = _cache(ix, "lines")
+    if d not in cache:
+        lo, hi = ix.dua_word_span[d]
+        seg = ix.word_segment[lo:hi]
+        starts = np.flatnonzero(np.r_[True, seg[1:] != seg[:-1]])
+        segs = [int(seg[i]) for i in starts]
+        cache[d] = (segs, {s: i for i, s in enumerate(segs)}, [int(lo + i) for i in starts])
+    return cache[d]
+
+
+def _same_lines(ix, d: int) -> list[int]:
+    """Per line of du'a d, the first line with the same words (a refrain, a repeated block): heard
+    there is heard here, since the reader said those words and no listener can tell which."""
+    from dua_recognition.text import normalize
+
+    _, _, first_w = _dua_lines(ix, d)
+    ends = first_w[1:] + [ix.dua_word_span[d][1]]
+    seen, out = {}, []
+    for li, (a, b) in enumerate(zip(first_w, ends)):
+        out.append(seen.setdefault(tuple(normalize(ix.words[g].text) for g in range(a, b)), li))
+    return out
+
+
+def practice_target(it: dict, ix) -> tuple[int, int, int] | None:
+    """(du'a index, first line index, last line index) the reader set out to read: the item's
+    target, else from the first to the last line it reads of its du'a."""
+    if not it.get("dua") or it["dua"] not in ix.dua_ids:
+        return None
+    d = ix.dua_ids.index(it["dua"])
+    _, li_of, _ = _dua_lines(ix, d)
+    if it.get("target"):
+        return d, li_of[it["target"][1]], li_of[it["target"][2]]
+    lo = ix.dua_word_span[d][0]
+    read = [li_of[int(ix.word_segment[lo + w])] for dd, w, _, _ in it["words"] if dd == it["dua"]]
+    return (d, min(read), max(read)) if read else None
+
+
+def practice_v0(fups: list, ix, target: tuple[int, int, int]) -> dict:
+    """The v0 checker: no new model, it watches where the display goes (steps (t, dua, seg, word,
+    ...), as stream_updates returns them) and never changes it.
+    - line unheard: a target line the display hasn't shown once it reaches the line two past it;
+      at the end, every target line not shown, from the first one shown on.
+    - word unheard: a word the display moves past inside its line without showing it (or enters
+      its line past it from the line before).
+    A line counts as shown when the display shows any line with the same words (_same_lines). A
+    mark on something the display shows later is cleared (a flip). "first" is the earliest target
+    line the display showed: lines before it aren't judged. Returns {"line": {line index: [t
+    marked, t cleared or None]}, "word": {global word: [...]}, "first": ..., "end": the last
+    step's time}."""
+    d, lo_li, hi_li = target
+    _, li_of, first_w = _dua_lines(ix, d)
+    grp = _same_lines(ix, d)
+    marks: dict = {"line": {}, "word": {}}
+    shown_g, shown_w = set(), set()
+    first, prev, t_end, swept = None, None, 0.0, None
+
+    for up in fups:
+        t, w = float(up[0]), up[3]
+        t_end = t
+        if w is None or int(ix.word_dua[w]) != d:
+            prev = None
+            continue
+        w = int(w)
+        L = li_of[int(ix.word_segment[w])]
+        if first is None or L < first:
+            first = swept = max(lo_li, L)
+        if prev is not None:
+            pl = li_of[int(ix.word_segment[prev])]
+            skipped = range(prev + 1, w) if pl == L else range(first_w[L], w) if pl == L - 1 else ()
+            for x in skipped:
+                if x not in shown_w and x not in marks["word"]:
+                    marks["word"][x] = [t, None]
+        if w in marks["word"] and marks["word"][w][1] is None:
+            marks["word"][w][1] = t
+        shown_w.add(w)
+        if grp[L] not in shown_g:
+            shown_g.add(grp[L])
+            for k, m in marks["line"].items():
+                if grp[k] == grp[L] and m[1] is None:
+                    m[1] = t
+        for k in range(swept, L - 1):  # lines two or more behind the display
+            if grp[k] not in shown_g and k not in marks["line"]:
+                marks["line"][k] = [t, None]
+        swept = max(swept, L - 1)
+        prev = w
+    if first is not None:
+        for k in range(first, hi_li + 1):
+            if grp[k] not in shown_g and k not in marks["line"]:
+                marks["line"][k] = [t_end, None]
+    return {"line": marks["line"], "word": marks["word"], "first": first, "end": t_end}
+
+
+def practice_metrics(it: dict, res: dict, ix, target: tuple[int, int, int], fups: list | None = None) -> dict:
+    """One item's practice numbers (sums; aggregate_practice turns them into rates). With the
+    display's steps, false marks are split at the moment the display first shows the reader's
+    own line (or one with the same words): before it the display is still finding the reader,
+    which practice mode doesn't have to (the reader picks where to start)."""
+    d, lo_li, hi_li = target
+    _, li_of, _ = _dua_lines(ix, d)
+    dlo = ix.dua_word_span[d][0]
+    line = lambda g: li_of[int(ix.word_segment[g])]  # noqa: E731
+    truth = sorted(((dlo + w, a, b) for dd, w, a, b in it["words"] if dd == it["dua"]), key=lambda x: x[1])
+    read_w = {g for g, _, _ in truth}
+    read_l = {line(g) for g in read_w}
+    m = {"items": 1, "minutes": it["duration"] / 60, "target_lines": hi_li - lo_li + 1}
+    first = res["first"]
+    if first is None:  # the display never found the du'a: nothing judged
+        m["not_judged_lines"] = m["target_lines"]
+        return m
+    final_l = {k for k, (_, c) in res["line"].items() if c is None}
+    final_w = {k for k, (_, c) in res["word"].items() if c is None}
+    judged = range(first, hi_li + 1)
+    m["not_judged_lines"] = first - lo_li
+    m["lines_read"] = len(read_l & set(judged))
+    m["false_lines"] = len(final_l & read_l)
+    m["flips_line"] = sum(c is not None for _, c in res["line"].values())
+    if fups is not None and truth:
+        grp = _same_lines(ix, d)
+        lock, j = None, 0
+        for up in fups:
+            t, w = float(up[0]), up[3]
+            while j + 1 < len(truth) and truth[j + 1][1] <= t:
+                j += 1
+            if w is None or int(ix.word_dua[w]) != d or truth[0][1] > t:
+                continue
+            if grp[li_of[int(ix.word_segment[w])]] == grp[line(truth[j][0])]:
+                lock = t
+                break
+        starts_l = {}
+        for g, a, _ in truth:
+            starts_l.setdefault(line(g), a)
+        m["lock_s"] = lock
+        m["false_lines_prelock"] = sum(1 for k in final_l & read_l if lock is None or starts_l[k] < lock)
+        m["minutes_after_lock"] = 0.0 if lock is None else max(0.0, it["duration"] - lock) / 60
+    # what the lines the reader left out were, caught or not, and how soon
+    kinds = {}
+    for e in it.get("errors", []):
+        if e["kind"] == "skipline":
+            kinds[li_of[e["seg"]]] = "skipline"
+        elif e["kind"] == "ending":
+            kinds.update({li_of[s]: "ending" for s in e["segs"]})
+    gaps = sorted([e["t"] for e in it.get("errors", []) if e["kind"] == "skipline"]
+                  + [e["t"] for e in it.get("events", []) if e["kind"] == "skip"])
+    starts = [a for _, a, _ in truth]
+    m["missed"], m["decide"] = {}, []
+    for k in judged:
+        if k in read_l:
+            continue
+        kind = kinds.get(k, "skip" if it["scenario"] == "skip" else "unread")
+        n, c = m["missed"].get(kind, (0, 0))
+        m["missed"][kind] = (n + 1, c + (k in final_l))
+        if k in final_l and kind in ("skipline", "skip"):
+            # from the end of the line read after the gap (the first time the reader goes on past it)
+            t_mark = res["line"][k][0]
+            g0 = [g for g in gaps if g <= t_mark]
+            if not g0:
+                continue
+            i = bisect.bisect_left(starts, g0[-1] - 0.01)
+            if i >= len(truth) or line(truth[i][0]) <= k:
+                continue
+            nl, j = line(truth[i][0]), i
+            while j + 1 < len(truth) and line(truth[j + 1][0]) == nl:
+                j += 1
+            m["decide"].append(round(t_mark - truth[j][2], 3))
+    # words: cut out (skipword), and marks on words that were read
+    cut = {dlo + e["word"][1] for e in it.get("errors", []) if e["kind"] == "skipword" and e["word"][0] == it["dua"]}
+    cut = {g for g in cut if line(g) >= first}
+    near = {x for g in cut for x in (g - 1, g, g + 1)}
+    m["words_read"] = sum(1 for g in read_w if line(g) >= first)
+    m["false_words"] = len((final_w & read_w) - near)
+    m["flips_word"] = sum(c is not None for _, c in res["word"].values())
+    m["skipword"] = (len(cut), sum(1 for g in cut if {g - 1, g, g + 1} & final_w))
+    return m
+
+
+
+
+def _line_letters(ix, d: int) -> list[np.ndarray]:
+    """Each line's letter codes (the CTC columns), in order."""
+    cache = _cache(ix, "letters")
+    if d not in cache:
+        if "w" not in cache:
+            cache["w"] = np.r_[0, np.flatnonzero(np.diff(ix.letter_word) != 0) + 1, ix.letters.size]
+        wl = cache["w"]
+        _, _, first_w = _dua_lines(ix, d)
+        ends = first_w[1:] + [ix.dua_word_span[d][1]]
+        cache[d] = [ix.letters[wl[a] : wl[b]].astype(np.int64) for a, b in zip(first_w, ends)]
+        cache[(d, "fw")] = [int(wl[a + 1] - wl[a]) for a in first_w]  # letters in each line's first word
+    return cache[d]
+
+
+def practice_v1(it: dict, ix, target: tuple[int, int, int], fups: list, ctc_path, cfg=None) -> list[list]:
+    """The checker of src/dua_recognition/practice.py on the (pinned) display's steps and the frames
+    the follower commits: one record per target line, [line, t decided, llr, shown, read (truth),
+    kind if left out, t the reader went on past the gap (for skipped lines)]. Thresholds are
+    applied later (practice_v1_agg), so they can be swept without replaying anything."""
+    from dua_recognition.practice import PracticeConfig, committed_frames, judge_lines
+
+    d, lo_li, hi_li = target
+    _, li_of, _ = _dua_lines(ix, d)
+    z = np.load(ctc_path)
+    frames, ftimes = committed_frames(z["lp"], z["n_frames"], z["t"])
+    steps = [(float(u[0]), None if u[3] is None or int(ix.word_dua[u[3]]) != d else li_of[int(u[2])]) for u in fups]
+    letters = _line_letters(ix, d)
+    recs = judge_lines(frames, ftimes, steps, letters, lo_li, hi_li, cfg or PracticeConfig(),
+                       first_words=_cache(ix, "letters")[(d, "fw")])
+    # the truth: lines read, what each one left out was, when the reader went on past it
+    dlo = ix.dua_word_span[d][0]
+    line = lambda g: li_of[int(ix.word_segment[g])]  # noqa: E731
+    truth = sorted(((dlo + w, a, b) for dd, w, a, b in it["words"] if dd == it["dua"]), key=lambda x: x[1])
+    read_l = {line(g) for g, _, _ in truth}
+    kinds = {}
+    for e in it.get("errors", []):
+        if e["kind"] == "skipline":
+            kinds[li_of[e["seg"]]] = "skipline"
+        elif e["kind"] == "ending":
+            kinds.update({li_of[s]: "ending" for s in e["segs"]})
+    gaps = sorted([e["t"] for e in it.get("errors", []) if e["kind"] == "skipline"]
+                  + [e["t"] for e in it.get("events", []) if e["kind"] == "skip"])
+    cut_lines = {line(dlo + e["word"][1]) for e in it.get("errors", []) if e["kind"] == "skipword"}
+    starts = [a for _, a, _ in truth]
+    out = []
+    for k, t, llr, shown in recs:
+        read = k in read_l
+        kind = ("cutword" if k in cut_lines else "") if read else kinds.get(k, "skip" if it["scenario"] == "skip"
+                                                                            else "unread")
+        t_ref = None
+        if kind in ("skipline", "skip"):
+            g0 = [g for g in gaps if g <= t]
+            i = bisect.bisect_left(starts, g0[-1] - 0.01) if g0 else len(truth)
+            if i < len(truth) and line(truth[i][0]) > k:
+                nl, j = line(truth[i][0]), i
+                while j + 1 < len(truth) and line(truth[j + 1][0]) == nl:
+                    j += 1
+                t_ref = truth[j][2]
+        out.append([k, round(t, 3), round(llr, 2), shown, read, kind, t_ref])
+    return out
+
+
+def practice_v1_agg(ms: list[dict], cfg) -> dict:
+    """The v1 checker's numbers over items {minutes, voice, lines: practice_v1 records}, with the
+    verdicts the reader would be shown (practice.gated_verdicts: thresholds and sound gate of cfg)."""
+    from dua_recognition.practice import gated_verdicts
+
+    minutes = sum(m["minutes"] for m in ms)
+    out = {"items": len(ms), "minutes": round(minutes, 1), "voices": len({m["voice"] for m in ms})}
+    if not minutes:
+        return out
+    recs = [(r, v) for m in ms for r, v in zip(m["lines"], gated_verdicts(m["lines"], cfg))]
+    read = [(r, v) for r, v in recs if r[4] and r[5] != "cutword"]  # read as written
+    out["false_lines_10"] = sum(v == "left out" for _, v in read) / minutes * 10
+    out["unsure_10"] = sum(v == "not sure" for _, v in read) / minutes * 10
+    cut = [v for r, v in recs if r[5] == "cutword"]  # read but for one word
+    if cut:
+        out["marked_cutword"] = sum(v == "left out" for v in cut) / len(cut)
+    for kind in ("skipline", "ending", "skip", "unread"):
+        miss = [v for r, v in recs if r[5] == kind]
+        if miss:
+            out[f"catch_{kind}"] = sum(v == "left out" for v in miss) / len(miss)
+            out[f"heard_{kind}"] = sum(v == "heard" for v in miss) / len(miss)  # a left-out line passed as heard
+            out[f"n_{kind}"] = len(miss)
+    dec = [r[1] - r[6] for r, v in recs if r[5] in ("skipline", "skip") and v == "left out" and r[6] is not None]
+    if dec:
+        out["decide_med"] = float(np.median(dec))
+        out["decide_p90"] = float(np.percentile(dec, 90))
+    return out
+
+
+def aggregate_practice(ms: list[dict]) -> dict:
+    s = lambda k: sum(m.get(k, 0) for m in ms)  # noqa: E731
+    minutes = s("minutes")
+    out = {"items": len(ms), "minutes": round(minutes, 1), "voices": len({m["voice"] for m in ms if "voice" in m})}
+    if not minutes:
+        return out
+    out["false_lines_10"] = s("false_lines") / minutes * 10
+    if s("minutes_after_lock"):
+        out["false_after_10"] = (s("false_lines") - s("false_lines_prelock")) / s("minutes_after_lock") * 10
+        locks = [m["lock_s"] for m in ms if m.get("lock_s") is not None]
+        out["lock_med"] = float(np.median(locks)) if locks else float("nan")
+    out["false_words_10"] = s("false_words") / minutes * 10
+    out["flips_line_10"] = s("flips_line") / minutes * 10
+    out["flips_word_10"] = s("flips_word") / minutes * 10
+    out["not_judged"] = s("not_judged_lines") / max(1, s("target_lines"))
+    for kind in ("skipline", "ending", "skip", "unread"):
+        n = sum(m.get("missed", {}).get(kind, (0, 0))[0] for m in ms)
+        if n:
+            out[f"catch_{kind}"] = sum(m["missed"][kind][1] for m in ms if kind in m.get("missed", {})) / n
+            out[f"n_{kind}"] = n
+    n = sum(m.get("skipword", (0, 0))[0] for m in ms)
+    if n:
+        out["catch_skipword"] = sum(m["skipword"][1] for m in ms if "skipword" in m) / n
+        out["n_skipword"] = n
+    dec = [x for m in ms for x in m.get("decide", [])]
+    if dec:
+        out["decide_med"] = float(np.median(dec))
+        out["decide_p90"] = float(np.percentile(dec, 90))
+    return out
+
+
+# data/cache/practice/prereg.md: the line level gates
+PRACTICE_BARS = {"false_lines_10": ("<=", 0.2), "catch_skipline": (">=", 0.85), "catch_ending": (">=", 0.85),
+                 "decide_med": ("<=", 2.5), "decide_p90": ("<=", 5.0)}
+PRACTICE_COLS = [("false_lines_10", "false lines/10m", "{:.2f}"), ("false_after_10", "...once found", "{:.2f}"),
+                 ("lock_med", "found med", "{:.1f}s"), ("false_words_10", "false words/10m", "{:.2f}"),
+                 ("catch_skipline", "skipline", "{:.0%}"), ("catch_ending", "ending", "{:.0%}"),
+                 ("catch_skip", "skip (1-4)", "{:.0%}"), ("catch_skipword", "skipword", "{:.0%}"),
+                 ("decide_med", "decide med", "{:.1f}s"), ("decide_p90", "decide p90", "{:.1f}s"),
+                 ("flips_line_10", "line flips/10m", "{:.2f}"), ("flips_word_10", "word flips/10m", "{:.1f}"),
+                 ("not_judged", "not judged", "{:.0%}")]
+
+
 def _score_one(it: dict) -> tuple[str, dict] | None:
     shown = replay(it)
     if shown is None:
@@ -1403,6 +1883,12 @@ def _score_one(it: dict) -> tuple[str, dict] | None:
     m = metrics(it, shown, _W["ix"])
     m.update(scenario=it["scenario"], lane=it["lane"], voice=it["voice"], rate=it["tags"].get("rate"),
              split=split_of(it["voice"]), dua=it["dua"])
+    fups = _W.pop("fups", None)
+    if _W.get("practice") and fups is not None and it["scenario"] not in NOT_PRACTICE:
+        tg = practice_target(it, _W["ix"])
+        if tg:
+            m["practice"] = practice_metrics(it, practice_v0(fups, _W["ix"], tg), _W["ix"], tg, fups)
+            m["practice_lines"] = practice_v1(it, _W["ix"], tg, fups, asr_paths(it, _W["asr_tag"], _W["ctc_tag"])[1])
     return it["id"], m
 
 
@@ -1482,7 +1968,11 @@ def table(rows: list[tuple[str, dict]], ref: dict | None = None) -> str:
 def cmd_score(args) -> None:
     from multiprocessing import Pool
 
-    items = load_items(args.scenarios, args.split)
+    if args.practice and args.display != "stream":
+        sys.exit("--practice watches the page's display: use --display stream")
+    items = load_items(args.scenarios, args.split, practice=args.practice)
+    if args.practice:  # the reader's own du'a, read on their own: no moving around, no other texts
+        items = [it for it in items if it["scenario"] not in NOT_PRACTICE and it["lane"] != "majlis"]
     if args.lane:
         items = [it for it in items if it["lane"] == args.lane]
     import evaluate as ev
@@ -1508,7 +1998,8 @@ def cmd_score(args) -> None:
             sc_kw[k] = tuple(float(x) for x in v.split(";"))
         else:
             sc_kw[k] = int(v) if k in ("line_steps", "next_steps", "gate_words") else float(v)
-    init = (cfg_kw, fw_kw, asr_tag, ctc_tag, args.delay, args.follow_delay, args.display, sc_kw, args.same_text)
+    init = (cfg_kw, fw_kw, asr_tag, ctc_tag, args.delay, args.follow_delay, args.display, sc_kw, args.same_text,
+            args.practice)
     results = {}
     with Pool(args.workers, initializer=_worker_init, initargs=init) as pool:
         for r in pool.imap_unordered(_score_one, items, chunksize=1):
@@ -1520,6 +2011,11 @@ def cmd_score(args) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"args": vars(args), "items": results}, ensure_ascii=False), encoding="utf-8")
     report(results, args.compare)
+    if args.practice:
+        print()
+        practice_report(results)
+        print()
+        practice_v1_report(results)
 
 
 def report(results: dict, compare: str | None = None, split: str = "all") -> None:
@@ -1547,6 +2043,104 @@ def grid_rows(results: dict) -> list[tuple[str, dict]]:
 def cmd_report(args) -> None:
     res = json.loads((BENCH / "results" / f"{args.name}.json").read_text(encoding="utf-8"))["items"]
     report(res, args.compare, args.split)
+
+
+def practice_report(results: dict, split: str = "all") -> None:
+    """The practice checker's numbers by scenario and lane, and the pre-registered bars."""
+    ms = [dict(m["practice"], voice=m["voice"], scenario=m["scenario"], lane=m["lane"])
+          for m in results.values() if "practice" in m and (split == "all" or m.get("split") == split)]
+    by_sc, by_lane = {}, {}
+    for m in ms:
+        by_sc.setdefault(m["scenario"], []).append(m)
+        by_lane.setdefault(m["lane"], []).append(m)
+    rows = [(sc, aggregate_practice(by_sc[sc])) for sc in SCENARIOS if sc in by_sc]
+    rows += [(f"lane: {ln}", aggregate_practice(v)) for ln, v in sorted(by_lane.items())]
+    ordinary = [m for m in ms if m["lane"] in ("harvest", "user")]
+    if ordinary:
+        rows.append(("ordinary voices (harvest + user)", aggregate_practice(ordinary)))
+    rows.append(("all", aggregate_practice(ms)))
+    print("| cell | items | min | voices | " + " | ".join(c[1] for c in PRACTICE_COLS) + " |")
+    print("|" + "---|" * (4 + len(PRACTICE_COLS)))
+    for name, agg in rows:
+        cells = [f.format(agg[k]) if k in agg else "" for k, _, f in PRACTICE_COLS]
+        print(f"| {name} | {agg['items']} | {agg['minutes']:.0f} | {agg['voices']} | " + " | ".join(cells) + " |")
+    pooled = dict(rows)["all"]
+    print()
+    for k, (op, v) in PRACTICE_BARS.items():
+        if k not in pooled:
+            print(f"bar {k} {op} {v:g}: no data")
+            continue
+        ok = pooled[k] >= v if op == ">=" else pooled[k] <= v
+        print(f"bar {k} {op} {v:g}: {pooled[k]:.3f}  {'PASS' if ok else 'FAIL'}")
+
+
+V1_COLS = [("false_lines_10", "false left-out/10m", "{:.2f}"), ("unsure_10", "not sure/10m", "{:.2f}"),
+           ("catch_skipline", "skipline", "{:.0%}"), ("catch_ending", "ending", "{:.0%}"),
+           ("catch_skip", "skip (1-4)", "{:.0%}"), ("heard_skipline", "skipline passed", "{:.0%}"),
+           ("decide_med", "decide med", "{:.1f}s"), ("decide_p90", "decide p90", "{:.1f}s")]
+
+
+def practice_v1_report(results: dict, cfg=None, split: str = "all", sweep: bool = False) -> None:
+    """The v1 checker (practice.py) with cfg's thresholds, by scenario and lane; --sweep: the pooled
+    bars over a grid of thresholds instead."""
+    from dataclasses import replace
+
+    from dua_recognition.practice import PracticeConfig
+
+    cfg = cfg or PracticeConfig()
+    ms = [{"minutes": m["practice"]["minutes"], "voice": m["voice"], "scenario": m["scenario"], "lane": m["lane"],
+           "lines": m["practice_lines"]}
+          for m in results.values() if "practice_lines" in m and (split == "all" or m.get("split") == split)]
+    if sweep:
+        print("| left out at <= -tu (not shown) / <= -ts (shown) | false left-out/10m | not sure/10m | skipline | "
+              "ending | skip | decide med / p90 |")
+        print("|---|---:|---:|---:|---:|---:|---:|")
+        for tu in (2.0, 4.0, 8.0, 12.0):
+            for ts in (None, 15.0, 20.0, 30.0):
+                a = practice_v1_agg(ms, replace(cfg, theta_unheard=tu, theta_shown=ts))  # the gate as cfg
+                print(f"| {tu:g} / {ts if ts is not None else '-'} | {a['false_lines_10']:.2f} | {a['unsure_10']:.2f} | "
+                      f"{a.get('catch_skipline', float('nan')):.0%} | {a.get('catch_ending', float('nan')):.0%} | "
+                      f"{a.get('catch_skip', float('nan')):.0%} | {a.get('decide_med', float('nan')):.1f} / "
+                      f"{a.get('decide_p90', float('nan')):.1f} s |")
+        return
+    by_sc, by_lane = {}, {}
+    for m in ms:
+        by_sc.setdefault(m["scenario"], []).append(m)
+        by_lane.setdefault(m["lane"], []).append(m)
+    rows = [(sc, practice_v1_agg(by_sc[sc], cfg)) for sc in SCENARIOS if sc in by_sc]
+    rows += [(f"lane: {ln}", practice_v1_agg(v, cfg)) for ln, v in sorted(by_lane.items())]
+    ordinary = [m for m in ms if m["lane"] in ("harvest", "user")]
+    if ordinary:
+        rows.append(("ordinary voices (harvest + user)", practice_v1_agg(ordinary, cfg)))
+    rows.append(("all", practice_v1_agg(ms, cfg)))
+    print(f"v1 checker: heard at >= {cfg.theta_heard:g}; left out at <= -{cfg.theta_unheard:g} if the display "
+          f"didn't show the line, <= -{cfg.theta_shown} if it did; sound gate {cfg.gate_lines} lines, "
+          f"{cfg.gate_heard:g} heard")
+    print("| cell | items | min | voices | " + " | ".join(c[1] for c in V1_COLS) + " |")
+    print("|" + "---|" * (4 + len(V1_COLS)))
+    for name, agg in rows:
+        cells = [f.format(agg[k]) if k in agg else "" for k, _, f in V1_COLS]
+        print(f"| {name} | {agg['items']} | {agg['minutes']:.0f} | {agg['voices']} | " + " | ".join(cells) + " |")
+    pooled = dict(rows)["all"]
+    print()
+    for k, (op, v) in PRACTICE_BARS.items():
+        if k in pooled:
+            ok = pooled[k] >= v if op == ">=" else pooled[k] <= v
+            print(f"bar {k} {op} {v:g}: {pooled[k]:.3f}  {'PASS' if ok else 'FAIL'}")
+
+
+def cmd_practice(args) -> None:
+    res = json.loads((BENCH / "results" / f"{args.name}.json").read_text(encoding="utf-8"))["items"]
+    if args.v1 or args.sweep:
+        from dataclasses import replace
+
+        from dua_recognition.practice import PracticeConfig
+
+        cfg = replace(PracticeConfig(), theta_heard=args.th, theta_unheard=args.tu,
+                      theta_shown=args.ts if args.ts > 0 else None, gate_lines=args.gate)
+        practice_v1_report(res, cfg, args.split, args.sweep)
+    else:
+        practice_report(res, args.split)
 
 
 # Pre-registered bars for the jump work (data/cache/jumps/prereg.md): moves the reader makes, and
@@ -1688,6 +2282,18 @@ def main() -> None:
     s.add_argument("--display", choices=["follower", "tracker", "oracle", "stream"], default="follower",
                    help="what drives the highlight: the phone's follower (default), the tracker alone, or the "
                         "follower anchored on the true word (a perfect tracker)")
+    s.add_argument("--practice", action="store_true",
+                   help="also run the practice checker on the display (needs --display stream): the practice "
+                        "cells join, majlis and the jumps / switch / ooc cells are left out")
+    pr = sub.add_parser("practice", help="the practice checker's numbers from a `score --practice` run")
+    pr.add_argument("--name", required=True)
+    pr.add_argument("--split", choices=["dev", "test", "all"], default="all")
+    pr.add_argument("--v1", action="store_true", help="the v1 checker (practice.py) instead of v0")
+    pr.add_argument("--th", type=float, default=4.0, help="v1: heard at llr >= th")
+    pr.add_argument("--tu", type=float, default=4.0, help="v1: left out at score <= -tu (a line the display didn't show)")
+    pr.add_argument("--ts", type=float, default=20.0, help="v1: ...and at <= -ts even if it did (0: the display isn't asked)")
+    pr.add_argument("--sweep", action="store_true", help="v1: the pooled bars over a grid of thresholds")
+    pr.add_argument("--gate", type=int, default=4, help="v1: the sound gate's lines (0: off)")
     r = sub.add_parser("report")
     r.add_argument("--name", required=True)
     r.add_argument("--compare")
@@ -1699,7 +2305,7 @@ def main() -> None:
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     {"sources": cmd_sources, "build": cmd_build, "asr": cmd_asr, "score": cmd_score,
-     "report": cmd_report, "guard": cmd_guard}[args.cmd](args)
+     "report": cmd_report, "guard": cmd_guard, "practice": cmd_practice}[args.cmd](args)
 
 
 if __name__ == "__main__":
