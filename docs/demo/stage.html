@@ -1,175 +1,560 @@
 <!doctype html>
-<!-- The demo's stage (record.mjs films it): the real app in a phone, and beside it what a GIF
-     can't carry: the sound as it plays, and what Whisper heard in it each second. -->
+<!-- The demo's stage (film.mjs films it): a row of phones running the real app, each replaying a
+     run capture.mjs recorded: a different du'a, a different reciter, a different room. The camera
+     goes from one to the next; the sound is the phone it is with. The only words of its own are
+     credits: who is reciting, and the du'a's name once the app has found it. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>Demo stage</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Amiri&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Aref+Ruqaa:wght@400;700&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
 <style>
-  :root { --bg: #0b1020; --ink: #efe6d0; --S: .8626; }
+  :root {
+    --night: #0b101c; --night-2: #121a2c; --ink: #efe6d0; --muted: #978f7c; --muted-hi: #b7ac93; --gold: #d9b46a;
+    --gold-hi: #f0d596; --paper: #0e1320;
+    --pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'%3E%3Cg fill='none' stroke='%23d9b46a' stroke-opacity='.09'%3E%3Crect x='20' y='20' width='24' height='24'/%3E%3Crect x='20' y='20' width='24' height='24' transform='rotate(45 32 32)'/%3E%3Cpath d='M32 0v15M32 49v15M0 32h15M49 32h15'/%3E%3C/g%3E%3C/svg%3E");
+  }
   * { box-sizing: border-box; }
-  html, body { margin: 0; width: 1100px; height: 800px; overflow: hidden; color: var(--ink); }
-  body { background: radial-gradient(85% 100% at 30% 45%, #151e37, var(--bg) 72%); }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: #05070c; }
+  .layer { position: absolute; inset: 0; pointer-events: none; }
 
+  /* The room: night, the app's own khatam lattice far behind, a lamp that answers the voice. */
+  #sky { background: radial-gradient(70% 85% at 50% 48%, var(--night-2), var(--night) 55%, #05070c 100%); }
+  #lattice {
+    background: var(--pattern) 0 0 / 120px 120px;
+    -webkit-mask-image: radial-gradient(60% 62% at 50% 50%, #000 30%, transparent 100%);
+    mask-image: radial-gradient(60% 62% at 50% 50%, #000 30%, transparent 100%);
+  }
+  #lamp {
+    inset: auto; left: 50%; top: 50%; width: 1500px; height: 1300px; margin: -650px 0 0 -750px;
+    background: radial-gradient(closest-side, rgba(226, 178, 96, .26), rgba(217, 160, 90, .09) 45%, transparent 100%);
+  }
+  #vignette { background: radial-gradient(75% 85% at 50% 50%, transparent 52%, rgba(2, 3, 6, .62) 100%); }
+  #grain { width: 1920px; height: 1080px; opacity: .4; }
+  #fade { background: #000; }
+
+  #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  /* The phones: plain modern handsets, nobody's in particular. */
   .phone {
-    position: absolute; left: 84px; top: 25px; width: calc(390px * var(--S) + 22px); height: calc(844px * var(--S) + 22px);
-    padding: 11px; border-radius: 50px; background: #05070d;
-    box-shadow: 0 0 0 1.5px #262c3d, 0 30px 80px rgba(0, 0, 0, .55);
+    position: absolute; top: 0; width: 418px; height: 872px; padding: 14px; border-radius: 66px;
+    background: linear-gradient(150deg, #474c59 0%, #1a1d25 12%, #0b0d12 45%, #12151c 80%, #3b404c 100%);
+    box-shadow:
+      inset 0 0 0 1.2px rgba(255, 255, 255, .13), inset 0 0 0 4px #07080b,
+      0 0 0 1px #020304, 0 70px 150px rgba(0, 0, 0, .62), 0 24px 60px rgba(0, 0, 0, .45);
   }
-  .screen { position: relative; width: 100%; height: 100%; border-radius: 40px; overflow: hidden; background: #0e1320; }
-  .screen iframe { position: absolute; left: 0; top: 0; width: 390px; height: 844px; border: 0; transform: scale(var(--S)); transform-origin: 0 0; }
+  .phone .key { position: absolute; width: 4px; border-radius: 2px; background: linear-gradient(90deg, #2a2e38, #4a4f5c); }
+  .screen { position: relative; width: 390px; height: 844px; border-radius: 52px; overflow: hidden; background: #0e1320; }
+  .screen iframe { display: block; width: 390px; height: 844px; border: 0; }
+  /* A sheen on the glass that slides as the row turns, as a reflection would. */
+  .glass {
+    position: absolute; inset: 0; border-radius: 52px; pointer-events: none;
+    background: linear-gradient(116deg, transparent 30%, rgba(255, 255, 255, .07) 42%, rgba(255, 255, 255, .02) 52%, transparent 62%)
+      0 0 / 300% 300% no-repeat;
+  }
   .tap {
-    position: absolute; z-index: 3; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%;
-    background: radial-gradient(rgba(255, 255, 255, .5), rgba(255, 255, 255, .12) 60%, transparent 70%);
-    border: 2px solid rgba(255, 255, 255, .7); opacity: 0; pointer-events: none;
+    position: absolute; width: 88px; height: 88px; margin: -44px 0 0 -44px; border-radius: 50%; opacity: 0;
+    background: rgba(255, 250, 238, .5); box-shadow: 0 0 0 1.5px rgba(255, 250, 238, .75), 0 6px 18px rgba(0, 0, 0, .35);
   }
+  .ring { position: absolute; width: 88px; height: 88px; margin: -44px 0 0 -44px; border-radius: 50%; opacity: 0;
+    box-shadow: 0 0 0 2.5px rgba(255, 244, 220, .9); }
+  /* A phone the camera isn't with stands in the dark; it lights up as the camera arrives. */
+  .shade { position: absolute; inset: -2px; border-radius: 68px; background: #04060b; pointer-events: none; }
 
-  .under { position: absolute; left: 530px; top: 290px; width: 500px; }
-  #wave { display: block; width: 500px; height: 84px; }
-  .heard { position: relative; height: 128px; margin-top: 26px; direction: rtl; font-family: Amiri, serif; }
-  .heard p { position: absolute; right: 0; left: 0; margin: 0; text-align: right; white-space: nowrap; overflow: hidden; }
-  .fade { position: absolute; inset: 0; z-index: 10; background: var(--bg); opacity: 0; }
+  /* Credits, as a player names a track: the du'a (once the app has found it), and who recites it.
+     In the app's own faces: Aref Ruqaa for the Arabic name, EB Garamond for the rest. */
+  .credit { position: absolute; left: 92px; bottom: 100px; width: 560px; color: var(--ink); text-wrap: balance;
+    text-shadow: 0 2px 28px rgba(2, 3, 6, .75); }
+  .credit .ar { display: block; font: 700 70px/1.2 "Aref Ruqaa", serif; color: var(--gold); direction: rtl; text-align: left; }
+  .credit .en { display: block; font: 400 48px/1.2 "EB Garamond", serif; }
+  .credit .by { display: block; margin-top: 12px; font: italic 400 44px/1.2 "EB Garamond", serif; color: var(--muted-hi); }
+  /* Under each phone in the last shot, the same, smaller. */
+  .cap { position: absolute; left: -50px; right: -50px; top: calc(100% + 34px); text-align: center; opacity: 0; color: var(--ink);
+    text-wrap: balance; }
+  .cap .en { display: block; font: 400 52px/1.2 "EB Garamond", serif; }
+  .cap .by { display: block; margin-top: 6px; font: italic 400 44px/1.2 "EB Garamond", serif; color: var(--muted-hi); }
+
+  /* The app's own name and seal, as its home screen sets them: Aref Ruqaa in gold, the English in
+     spaced capitals, the khatam that is its start button. They open the film, settle into the
+     first phone's home screen, and come back at the end with where to find it. */
+  .mark { position: absolute; left: 0; top: 0; transform-origin: 50% 50%; opacity: 0; white-space: nowrap; }
+  .mark.ar { font: 700 150px/1.35 "Aref Ruqaa", serif; color: var(--gold); }
+  .mark.en { font: 400 30px/1.5 "EB Garamond", serif; letter-spacing: .3em; text-transform: uppercase; color: var(--muted); }
+  .mark.url { font: 400 34px/1.4 "EB Garamond", serif; color: var(--ink); }
+  .seal { width: 250px; height: 250px; overflow: visible; color: var(--gold); }
+  .seal .star rect, .seal .star circle { stroke: var(--gold-hi); stroke-width: 1.2; stroke-dasharray: 1; }
+  .seal .mic { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 </style>
 </head>
 <body>
-<div class="phone"><div class="screen">
-  <iframe id="app" src="/app/index.html?log=0" title="The app"></iframe>
-</div></div>
-<div class="tap" id="tap"></div>
-<div class="under">
-  <canvas id="wave" width="1000" height="168"></canvas>
-  <div class="heard" id="heard"></div>
+<div class="layer" id="sky"></div>
+<div class="layer" id="lattice"></div>
+<div class="layer" id="lamp"></div>
+<div id="world"></div>
+<div class="layer" id="vignette"></div>
+<div class="layer" id="marks">
+  <svg class="mark seal" id="seal" viewBox="-50 -50 100 100" aria-hidden="true">
+    <g class="star">
+      <rect x="-32" y="-32" width="64" height="64" pathLength="1"/>
+      <rect x="-32" y="-32" width="64" height="64" transform="rotate(45)" pathLength="1"/>
+      <circle r="24" pathLength="1"/>
+    </g>
+    <svg class="mic" x="-11.4" y="-11.4" width="22.8" height="22.8" viewBox="0 0 24 24">
+      <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+    </svg>
+  </svg>
+  <div class="mark ar" id="mark-ar" lang="ar">رفيق الدعاء</div>
+  <div class="mark en" id="mark-en">Du'a Companion</div>
+  <div class="mark url" id="mark-url">github.com/Hasan-Mehdi/dua-recognition</div>
 </div>
-<div class="fade" id="fade"></div>
+<div class="credit" id="credit"><span class="ar" lang="ar"></span><span class="en"></span><span class="by"></span></div>
+<canvas class="layer" id="grain" width="960" height="540"></canvas>
+<div class="layer" id="fade"></div>
+
+<template id="phone">
+  <div class="phone">
+    <i class="key" style="left:-3px;top:178px;height:34px"></i>
+    <i class="key" style="left:-3px;top:236px;height:62px"></i>
+    <i class="key" style="left:-3px;top:312px;height:62px"></i>
+    <i class="key" style="right:-3px;top:262px;height:96px"></i>
+    <div class="screen">
+      <iframe src="/app/index.html?log=0" title="The app"></iframe>
+      <div class="glass"></div>
+      <div class="ring"></div>
+      <div class="tap"></div>
+    </div>
+    <div class="shade"></div>
+    <div class="cap"><span class="en"></span><span class="by"></span></div>
+  </div>
+</template>
 
 <script type="module">
 const $ = (id) => document.getElementById(id);
-const S = 0.8626;
-const TAP = 2.1; // s after filming starts: the tap on the microphone
-const AFTER = 44.2; // s of recitation shown; then a short fade, and the GIF loops
-const tl = await fetch("timeline.json").then((r) => r.json());
-const peak = [...tl.rms].sort((a, b) => a - b)[Math.floor(tl.rms.length * 0.985)] || 1;
-const quietDb = Math.min(...tl.band_db);
-const ease = (k) => (k <= 0 ? 0 : k >= 1 ? 1 : 1 - (1 - k) ** 3);
+const W = 1920, H = 1080, SW = 390, SH = 844, BEZEL = 14, PW = 418, PH = 872;
+const GAP = 500; // from one phone's left edge to the next, in the world
 
+// The credits' faces, loaded before anything is filmed (they are only asked for once text shows).
+await Promise.all(['700 70px "Aref Ruqaa"', '400 48px "EB Garamond"', 'italic 400 44px "EB Garamond"']
+  .map((f) => document.fonts.load(f, "دعاء رفيق Dua")));
+const runs = await fetch("runs.json").then((r) => r.json()); // capture.mjs, one per phone
+// The corpus's names carry the odd direction mark or stray space: the credit shows them clean.
+for (const r of runs) r.source.name_ar = (r.source.name_ar ?? "").replace(/[\u200e\u200f\u202a-\u202e]/g, "").trim();
+const sounds = await fetch("sounds.json").then((r) => r.json()); // film.mjs: their loudness
+const N = runs.length;
+const X = (k) => k * GAP;
+const ease = (k) => (k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k));
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+
+// -- the plan, in film seconds ---------------------------------------------------------------
+// Every phone the same way: the reciter is heard first, then a finger taps start, the phone
+// listens and finds its place, and the camera stays a few seconds, leaving in a pause between
+// phrases. The next reciter comes in as the camera crosses to the next phone.
+// The intro: the seal draws itself and the name comes in (the app's own marks), then they settle
+// into the first phone's home screen as it lights up around them.
+const MORPH = 3.5, SETTLED = MORPH + 1.4;
+const OPEN = SETTLED + 0.9; // the first home screen, before anyone recites
+const HAND = 1.3; // from leaving a phone to the next reciter's first breath
+const TRAVEL = 2.6; // from leaving a phone to arriving at the next
+const PULL = 2.6, HOLD = 2.8, OUTRO = 6.4, FADE = 1.3;
+// ?follow=S: the first phone stays S s after it finds its place (the explainer films one phone at length).
+const FOLLOW = Number(new URLSearchParams(location.search).get("follow")) || 0;
+const follow = (k) => (k === 0 ? FOLLOW || 5.0 : 3.4); // s on a phone after it finds its place, at least
+// The first pause (the stop detector quiet 0.2 s) in run k after clip second t: its start.
+function pauseAfter(run, t) {
+  for (const [at, q] of run.quiet) if (q != null && q >= 0.2 && at - q >= t) return at - q;
+  return Infinity;
+}
+const plan = [];
+for (let k = 0; k < N; k++) {
+  const run = runs[k];
+  const voice = k === 0 ? OPEN : plan[k - 1].leave + HAND; // the reciter comes in
+  const start = voice + (run.source.start - run.source.entry); // and the app starts listening
+  const foundIn = run.updates.find((u) => u.u.dua)?.at ?? 8;
+  const stay = foundIn + follow(k);
+  const leave = start + Math.min(stay + 1.6, pauseAfter(run, stay) + 0.25); // in a pause, if one comes soon
+  plan.push({ voice, tap: start - 0.16, start, found: start + foundIn, leave, arrive: k === 0 ? 0 : plan[k - 1].leave + TRAVEL });
+}
+// The outro: the phones go back into the dark, and the name and seal come back with where to
+// find it.
+const FINALE = plan[N - 1].leave, OUT = FINALE + PULL + HOLD, END = OUT + OUTRO;
+
+// -- springs: duration and bounce, as Apple's perceptual springs (WWDC23 "Animate with springs") --
+// stiffness = (2π / duration)², damping = 4π (1 - bounce) / duration, unit mass.
+class Spring {
+  constructor(x) { this.x = x; this.v = 0; this.to = x; this.set(1, 0); }
+  set(duration, bounce = 0) {
+    this.k = (2 * Math.PI / duration) ** 2;
+    this.c = (4 * Math.PI * (1 - bounce)) / duration;
+    return this;
+  }
+  step(dt) {
+    const n = Math.max(1, Math.ceil(dt / 0.002));
+    for (let i = 0; i < n; i++) {
+      const h = dt / n;
+      this.v += (this.k * (this.to - this.x) - this.c * this.v) * h;
+      this.x += this.v * h;
+    }
+    return this.x;
+  }
+}
+// The camera: the world point it looks at (wx, wy), how close (zoom, in log space so a push-in
+// feels even all the way), the row's turn (rx, ry), and where that point sits in the frame.
+const cam = {
+  lz: new Spring(Math.log(1.24)), wx: new Spring(BEZEL + SW / 2), wy: new Spring(BEZEL + SH * 0.42),
+  rx: new Spring(6), ry: new Spring(-16), ax: new Spring(W / 2 + 30), ay: new Spring(H / 2 + 24),
+};
+const lamp = { level: 0, bloom: new Spring(0).set(1.6, 0) };
+
+// -- the phones ------------------------------------------------------------------------------
+const phones = runs.map((run, k) => {
+  const el = $("phone").content.firstElementChild.cloneNode(true);
+  el.style.left = `${X(k)}px`;
+  const frame = el.querySelector("iframe");
+  frame.dataset.k = k;
+  el.querySelector(".cap .en").textContent = run.source.name;
+  el.querySelector(".cap .by").textContent = run.source.credit;
+  $("world").append(el);
+  return { k, run, el, frame, glass: el.querySelector(".glass"), tap: el.querySelector(".tap"),
+    ring: el.querySelector(".ring"), shade: el.querySelector(".shade"), cap: el.querySelector(".cap"),
+    light: new Spring(k === 0 ? 1 : 0).set(0.9), t0: null, foundAt: null, scroll: 0 };
+});
+const doc = (k) => phones[k].frame.contentDocument;
+
+const quietAt = (run, t) => {
+  let q = null;
+  for (const [at, v] of run.quiet) { if (at > t) break; q = v; }
+  return q;
+};
 const demo = (window.__demo = {
-  c0: null, t0: null,
+  c0: null,
+  plan, END,
   begin() {
     demo.c0 = performance.now();
-    setTimeout(tap, TAP * 1000 - 250);
+    for (const [key, v] of Object.entries(opening())) Object.assign(cam[key], { x: v, to: v, v: 0 });
+    for (let k = 0; k < N; k++) setTimeout(() => tap(k), plan[k].tap * 1000);
   },
-  // The app opened its /ws stream: from here the recognizer's messages arrive on time.
-  connected(ws) {
-    demo.t0 = performance.now();
-    for (const st of tl.steps) setTimeout(() => ws.onmessage?.({ data: JSON.stringify(st.msg) }), st.at * 1000);
+  // Called by app.js (served with this in place of its engine), once per phone: kind "device",
+  // as on a phone, replaying that phone's run.
+  engine(frame) {
+    const p = phones[Number(frame.dataset.k)];
+    return {
+      kind: "device", model: "replay", words: true,
+      prepare: () => Promise.resolve(),
+      async start(onUpdate) {
+        p.t0 = performance.now();
+        for (const r of p.run.updates) setTimeout(() => onUpdate(r.u), r.at * 1000);
+        this.ear = { get quiet() { return quietAt(p.run, (performance.now() - p.t0) / 1000); } };
+      },
+      push() {}, lock() {}, seek() {}, follow() {}, stop() {},
+    };
   },
-  bandDb() {
-    if (demo.t0 == null) return null;
-    const k = Math.floor(((performance.now() - demo.t0) / 1000) * 60);
-    return k >= 0 && k < tl.band_db.length ? tl.band_db[k] : quietDb;
+  // A phone's listening star hears its own clip, through vclock.js's analyser.
+  bandDb(frame) {
+    const p = phones[Number(frame?.dataset.k)];
+    if (p?.t0 == null) return null;
+    const s = sounds[p.k];
+    const i = Math.floor(((performance.now() - p.t0) / 1000) * s.band_hz);
+    return s.band_db[clamp(i, 0, s.band_db.length - 1)] ?? -90;
   },
-  get done() {
-    return demo.t0 != null && (performance.now() - demo.t0) / 1000 >= AFTER + 0.8;
-  },
+  get t() { return demo.c0 == null ? 0 : (performance.now() - demo.c0) / 1000; },
+  get done() { return demo.c0 != null && demo.t >= END; },
+  // When each phone started listening (film s): film.mjs lines its recording up with it.
+  starts: () => phones.map((p) => (p.t0 == null ? null : (p.t0 - demo.c0) / 1000)),
+  // The sound of each phone now: its gain (the one the camera is with) and its place left to
+  // right in the frame.
+  mix: () => phones.map((p) => [Number(gain(p.k, demo.t).toFixed(4)), Number(pan(p.k).toFixed(3))]),
+  motion: 0,
 });
 
-// A ripple over the app's microphone button, then the real click.
-function tap() {
-  const doc = $("app").contentDocument;
-  const b = doc.getElementById("start").getBoundingClientRect();
-  const screen = document.querySelector(".screen").getBoundingClientRect();
-  $("tap").style.left = `${screen.left + (b.left + b.width / 2) * S}px`;
-  $("tap").style.top = `${screen.top + (b.top + b.height / 2) * S}px`;
-  demo.tapAt = performance.now();
-  setTimeout(() => doc.getElementById("start").click(), 250);
+// A reciter comes in on a breath and goes out in a pause; the last one fades with the picture.
+function gain(k, t) {
+  const p = plan[k];
+  const up = k === 0 ? Math.max(0.3 * ease((t - 0.6) / 2.5), ease((t - p.voice + 0.1) / 0.6))
+    : Math.sin((Math.PI / 2) * clamp((t - p.voice) / 0.3, 0, 1));
+  const down = k < N - 1 ? Math.cos((Math.PI / 2) * clamp((t - p.leave) / 2.2, 0, 1))
+    : Math.cos((Math.PI / 2) * clamp((t - OUT) / 4.0, 0, 1));
+  return up * down;
+}
+let pose = null;
+function pan(k) {
+  if (!pose) return 0;
+  const x = pose.ax + (X(k) + PW / 2 - pose.wx) * pose.z; // the phone's centre in the frame
+  const centre = demo.t >= FINALE ? ease((demo.t - FINALE) / PULL) : 0; // the last shot: back to the middle
+  return clamp((x - W / 2) / (W / 2), -1, 1) * 0.35 * (1 - centre); // a lean, not a hard side: kind to headphones
 }
 
-// The step the recognizer last sent at audio time ta, and how long ago.
-function stepAt(ta) {
-  let k = -1;
-  while (k + 1 < tl.steps.length && tl.steps[k + 1].at <= ta) k++;
+// A finger on a phone's start button: it lands, presses, and lifts with a ring, then the real click.
+function tap(k) {
+  const p = phones[k];
+  const b = doc(k).getElementById("start").getBoundingClientRect();
+  for (const el of [p.tap, p.ring]) {
+    el.style.left = `${b.left + b.width / 2}px`;
+    el.style.top = `${b.top + b.height / 2}px`;
+  }
+  p.tapAt = performance.now();
+  setTimeout(() => doc(k).getElementById("start").click(), 160);
+}
+function drawTap(p, now) {
+  if (p.tapAt == null) return;
+  const t = (now - p.tapAt) / 1000;
+  const down = clamp(t / 0.12, 0, 1), up = clamp((t - 0.3) / 0.45, 0, 1);
+  p.tap.style.opacity = (down * (1 - up)).toFixed(3);
+  p.tap.style.transform = `scale(${(1.35 - 0.45 * ease(down) + 0.1 * up).toFixed(3)})`;
+  const r = clamp((t - 0.14) / 0.9, 0, 1);
+  p.ring.style.opacity = (r > 0 && r < 1 ? 0.9 * (1 - r) ** 1.5 : 0).toFixed(3);
+  p.ring.style.transform = `scale(${(1 + 1.4 * (1 - (1 - r) ** 3)).toFixed(3)})`;
+}
+
+// -- shots -------------------------------------------------------------------------------
+const at = (k, fx, fy) => ({ wx: X(k) + BEZEL + fx, wy: BEZEL + fy });
+function to(o, dur, bounce = 0) {
+  for (const [key, v] of Object.entries(o)) cam[key].set(dur, bounce).to = v;
+}
+// Which phone the camera is with: the last one it has set out for.
+function withPhone(t) {
+  let k = 0;
+  while (k + 1 < N && t >= plan[k].leave) k++;
   return k;
 }
-
-// -- the sound: the recording drawn as it's heard, and the 6 s the recognizer listens to --
-const wg = $("wave").getContext("2d");
-const W = 500, WH = 84, BAR = 3, SHOWN = AFTER + 0.8;
-const rmsAt = (t) => tl.rms[Math.floor(t * 100)] ?? 0;
-const bars = Array.from({ length: Math.floor(W / BAR) }, (_, i) => {
-  const t0 = (i * BAR) / W * SHOWN, t1 = ((i + 1) * BAR) / W * SHOWN;
-  let v = 0;
-  for (let t = t0; t < t1; t += 0.01) v = Math.max(v, rmsAt(t));
-  return { t0, h: Math.max(1, Math.min(1, Math.sqrt(v / peak)) * (WH / 2 - 4)) };
-});
-function drawWave(ta, k) {
-  wg.setTransform(2, 0, 0, 2, 0, 0);
-  wg.clearRect(0, 0, W, WH);
-  wg.fillStyle = "rgba(154, 146, 127, .25)";
-  wg.fillRect(0, WH / 2 - 0.5, W, 1);
-  if (ta == null) return;
-  const x = (t) => (t / SHOWN) * W;
-  if (k >= 0) {
-    // The window of the last step, lit for a moment when it's transcribed.
-    const end = tl.steps[k].msg.t, age = ta - tl.steps[k].at;
-    const glow = Math.max(0, 1 - age / 0.6);
-    wg.fillStyle = `rgba(217, 180, 106, ${(0.05 + 0.1 * glow).toFixed(3)})`;
-    wg.strokeStyle = `rgba(240, 213, 150, ${(0.25 + 0.55 * glow).toFixed(3)})`;
-    wg.lineWidth = 1;
-    wg.beginPath();
-    wg.roundRect(x(Math.max(0, end - 6)), 1, x(end) - x(Math.max(0, end - 6)), WH - 2, 6);
-    wg.fill();
-    wg.stroke();
-  }
-  for (const [i, b] of bars.entries()) {
-    if (b.t0 > ta) break;
-    wg.fillStyle = "#c9a560";
-    wg.fillRect(i * BAR, WH / 2 - b.h, BAR - 1, b.h * 2);
-  }
-}
-
-// -- what Whisper heard: the newest transcript, and the one before it fading away ------
-const heard = $("heard");
-let shownK = -2;
-function drawHeard(ta, k) {
-  if (k !== shownK) {
-    // Silent windows transcribe to nothing: keep the last words up.
-    let j = k;
-    while (j >= 0 && !tl.steps[j].msg.heard) j--;
-    if (j !== shownK) {
-      const prev = heard.querySelector(".new");
-      heard.replaceChildren(...[prev, j >= 0 ? Object.assign(document.createElement("p"), { textContent: tl.steps[j].msg.heard, className: "new" }) : null].filter(Boolean));
-      if (prev) prev.className = "old";
-      demo.heardAt = ta;
-      shownK = j;
+function aim(t) {
+  for (const p of phones) {
+    if (p.foundAt == null && doc(p.k)?.body.dataset.state === "following") {
+      p.foundAt = t;
+      lamp.bloom.v = 2.4; // the lamp swells as a phone finds its place
     }
   }
-  const e = ease(((ta ?? 0) - (demo.heardAt ?? 0)) / 0.45);
-  for (const p of heard.children) {
-    const old = p.className === "old";
-    const size = old ? 36 - 12 * e : 36;
-    p.style.fontSize = `${size}px`;
-    p.style.lineHeight = "1.7";
-    p.style.top = old ? `${50 - 50 * e}px` : `${50 + 24 * (1 - e)}px`;
-    p.style.opacity = old ? (0.9 - 0.62 * e).toFixed(3) : (0.95 * e).toFixed(3);
-    p.style.color = old ? "#9a927f" : "#efe6d0";
+  if (t >= OUT) return; // the outro: the camera stays where it is as the phones go dark
+  if (t >= FINALE) {
+    // All of them at once, each named underneath: back far enough to see every phone following.
+    const z = (W - 150) / (X(N - 1) + PW);
+    to({ lz: Math.log(z), wx: (X(N - 1) + PW) / 2, wy: PH / 2 + 70, rx: 0, ry: 0, ax: W / 2, ay: H / 2 }, PULL * 0.85);
+    return;
+  }
+  const k = withPhone(t);
+  const p = phones[k], pl = plan[k];
+  if (k > 0 && t < pl.arrive) {
+    // On the way: back and across, then in on the next phone, where its shots will be taken.
+    const mid = (t - plan[k - 1].leave) / TRAVEL;
+    if (mid < 0.45) to({ lz: Math.log(0.7), ...at(k - 0.5, SW / 2, SH * 0.5), rx: 0, ry: 0, ax: W / 2, ay: H / 2 }, 2.0);
+    else to({ lz: Math.log(1.0), ...at(k, SW / 2, SH * 0.5), rx: 0, ry: 0, ax: W / 2 + 150, ay: H / 2 }, 1.6);
+    return;
+  }
+  if (p.foundAt != null) {
+    // Found: one push in, to the name in the top bar and the line together, and then still: the
+    // app scrolls each new line to the same place (0.48 of its height), so nothing is chased.
+    to({ lz: Math.log(1.8), ...at(k, SW / 2, 265), rx: 0, ry: 0, ax: W / 2 + 150, ay: H / 2 }, 1.8);
+    return;
+  }
+  if (p.t0 != null) {
+    // Listening: the whole phone, still.
+    to({ lz: Math.log(1.0), ...at(k, SW / 2, SH * 0.5), rx: 0, ry: 0, ax: W / 2 + 150, ay: H / 2 }, 1.4);
+    return;
+  }
+  if (k > 0) {
+    // Arrived, before the tap: the whole phone, its home screen.
+    to({ lz: Math.log(1.0), ...at(k, SW / 2, SH * 0.5), rx: 0, ry: 0, ax: W / 2 + 150, ay: H / 2 }, 1.6);
+    return;
+  }
+  // The opening: still and square on the first phone's home screen, so the name and seal land
+  // exactly where the app has them (opening() is where the camera starts).
+  to(opening(), 2);
+}
+// Close on the first phone's home screen: its name and its promise above the start button.
+function opening() {
+  const top = doc(0)?.querySelector(".brand-ar")?.getBoundingClientRect().top ?? 200;
+  const bottom = doc(0)?.getElementById("start")?.getBoundingClientRect().bottom ?? 560;
+  return { lz: Math.log(clamp((H * 0.82) / (bottom - top + 60), 1, 1.5)), ...at(0, SW / 2, (top + bottom) / 2),
+    rx: 0, ry: 0, ax: W / 2, ay: H / 2 };
+}
+
+// -- credits -----------------------------------------------------------------------------
+// While a reciter is heard: their name. Once their phone has found its place: the du'a's name,
+// as the app shows it. Gone as the camera leaves.
+const credit = { el: $("credit"), k: -1, by: 0, name: 0 };
+function drawCredit(t, dt) {
+  const k = t >= FINALE ? -1 : withPhone(t);
+  const pl = plan[k], p = phones[k];
+  if (k !== credit.k && credit.by < 0.02 && credit.name < 0.02) {
+    credit.k = k;
+    if (k >= 0) {
+      credit.el.querySelector(".ar").textContent = p.run.source.name_ar ?? "";
+      credit.el.querySelector(".en").textContent = p.run.source.name;
+      credit.el.querySelector(".by").textContent = p.run.source.credit;
+    }
+  }
+  const showing = k === credit.k && k >= 0;
+  const by = showing && t >= pl.voice + 0.5 && t < pl.leave ? 1 : 0;
+  const name = showing && p.foundAt != null && t < pl.leave ? 1 : 0;
+  const rate = (x, target, up, down) => x + (target - x) * (1 - Math.exp(-dt / (target > x ? up : down)));
+  credit.by = rate(credit.by, by, 0.25, 0.18);
+  credit.name = rate(credit.name, name, 0.22, 0.18);
+  const [ar, en, byEl] = credit.el.children;
+  for (const [el, v] of [[ar, credit.name], [en, credit.name], [byEl, credit.by]]) {
+    el.style.opacity = v.toFixed(3);
+    el.style.transform = `translateY(${((1 - v) * 10).toFixed(2)}px)`;
+  }
+  // The last shot: each phone's du'a and reciter under it, left to right.
+  for (const p of phones) {
+    const v = ease((t - FINALE - 1.3 - 0.16 * p.k) / 0.7);
+    p.cap.style.opacity = v.toFixed(3);
+    p.cap.style.transform = `translateY(${((1 - v) * 12).toFixed(2)}px)`;
   }
 }
 
-function frame(now) {
-  const ta = demo.t0 == null ? null : (now - demo.t0) / 1000;
-  const k = ta == null ? -1 : stepAt(ta);
-  drawWave(ta, k);
-  drawHeard(ta, k);
-  if (demo.tapAt != null) {
-    const t = (now - demo.tapAt) / 700;
-    $("tap").style.opacity = t < 0 || t > 1 ? 0 : (t < 0.3 ? 1 : 1 - (t - 0.3) / 0.7).toFixed(3);
-    $("tap").style.transform = `scale(${(0.7 + 0.6 * Math.min(1, t)).toFixed(3)})`;
+// -- the app's marks: intro and outro -----------------------------------------------------------
+// Each mark has a resting place on the stage, and in the intro a place to go: the same mark on
+// the first phone's home screen, through the camera (which holds still until they arrive).
+const marks = {
+  // (app: the same mark in the app; hide: what of the app to keep hidden until it arrives)
+  seal: { el: $("seal"), at: [W / 2, 640], app: () => doc(0)?.querySelector("#start .seal-star"),
+    hide: () => doc(0)?.getElementById("start") },
+  ar: { el: $("mark-ar"), at: [W / 2, 330], app: () => doc(0)?.querySelector(".brand-ar") },
+  en: { el: $("mark-en"), at: [W / 2, 452], app: () => doc(0)?.querySelector(".brand-en") },
+  url: { el: $("mark-url"), at: [W / 2, 880] },
+};
+for (const m of Object.values(marks)) {
+  const r = m.el.getBoundingClientRect();
+  m.w = r.width;
+  m.h = r.height;
+  m.size = parseFloat(getComputedStyle(m.el).fontSize);
+}
+const strokes = [...$("seal").querySelectorAll(".star > *")];
+// Where a mark on the first phone's screen is in the frame.
+function onScreen(el) {
+  const r = el.getBoundingClientRect();
+  const z = Math.exp(cam.lz.x);
+  const x = X(0) + BEZEL + r.left + r.width / 2, y = BEZEL + r.top + r.height / 2;
+  return { x: cam.ax.x + (x - cam.wx.x) * z, y: cam.ay.x + (y - cam.wy.x) * z, w: r.width * z, h: r.height * z };
+}
+function place(m, x, y, scale, opacity) {
+  m.el.style.transform = `translate(${(x - m.w / 2).toFixed(2)}px, ${(y - m.h / 2).toFixed(2)}px) scale(${scale.toFixed(4)})`;
+  m.el.style.opacity = clamp(opacity, 0, 1).toFixed(3);
+}
+const inOut = (k) => (k <= 0 ? 0 : k >= 1 ? 1 : k < 0.5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2); // cubic in-out
+function drawMarks(t) {
+  // The seal draws itself, as the app's listening star does, then fills, and its mic shows.
+  const intro = t < SETTLED + 0.4, outro = t >= OUT;
+  strokes.forEach((s, i) => (s.style.strokeDashoffset = (1 - ease((t - 0.5 - 0.25 * i) / 1.5)).toFixed(4)));
+  const filled = outro ? 1 : ease((t - 2.1) / 0.7);
+  strokes.slice(0, 2).forEach((s) => (s.style.fill = `rgba(217, 180, 106, ${filled.toFixed(3)})`));
+  strokes[2].style.fill = `rgba(14, 19, 32, ${filled.toFixed(3)})`;
+  $("seal").querySelector(".mic").style.opacity = filled.toFixed(3);
+  if (outro) for (const s of strokes) s.style.strokeDashoffset = "0";
+  if (intro) {
+    const go = inOut((t - MORPH) / (SETTLED - MORPH)); // on their way to the phone
+    const handover = t < SETTLED ? 1 : 0; // the app's own marks take over where these land
+    for (const [key, m] of Object.entries(marks)) {
+      const shown = key === "seal" ? ease((t - 0.4) / 0.4) : key === "ar" ? ease((t - 1.3) / 0.8)
+        : key === "en" ? ease((t - 1.8) / 0.8) : 0;
+      const app = m.app?.();
+      if (!app) { place(m, ...m.at, 1, 0); continue; }
+      // The app's own mark stays hidden until this one lands on it, so nothing shows twice.
+      (m.hide?.() ?? app).style.visibility = t < SETTLED ? "hidden" : "";
+      const target = onScreen(app);
+      const scale = key === "seal" ? target.w / m.w
+        : (parseFloat(doc(0).defaultView.getComputedStyle(app).fontSize) * Math.exp(cam.lz.x)) / m.size;
+      const rise = key === "seal" ? 0 : (1 - shown) * 14;
+      place(m, m.at[0] + (target.x - m.at[0]) * go, m.at[1] + rise + (target.y - m.at[1]) * go,
+        1 + (scale - 1) * go, shown * handover);
+    }
+  } else {
+    // The end: back in the dark room, the name and seal, and where to find it.
+    for (const [key, m] of Object.entries(marks)) {
+      const delay = { seal: 0, ar: 0.25, en: 0.45, url: 0.8 }[key];
+      const v = ease((t - OUT - 0.7 - delay) / 0.9);
+      const y = { seal: 375, ar: 590, en: 694, url: 786 }[key];
+      place(m, W / 2, y + (1 - v) * 12, key === "seal" ? 0.84 : key === "ar" ? 0.92 : 1, v);
+    }
   }
-  if (ta != null) $("fade").style.opacity = Math.max(0, Math.min(1, (ta - AFTER) / 0.8)).toFixed(3);
+}
+
+// -- the frame ------------------------------------------------------------------------
+const grain = $("grain").getContext("2d");
+const grains = Array.from({ length: 6 }, (_, g) => {
+  let s = 1234567 + g * 7919; // seeded: every render is the same film
+  const rnd = () => ((s = (s * 1103515245 + 12345) >>> 0) / 4294967296);
+  const img = grain.createImageData(960, 540);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = rnd() < 0.5 ? 0 : 255;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+    img.data[i + 3] = Math.floor(rnd() * 14);
+  }
+  return img;
+});
+// The loudness the room hears: each phone's recording at its gain (sounds[k].rms starts rms_from
+// s after that phone's clip does, so before it).
+function loudness(t) {
+  let v = 0;
+  for (const p of phones) {
+    const s = sounds[p.k];
+    const i = Math.floor((t - plan[p.k].start - s.rms_from) * s.rms_hz);
+    if (i >= 0 && i < s.rms.length) v += gain(p.k, t) * Math.sqrt(s.rms[i] / s.peak);
+  }
+  return clamp(v, 0, 1.2);
+}
+
+let last = null, lastPose = null;
+function frame(now) {
   requestAnimationFrame(frame);
+  if (demo.c0 == null) return;
+  const dt = last == null ? 0 : Math.min(0.1, (now - last) / 1000);
+  last = now;
+  const t = demo.t;
+  aim(t);
+  for (const s of Object.values(cam)) s.step(dt);
+  const z = Math.exp(cam.lz.x);
+  pose = { ax: cam.ax.x, ay: cam.ay.x, wx: cam.wx.x, wy: cam.wy.x, z };
+
+  $("world").style.transform =
+    `translate(${cam.ax.x.toFixed(2)}px, ${cam.ay.x.toFixed(2)}px) perspective(2600px) ` +
+    `rotateX(${cam.rx.x.toFixed(3)}deg) rotateY(${cam.ry.x.toFixed(3)}deg) scale(${z.toFixed(4)}) ` +
+    `translate(${(-cam.wx.x).toFixed(2)}px, ${(-cam.wy.x).toFixed(2)}px)`;
+  const kNow = withPhone(t);
+  for (const p of phones) {
+    p.glass.style.backgroundPosition = `${(50 + cam.ry.x * 2.2).toFixed(2)}% ${(50 + cam.rx.x * 2.2).toFixed(2)}%`;
+    const lit = t >= FINALE + 0.3 || (p.k === kNow && (p.k === 0 || t >= plan[p.k - 1].leave + 0.9));
+    p.light.to = lit ? 1 : 0;
+    const dim = 0.66 + 0.3 * Math.max(clamp((z - 1.3) / 0.6, 0, 1), 1 - ease((t - plan[0].start) / 1.4));
+    p.shade.style.opacity = (dim * (1 - clamp(p.light.step(dt), 0, 1))).toFixed(3);
+  }
+  // The room moves a fraction of the camera (parallax) and goes out of focus as it comes close.
+  const px = -cam.wx.x * z, py = -cam.wy.x * z;
+  $("lattice").style.backgroundPosition = `${(px * 0.12).toFixed(2)}px ${(py * 0.12).toFixed(2)}px`;
+  $("lattice").style.filter = `blur(${clamp((z - 1) * 2.4, 0, 3.6).toFixed(2)}px)`;
+
+  // The lamp: the voice through a soft envelope (fast up, slow down), and a swell on finding.
+  const target = loudness(t);
+  lamp.level += (target - lamp.level) * (1 - Math.exp(-dt / (target > lamp.level ? 0.07 : 0.45)));
+  lamp.bloom.step(dt);
+  $("lamp").style.opacity = clamp(0.5 + 0.45 * lamp.level + lamp.bloom.x * 0.35, 0, 1.3).toFixed(3);
+  const wide = t >= FINALE ? 0.4 * ease((t - FINALE) / PULL) : 0;
+  $("lamp").style.transform = `scale(${(1 + 0.06 * lamp.level + 0.12 * lamp.bloom.x + wide).toFixed(4)})`;
+
+  drawCredit(t, dt);
+  drawMarks(t);
+  // Before the marks settle, only they are lit; after the last shot, the phones go dark again.
+  const world = Math.min(ease((t - MORPH) / 1.1), 1 - ease((t - OUT) / 1.4));
+  $("world").style.opacity = world.toFixed(3);
+  $("credit").style.visibility = t < OUT ? "visible" : "hidden";
+  grain.putImageData(grains[Math.floor(t * 12) % grains.length], 0, 0); // film grain, 12 a second
+  for (const p of phones) drawTap(p, now);
+  $("fade").style.opacity = Math.max(1 - ease(t / 1.5), ease((t - (END - FADE)) / FADE)).toFixed(3);
+
+  // Motion since film.mjs last asked, in output pixels: the camera, and every phone's scrolling.
+  const cur = [cam.ax.x, cam.ay.x, z, cam.wx.x, cam.wy.x, cam.rx.x, cam.ry.x];
+  let d = 0;
+  if (lastPose) {
+    d = Math.hypot(cur[0] - lastPose[0], cur[1] - lastPose[1]) + Math.abs(z - lastPose[2]) * 900 +
+      Math.hypot(cur[3] - lastPose[3], cur[4] - lastPose[4]) * z + (Math.abs(cur[5] - lastPose[5]) + Math.abs(cur[6] - lastPose[6])) * 12;
+  }
+  for (const p of phones) {
+    const s = p.frame.contentWindow?.scrollY ?? 0;
+    d += Math.abs(s - p.scroll) * z;
+    p.scroll = s;
+  }
+  demo.motion += d;
+  lastPose = cur;
 }
 requestAnimationFrame(frame);
 window.__stageReady = true;

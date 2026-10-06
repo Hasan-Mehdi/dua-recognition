@@ -1,22 +1,24 @@
-// A virtual clock for frame-exact capture (record.mjs injects this into every frame).
+// A virtual clock for frame-exact capture (film.mjs injects this into every frame).
 //
 // Timers, requestAnimationFrame, performance.now/Date and CSS animations/transitions all
 // follow one clock that only moves when the recorder calls __vt.step(ms), so every frame
 // is captured exactly 1/fps apart however long a screenshot takes. The stage page owns the
 // clock; the app's iframe shares it (same origin).
 //
-// In the app's frame it also stands in for the two things a replay can't have live:
-//   WebSocket     the /ws stream: the stage delivers the recognizer's recorded messages
-//   AnalyserNode  the microphone level behind the listening star: the recording's own
+// In the app's frame it also stands in for what a replay can't have live:
+//   AnalyserNode      the microphone level behind the listening star: the recording's own
+//   AudioWorkletNode  the microphone's chunks never reach the page: the engine is the stage's
+//                     replay of the captured run (film.mjs), and real-time audio under a
+//                     virtual clock would look like a microphone at the wrong speed (checkClock)
 (() => {
   const shared = window !== window.parent && window.parent.__vt;
   const vt = shared || {
     now: 0,
-    dateBase: window.__vtStart ?? Date.now(), // record.mjs picks the wall-clock date the page sees
+    dateBase: window.__vtStart ?? Date.now(), // film.mjs picks the wall-clock date the page sees
     queue: [], // {at, fn, args, id, every}
     rafs: [],
     nextId: 1,
-    docs: [],
+    top: document, // the stage: its frames are the phones
     seen: new WeakMap(),
     async step(ms) {
       const until = vt.now + ms;
@@ -46,15 +48,18 @@
       await Promise.resolve();
       vt.animate();
     },
-    // CSS animations and transitions: paused, and set to where the clock says they are.
+    // CSS animations and transitions: paused, and set to where the clock says they are. The
+    // documents are looked up afresh every step (the stage's, and whatever each frame holds now)
+    // and every animation is paused again: in one long film two phones' listening stars ran on
+    // the real clock (a 5 s cycle in a quarter of a second of film), which neither can now.
+    unpaused: 0,
     animate() {
-      vt.docs = vt.docs.filter((d) => d.defaultView);
-      for (const d of vt.docs) {
+      const docs = [vt.top, ...[...vt.top.querySelectorAll("iframe")].map((f) => f.contentDocument).filter(Boolean)];
+      for (const d of docs) {
         for (const a of d.getAnimations()) {
-          if (!vt.seen.has(a)) {
-            vt.seen.set(a, vt.now);
-            a.pause();
-          }
+          if (!vt.seen.has(a)) vt.seen.set(a, vt.now);
+          else if (a.playState === "running") vt.unpaused++;
+          if (a.playState !== "paused" && a.playState !== "finished") a.pause();
           const t = vt.now - vt.seen.get(a);
           const end = a.effect?.getComputedTiming().endTime;
           if (Number.isFinite(end) && t >= end) a.finish();
@@ -64,7 +69,6 @@
     },
   };
   window.__vt = vt;
-  vt.docs.push(document);
 
   const now = () => vt.now;
   performance.now = now;
@@ -102,26 +106,15 @@
 
   // -- the app's frame ------------------------------------------------------------
   const demo = () => window.parent.__demo;
-  window.WebSocket = class {
-    static OPEN = 1;
-    constructor(url) {
-      this.url = url;
-      this.readyState = 0;
-      setTimeout(() => {
-        this.readyState = 1;
-        this.onopen?.({});
-        if (/\/ws(\?|$)/.test(url)) demo()?.connected(this);
-      }, 5);
-    }
-    send() {}
-    close() {
-      this.readyState = 3;
-      this.onclose?.({});
+  window.AudioWorkletNode = class extends AudioWorkletNode {
+    constructor(...a) {
+      super(...a);
+      Object.defineProperty(this.port, "onmessage", { set() {}, get: () => null, configurable: true });
     }
   };
   const real = AnalyserNode.prototype.getFloatFrequencyData;
   AnalyserNode.prototype.getFloatFrequencyData = function (out) {
-    const db = demo()?.bandDb();
+    const db = demo()?.bandDb(window.frameElement);
     if (db == null) return real.call(this, out);
     // Spread the level over voice.js's band so voiceBandDb reads it back unchanged.
     const hz = this.context.sampleRate / this.fftSize;

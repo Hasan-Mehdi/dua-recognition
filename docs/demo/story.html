@@ -1,0 +1,636 @@
+<!doctype html>
+<!-- The story film's stage (film.mjs --stage story.html films it): a Thursday night at the mosque,
+     drawn (story-art.js). A boy who has lost his place in Du'a Kumayl takes out a phone; the phone
+     is the real app (web/), replaying a run capture.mjs recorded from a congregation at KSIJ, Dar es
+     Salaam, beside the same recording. The only words of its own are a credit once the app has
+     found the du'a, and the app's name at the end.
+     ?still=S draws film second S once (for looking at stills without filming).
+
+       node docs/demo/capture.mjs --sid majlis:mj-rSPgtn4Km_w-2226:0 --line 4 --into 1.2 --seconds 84
+         --credit "Congregation at KSIJ, Dar es Salaam" --out docs/demo/story-runs/1-kumayl.json
+       node docs/demo/story-sounds.mjs
+       node docs/demo/film.mjs --stage story.html --runs docs/demo/story-runs --pre 30
+         --bed data/cache/media/story/night.wav --sfx data/cache/media/story   # -> data/cache/media/story.mp4 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Story stage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Aref+Ruqaa:wght@400;700&family=Baloo+2:wght@800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+  :root { --ink: #efe6d0; --muted: #978f7c; --muted-hi: #b7ac93; --gold: #d9b46a; --gold-hi: #f0d596; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: #05070c; }
+  .layer { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: none; overflow: hidden; }
+  #defs { position: absolute; width: 0; height: 0; }
+
+  /* The phone: the demo's plain modern handset (stage.html), the real app on its screen. */
+  #phone {
+    position: absolute; left: 0; top: 0; width: 418px; height: 872px; padding: 14px; border-radius: 66px;
+    transform-origin: 0 0;
+    background: linear-gradient(150deg, #474c59 0%, #1a1d25 12%, #0b0d12 45%, #12151c 80%, #3b404c 100%);
+    box-shadow: inset 0 0 0 1.2px rgba(255, 255, 255, .13), inset 0 0 0 4px #07080b, 0 0 0 1px #020304,
+      0 40px 90px rgba(0, 0, 0, .5);
+  }
+  #phone .key { position: absolute; width: 4px; border-radius: 2px; background: linear-gradient(90deg, #2a2e38, #4a4f5c); }
+  .screen { position: relative; width: 390px; height: 844px; border-radius: 52px; overflow: hidden; background: #0e1320; }
+  .screen iframe { display: block; width: 390px; height: 844px; border: 0; }
+  .glass { position: absolute; inset: 0; border-radius: 52px; pointer-events: none;
+    background: linear-gradient(116deg, transparent 30%, rgba(255, 255, 255, .06) 42%, rgba(255, 255, 255, .02) 52%, transparent 62%); }
+
+  /* The credit, as a player names a track, in the app's own faces. */
+  .credit { position: absolute; left: 92px; bottom: 96px; width: 600px; color: var(--ink); opacity: 0;
+    text-shadow: 0 2px 24px rgba(2, 3, 6, .85), 0 0 4px rgba(2, 3, 6, .5); }
+  .credit .ar { display: block; font: 700 70px/1.2 "Aref Ruqaa", serif; color: var(--gold); direction: rtl; text-align: left; }
+  .credit .en { display: block; font: 400 48px/1.2 "EB Garamond", serif; }
+  .credit .by { display: block; margin-top: 12px; font: italic 400 42px/1.2 "EB Garamond", serif; color: var(--muted-hi); }
+
+  /* The end: the app's seal and name, as its home screen sets them. */
+  #end { background: radial-gradient(70% 85% at 50% 48%, #121a2c, #0b101c 55%, #05070c 100%); opacity: 0; }
+  .mark { position: absolute; left: 0; width: 1920px; text-align: center; opacity: 0; white-space: nowrap; }
+  .mark.ar { font: 700 132px/1.35 "Aref Ruqaa", serif; color: var(--gold); }
+  .mark.en { font: 400 30px/1.5 "EB Garamond", serif; letter-spacing: .3em; text-transform: uppercase; color: var(--muted); }
+  .mark.url { font: 400 34px/1.4 "EB Garamond", serif; color: var(--ink); }
+  #seal { position: absolute; left: 835px; width: 250px; height: 250px; overflow: visible; color: var(--gold); opacity: 0; }
+  #seal .star rect, #seal .star circle { stroke: var(--gold-hi); stroke-width: 1.2; stroke-dasharray: 1; }
+  #seal .mic { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+  #fade { background: #000; }
+</style>
+</head>
+<body>
+<svg id="defs" aria-hidden="true"></svg>
+<svg class="layer" id="bg" viewBox="0 0 1920 1080"></svg>
+<svg class="layer" id="back" viewBox="0 0 1920 1080"></svg>
+<div class="layer" id="phone-layer">
+  <div id="phone">
+    <i class="key" style="left:-3px;top:178px;height:34px"></i>
+    <i class="key" style="left:-3px;top:236px;height:62px"></i>
+    <i class="key" style="right:-3px;top:262px;height:96px"></i>
+    <div class="screen">
+      <iframe id="app" title="The app"></iframe>
+      <div class="glass"></div>
+    </div>
+  </div>
+</div>
+<svg class="layer" id="front" viewBox="0 0 1920 1080"></svg>
+<svg class="layer" id="light" viewBox="0 0 1920 1080"></svg>
+<div class="credit" id="credit"><span class="ar" lang="ar"></span><span class="en"></span><span class="by"></span></div>
+<div class="layer" id="end">
+  <svg id="seal" viewBox="-50 -50 100 100" aria-hidden="true">
+    <g class="star">
+      <rect x="-32" y="-32" width="64" height="64" pathLength="1"/>
+      <rect x="-32" y="-32" width="64" height="64" transform="rotate(45)" pathLength="1"/>
+      <circle r="24" pathLength="1"/>
+    </g>
+    <svg class="mic" x="-11.4" y="-11.4" width="22.8" height="22.8" viewBox="0 0 24 24">
+      <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+    </svg>
+  </svg>
+  <div class="mark ar" id="mark-ar" lang="ar">رفيق الدعاء</div>
+  <div class="mark en" id="mark-en">Du'a Companion</div>
+  <div class="mark url" id="mark-url">github.com/Hasan-Mehdi/dua-recognition</div>
+</div>
+<div class="layer" id="fade"></div>
+
+<script type="module">
+import * as A from "./story-art.js";
+const { C, r2, clamp, ease, easeIO, person, cat, lantern, book, sparkle, puzzled, blinkAt, seeded } = A;
+const $ = (id) => document.getElementById(id);
+const W = 1920, H = 1080, PW = 418, PH = 872, BEZEL = 14;
+const params = new URLSearchParams(location.search);
+const STILL = params.has("still") ? Number(params.get("still")) : null;
+
+$("defs").innerHTML = `<defs>${A.DEFS}</defs>`;
+await Promise.all(['700 70px "Aref Ruqaa"', '400 48px "EB Garamond"', 'italic 400 42px "EB Garamond"', '800 74px "Baloo 2"']
+  .map((f) => document.fonts.load(f, "دعاء رفيق Dua ?")));
+// The run (capture.mjs) and its loudness (film.mjs); a still without them shows the app's home.
+const runs = await fetch("runs.json").then((r) => r.json()).catch(() => null)
+  ?? [await fetch("runs/1-kumayl.json").then((r) => r.json())];
+const run = runs[0];
+run.source.name_ar = (run.source.name_ar ?? "").replace(/[‎‏‪-‮]/g, "").trim();
+const sounds = await fetch("sounds.json").then((r) => r.json()).catch(() => null);
+
+// -- the plan, in film seconds ------------------------------------------------------------------
+// Outside, then in: the boy is lost in his book; he takes out the phone and taps; the phone finds
+// the du'a and follows it; his father sees; back outside; the app's name.
+const TAP = 23.0; // the finger lands on the seal
+const START = TAP + 0.16; // the app starts listening
+const foundIn = run.updates.find((u) => u.u.dua)?.at ?? 7;
+const FOUND = START + foundIn;
+const LINES = run.shown.filter((e) => e.type === "line").map((e) => START + e.t); // each new line shown
+const DOOR = 7.75; // through the door: its light fills the frame, and we are inside
+const S = {};
+S.outside = [0, DOOR];
+S.wide = [DOOR, 17.6];
+S.med = [17.6, 22.2];
+S.close = [22.2, FOUND + 9.0];
+S.med2 = [S.close[1], S.close[1] + 10.0];
+S.wide2 = [S.med2[1], S.med2[1] + 7.6];
+S.outside2 = [S.wide2[1] - 1.0, S.wide2[1] + 6.2];
+const OUTRO = S.outside2[1] - 1.2, END = OUTRO + 7.4;
+// The cuts. While the phone listens, a look at him waiting; back to the phone as it names the du'a.
+const WAIT = [25.4, 28.9];
+const CUTS = [
+  ["outside", ...S.outside], ["wide", ...S.wide], ["med", ...S.med], ["close", S.close[0], WAIT[0]], ["med", ...WAIT],
+  ["close", WAIT[1], S.close[1]], ["med2", ...S.med2], ["wide2", ...S.wide2], ["outside2", ...S.outside2],
+];
+const DISSOLVE = 1.0; // back outside: a dissolve
+
+// -- the sound's loudness, for mouths -----------------------------------------------------------
+const env = (() => {
+  const s = sounds?.[0];
+  if (!s) return () => 0;
+  const out = new Float32Array(s.rms.length);
+  let e = 0;
+  for (let i = 0; i < s.rms.length; i++) {
+    const v = Math.sqrt(s.rms[i] / s.peak);
+    e += (v - e) * (v > e ? 0.45 : 0.1);
+    out[i] = e;
+  }
+  return (t, lag = 0) => {
+    const i = Math.floor((t - START - s.rms_from - lag) * s.rms_hz);
+    return i >= 0 && i < out.length ? out[i] : 0;
+  };
+})();
+const mouthAt = (t, k = 1, lag = 0) => clamp((env(t, lag) - 0.3) * 2.0 * k, 0, 1);
+
+// -- who does what, when -------------------------------------------------------------------------
+const FLIPS = [9.3, 10.5, 11.4, 12.05, 14.9, 15.6, 16.5, 17.2];
+function flipAt(t) {
+  for (const f of FLIPS) if (t >= f && t < f + 0.45) return (t - f) / 0.45;
+  return -1;
+}
+// The boy's face.
+function kidFace(t) {
+  let blink = blinkAt(t, 3);
+  let look = [0.1, 1], brows = 0.15, smile = 0.4, eyes = "open", mouth = 0, turn = -0.2, bubble = 0, pitch = 0.8;
+  if (t < 12.7) brows = 0.15 + 0.6 * ease((t - 10.0) / 1.6);
+  else if (t < 13.9) { look = [-1, -0.8]; brows = 0.8; smile = 0.15; turn = -0.45; pitch = -0.3; }
+  else if (t < 18.5) { look = [0.15, 1]; brows = 1; smile = 0; }
+  else if (t < 19.5) { look = [0.5, -1]; brows = -0.9; smile = 1; turn = 0; pitch = -0.3; }
+  else if (t < FOUND + 0.6) { look = [0, 1]; brows = 0.1; smile = 0.6; turn = -0.1; }
+  else { look = [0, 1]; brows = 0; smile = 0.9; turn = -0.1; mouth = mouthAt(t, 0.75, 0.08); }
+  // A look up at his father, who is smiling at him.
+  if (t > S.med2[0] + 4.2 && t < S.med2[0] + 5.6) {
+    look = [-1, -0.4]; turn = -0.45; mouth = 0; smile = 1; pitch = -0.1;
+    eyes = t > S.med2[0] + 4.5 && t < S.med2[0] + 5.3 ? "happy" : "open";
+  }
+  // Puzzled: a question pops over his head, and goes when he has his idea.
+  if (t > 18.3 && t < 19.7) blink = 0; // eyes wide for the idea
+  // Waiting for the phone: hopeful, a glance up at the reciter, back to the phone.
+  if (t > WAIT[0] && t < WAIT[1]) {
+    brows = -0.3; smile = 0.5;
+    if (t > 26.6 && t < 27.7) { look = [-1, -0.6]; turn = -0.45; pitch = -0.2; brows = 0.2; }
+  }
+  if (t > 14.1) bubble = t < 18.3 ? clamp((t - 14.1) / 0.4, 0, 1) : clamp(1 - (t - 18.3) / 0.2, 0, 1);
+  return { look, brows, smile, eyes, mouth, blink, turn, bubble, pitch };
+}
+// His father: reciting with his eyes closed; in the second close shot he leans over to see the
+// phone, smiles, and goes back to reciting, still leaning a little toward his son.
+function dadFace(t) {
+  const m2 = S.med2[0];
+  let eyes = "closed", look = [0, 0], turn = -0.3, smile = 0.5, mouth = mouthAt(t, 0.7), pitch = 0;
+  const lean = 7 * easeIO((t - (m2 + 1.3)) / 0.9) - 4 * easeIO((t - (m2 + 4.6)) / 1.2);
+  if (t > m2 + 1.4 && t < m2 + 4.8) {
+    eyes = blinkAt(t, 9) > 0.85 ? "closed" : "open"; look = [1, 0.9]; turn = 0.4; mouth = 0; smile = 0.9; pitch = 0.6;
+    if (t > m2 + 2.6 && t < m2 + 3.6) eyes = "happy";
+  }
+  if (t > S.wide2[0]) { eyes = "closed"; turn = -0.2; smile = 0.6; }
+  return { eyes, look, turn, smile, mouth, pitch, lean };
+}
+// The cat: asleep, then up to see the phone, then content.
+function catState(t) {
+  const m2 = S.med2[0];
+  const breathe = 0.5 + 0.5 * Math.sin(t * 2.1);
+  const awake = clamp((t - (m2 + 5.6)) / 0.5, 0, 1) * (t < m2 + 8.4 ? 1 : clamp(1 - (t - (m2 + 8.4)) / 0.6, 0.35, 1));
+  const happy = t > m2 + 7.4 ? 1 : 0;
+  const tail = t > m2 + 5.6 ? Math.sin(t * 5) * 0.8 : Math.sin(t * 0.7) * 0.3;
+  return { breathe, awake, happy, tail, look: t > m2 + 6 ? 1 : 0 };
+}
+// The garland: one lantern lights for each line the phone follows.
+function garland(t) {
+  const lit = [];
+  const shown = LINES.filter((at) => at <= t);
+  for (let i = 0; i < A.GARLAND; i++) {
+    const at = LINES[i];
+    lit.push(at == null || t < at ? 0.32 : 0.32 + 0.68 * ease((t - at) / 0.7));
+  }
+  return { lit, n: shown.length };
+}
+
+// -- the hall's people ----------------------------------------------------------------------------
+// Rows facing the reciter, back to front; seeded so every frame has the same people.
+const CROWD = (() => {
+  const rnd = seeded(11);
+  const cloths = [C.black, C.black, C.charcoal, C.navy, C.black, C.grey, C.brown, C.cream];
+  const rows = [
+    { y: 768, s: 0.48, xs: [690, 810, 930, 1050, 1170, 1290, 1410] },
+    { y: 850, s: 0.58, xs: [640, 790, 940, 1090, 1240] },
+    { y: 952, s: 0.7, xs: [600, 780, 960, 1140] },
+  ];
+  const out = [];
+  for (const r of rows) {
+    for (const x of r.xs) {
+      const kid = rnd() < 0.12;
+      out.push({
+        x: x + (rnd() - 0.5) * 30, y: r.y, s: r.s * (kid ? 0.9 : 1), kid,
+        cloth: cloths[Math.floor(rnd() * cloths.length)], skin: C.skin[Math.floor(rnd() * C.skin.length)],
+        cap: rnd() < 0.7 ? "kufi" : rnd() < 0.5 ? "kufi-black" : "none",
+        beard: kid ? null : rnd() < 0.55 ? "full" : rnd() < 0.5 ? "short" : null,
+        phase: rnd() * 6.28, lag: rnd() * 0.25, k: 0.5 + rnd() * 0.5, book: rnd() < 0.35,
+      });
+    }
+  }
+  return out;
+})();
+function crowd(t) {
+  let s = "";
+  for (const p of CROWD) {
+    const sway = Math.sin(t * 1.3 + p.phase) * 1.6;
+    const o = {
+      x: p.x, y: p.y, s: p.s, kid: p.kid, cloth: p.cloth, skin: p.skin, cap: p.cap, beard: p.beard, turn: -0.55, sway,
+      eyes: blinkAt(t, Math.floor(p.phase * 100)) > 0.85 || !p.book ? "closed" : "open", look: [-0.3, 1],
+      mouth: mouthAt(t, p.k, p.lag), smile: 0.4,
+    };
+    if (p.book) {
+      o.hands = p.kid ? { l: [-46, -60], r: [46, -60] } : { l: [-58, -84], r: [58, -84] };
+      o.held = book({ x: 0, y: p.kid ? -70 : -96, w: p.kid ? 120 : 150 });
+    }
+    s += person(o);
+  }
+  return s;
+}
+function reciter(t) {
+  const x = 252, y = 738, s = 0.8;
+  return A.rahl(372, 740, 0.62) + person({
+    x, y, s, turn: 0.45, cloth: "#2e2a36", skin: C.skin[3], cap: "turban", beard: "full", eyes: "closed",
+    mouth: mouthAt(t, 1.1), sway: Math.sin(t * 1.1) * 1.4, smile: 0.4,
+  }) + A.micStand(318, 556, 0.62, 742);
+}
+
+// -- the three of them ------------------------------------------------------------------------------
+// At (x, y) and s for each of the boy, his father and the cat, as each shot places them; what the
+// boy holds comes from the time. Returns {back, front, phone}: the phone's centre, size and turn in
+// the shot, between back and front.
+function family(t, at, opts = {}) {
+  const k = kidFace(t), d = dadFace(t), c = catState(t);
+  let back = "", front = "", phone = null;
+  // The father.
+  const dad = person({
+    x: at.dad.x, y: at.dad.y, s: at.dad.s, cloth: C.black, skin: C.skin[2], beard: "full", cap: "kufi",
+    turn: d.turn, eyes: d.eyes, look: d.look, mouth: d.mouth, smile: d.smile, blink: blinkAt(t, 9), pitch: d.pitch,
+    sway: Math.sin(t * 1.2 + 1) * 1.2 + d.lean, split: true,
+  });
+  back += dad.back;
+  // The boy: the book until he has his idea, then the phone.
+  const ko = {
+    x: at.kid.x, y: at.kid.y, s: at.kid.s, kid: true, cloth: C.teal, trim: C.goldHi, skin: C.skin[1],
+    turn: k.turn, look: k.look, brows: k.brows, smile: k.smile, eyes: k.eyes, mouth: k.mouth, blink: k.blink, pitch: k.pitch,
+    glow: 0, split: true,
+  };
+  const ph = at.phone; // where he holds it: centre (x, y) in his units, size s (of the phone's 418 px)
+  if (t < 19.75) {
+    const close = clamp((t - 19.0) / 0.35, 0, 1), down = easeIO((t - 19.3) / 0.45);
+    const by = -78 + down * 140;
+    ko.hands = { l: [-60 + close * 40, by + 36], r: [60 - close * 40, by + 36] };
+    ko.held = book({ x: 0, y: by, w: 150, flip: flipAt(t), open: Math.max(0.06, 1 - close) });
+  } else {
+    const up = easeIO((t - 19.75) / 0.8);
+    const cy = ph.y + (1 - up) * 150;
+    const hw = (PW * ph.s) / 2, hh = (PH * ph.s) / 2;
+    ko.hands = { l: [ph.x - hw + 2, cy + hh * 0.72], r: [ph.x + hw - 2, cy + hh * 0.72] };
+    ko.glow = 0.55 * up;
+    phone = { x: at.kid.x + ph.x * at.kid.s, y: at.kid.y + cy * at.kid.s, s: ph.s * at.kid.s, rot: ph.rot ?? 0 };
+  }
+  const kid = person(ko);
+  back += kid.back;
+  front += kid.front;
+  front += dad.front;
+  if (at.cat) back = cat({ x: at.cat.x, y: at.cat.y, s: at.cat.s, ...c }) + back;
+  // The question over his head; the sparkle of an idea.
+  const head = [at.kid.x + 30 * at.kid.s, at.kid.y - 300 * at.kid.s];
+  front += puzzled(head[0] + 70 * at.kid.s, head[1] - 20 * at.kid.s, 0.9 * at.kid.s, k.bubble, Math.sin(t * 3) * 4);
+  const idea = clamp((t - 18.5) / 0.25, 0, 1) * clamp(1 - (t - 19.5) / 0.3, 0, 1);
+  front += sparkle(at.kid.x + 92 * at.kid.s, at.kid.y - 270 * at.kid.s, 34 * at.kid.s * (0.6 + 0.4 * Math.sin(t * 12)), idea);
+  front += sparkle(at.kid.x + 128 * at.kid.s, at.kid.y - 226 * at.kid.s, 18 * at.kid.s, idea * 0.8);
+  return { back, front, phone };
+}
+
+// -- shots ------------------------------------------------------------------------------------------
+// Each returns its layers for time t: bg (drawn under a blur), back, front (over the phone), light,
+// the camera {x, y, z} it looks through, and the phone {x, y, s, rot} if it shows it.
+function hallAll(t, { people = true } = {}) {
+  const g = garland(t);
+  return A.hall(t, { lit: g.lit }) + reciter(t) + (people ? crowd(t) : "");
+}
+const WIDE = { dad: { x: 1215, y: 1110, s: 1.04 }, kid: { x: 1640, y: 1058, s: 0.95 },
+  cat: { x: 1815, y: 1062, s: 0.46 }, phone: { x: 0, y: -100, s: 0.12 } };
+const MED = { dad: { x: 420, y: 1215, s: 2.5 }, kid: { x: 1060, y: 1062, s: 2.4 },
+  cat: { x: 1590, y: 1062, s: 1.15 }, phone: { x: 0, y: -70, s: 0.13 } };
+const shots = {
+  outside(t) {
+    const k = easeIO((t - 0.3) / 7.6);
+    return { back: A.exterior(t) + arriving(t), cam: { x: 960, y: 560 + 150 * k, z: 1 + 0.42 * k } };
+  },
+  wide(t) {
+    // The hall, then one move in to the boy as he starts to lose his place.
+    const f = family(t, WIDE);
+    const k = easeIO((t - 10.4) / 3.2);
+    return { back: hallAll(t) + f.back, front: f.front, phone: f.phone, light: warmLight(),
+      cam: { x: 960 + (1300 - 960) * k, y: 540 + (731 - 540) * k, z: 1 + 0.55 * k } };
+  },
+  med(t) {
+    const f = family(t, MED);
+    return { bg: hallAll(t), bgCam: { x: 1060, y: 640, z: 1.9 }, blur: 9, back: f.back, front: f.front, phone: f.phone,
+      light: warmLight(), cam: { x: 960, y: 540, z: 1 } };
+  },
+  close(t) {
+    // His hands and the phone, the hall behind out of focus. One push in once the du'a is found.
+    const push = easeIO((t - (FOUND + 0.5)) / 2.2);
+    const ph = { x: 1150, y: 548, s: 1.04, rot: -2 };
+    return { bg: hallAll(t), bgCam: { x: 720, y: 700, z: 2.3 }, blur: 14, front: hands(t, ph), phone: ph,
+      light: warmLight(0.6), cam: { x: 960 + (1010 - 960) * push, y: 540 + (400 - 540) * push, z: 1 + 0.36 * push } };
+  },
+  med2(t) {
+    const f = family(t, MED);
+    return { bg: hallAll(t), bgCam: { x: 1060, y: 640, z: 1.9 }, blur: 9, back: f.back, front: f.front, phone: f.phone,
+      light: warmLight(), cam: { x: 960, y: 540, z: 1 } };
+  },
+  wide2(t) {
+    const f = family(t, WIDE);
+    const k = easeIO((t - S.wide2[0] - 0.4) / 6.4);
+    return { back: hallAll(t) + f.back, front: f.front, phone: f.phone, light: warmLight(),
+      cam: { x: 1300 + (960 - 1300) * k, y: 731 + (540 - 731) * k, z: 1.55 + (1 - 1.55) * k } };
+  },
+  outside2(t) {
+    const k = easeIO((t - S.outside2[0]) / 6.5);
+    return { back: A.exterior(t) + shootingStar(t), cam: { x: 960, y: 640 - 80 * k, z: 1.18 - 0.18 * k } };
+  },
+};
+// The boy and his father walking up to the door, hand in hand, and in.
+function arriving(t) {
+  const p = clamp((t - 0.2) / 7.2, 0, 1);
+  const s = 1.3 * Math.pow(0.27 / 1.3, p);
+  const y = 784 + 372 * s;
+  const o = 1 - clamp((p - 0.9) / 0.1, 0, 1);
+  if (o <= 0) return "";
+  const hold = [960, y - 190 * s];
+  return `<g opacity="${r2(o)}">` +
+    A.walker({ x: 960 - 92 * s, y, s, phase: t * 2 * Math.PI * 0.95, cloth: C.black, skin: C.skin[2], hold, side: 1 }) +
+    A.walker({ x: 960 + 86 * s, y: y + 4 * s, s: s * 0.8, kid: true, phase: t * 2 * Math.PI * 1.25 + 1, cloth: C.teal, skin: C.skin[1], hold, side: -1 }) +
+    `</g>`;
+}
+function warmLight(k = 1) {
+  return `<rect width="1920" height="1080" fill="url(#g-warm)" opacity="${r2(0.55 * k)}" style="mix-blend-mode:soft-light"/>
+    <rect width="1920" height="1080" fill="url(#g-vignette)" opacity="${r2(0.9 * k)}"/>`;
+}
+function shootingStar(t) {
+  const a = (t - (S.outside2[0] + 2.2)) / 0.9;
+  if (a < 0 || a > 1) return "";
+  const x = 1300 - 700 * a, y = 90 + 160 * a, o = Math.sin(a * Math.PI);
+  return `<path d="M${r2(x)} ${r2(y)}l${r2(220 * o)} ${r2(-50 * o)}" stroke="#fff6dc" stroke-width="3" stroke-linecap="round" opacity="${r2(o * 0.8)}"/>
+    <circle cx="${r2(x)}" cy="${r2(y)}" r="4" fill="#fffbe8" opacity="${r2(o)}"/>`;
+}
+
+// Going in: the open door's light grows until it fills the frame, and fades on the hall.
+function doorLight(t) {
+  const u = (t - (DOOR - 0.6)) / 1.3;
+  if (u <= 0 || u >= 1) return "";
+  const up = u < 0.46 ? ease(u / 0.46) : 1 - ease((u - 0.46) / 0.54);
+  const cam = shots.outside(Math.min(t, DOOR - 0.001)).cam;
+  const x = W / 2 + (960 - cam.x) * cam.z, y = H / 2 + (790 - cam.y) * cam.z;
+  const r = 220 + 2100 * ease(Math.min(1, u / 0.46));
+  return `<circle cx="${r2(x)}" cy="${r2(y)}" r="${r2(r)}" fill="url(#g-bloom)" opacity="${r2(up)}"/>`;
+}
+// The close shot's hands: both hold the phone by its sides, until his right lets go, reaches over
+// and taps the seal (where the app has it), and comes back.
+let sealAt = null;
+function hands(t, ph) {
+  const L = toWorld(ph, 0, 650), Rr = toWorld(ph, PW, 630);
+  const press = clamp((t - (TAP - 0.6)) / 0.6, 0, 1), lift = clamp((t - (TAP + 0.32)) / 0.65, 0, 1);
+  const reach = easeIO(press) * (1 - easeIO(lift));
+  const seal = sealAt ? toWorld(ph, sealAt[0], sealAt[1]) : toWorld(ph, PW / 2, 420);
+  const pressed = t >= TAP - 0.02 && t < TAP + 0.3;
+  const sleeve = (from, to, w, bow) => {
+    const d = `M${r2(from[0])} ${r2(from[1])}Q${r2((from[0] + to[0]) / 2 + bow)} ${r2((from[1] + to[1]) / 2 + 30)} ${r2(to[0])} ${r2(to[1])}`;
+    return `<path d="${d}" fill="none" stroke="${C.ink}" stroke-width="${w + 12}" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${C.teal}" stroke-width="${w}" stroke-linecap="round"/>`;
+  };
+  let s = sleeve([700, 1240], [L[0] - 44, L[1] + 70], 96, -50) + holder(L[0], L[1], 1);
+  if (reach < 0.02) return s + sleeve([1600, 1240], [Rr[0] + 44, Rr[1] + 70], 96, 50) + holder(Rr[0], Rr[1], -1);
+  // From the phone's edge to the seal, along an arc that lifts off the glass.
+  const k = reach;
+  const tip = [Rr[0] + 40 + (seal[0] - Rr[0] - 40) * k, Rr[1] - 40 + (seal[1] - Rr[1] + 40) * k - Math.sin(k * Math.PI) * 50];
+  const a = (-26 * Math.PI) / 180, fist = [tip[0] - Math.sin(a) * 150, tip[1] + Math.cos(a) * 150];
+  return s + sleeve([1600, 1240], [fist[0] + 30, fist[1] + 40], 96, 60) + pointer(tip[0], tip[1], pressed);
+}
+// A hand round the phone's side, at (x, y) on its edge: the palm outside, the thumb over the glass.
+// side 1: his left hand; -1: his right (mirrored).
+function holder(x, y, side) {
+  const sk = C.skin[1], st = `stroke="${C.ink}" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"`;
+  const cap = (x0, y0, x1, y1, w) => `<path d="M${x0} ${y0}L${x1} ${y1}" stroke="${C.ink}" stroke-width="${w + 14}" stroke-linecap="round"/><path d="M${x0} ${y0}L${x1} ${y1}" stroke="${sk}" stroke-width="${w}" stroke-linecap="round"/>`;
+  return `<g transform="translate(${r2(x)} ${r2(y)}) scale(${side} 1)">
+    <path d="M8 -58C-24 -66 -62 -44 -64 -2C-66 40 -50 76 -18 86C4 92 14 80 12 60Z" fill="${sk}" ${st}/>
+    <path d="M-56 -8C-46 -4 -40 4 -42 14M-54 30C-44 34 -40 42 -42 52" fill="none" stroke="${A.shade(sk, -0.16)}" stroke-width="5" stroke-linecap="round"/>
+    ${cap(-14, -26, 30, -70, 34)}
+    <ellipse cx="30" cy="-68" rx="9" ry="7" transform="rotate(-45 30 -68)" fill="#f6d2bc"/>
+  </g>`;
+}
+// A hand with the forefinger out, its tip at (x, y).
+function pointer(x, y, pressed) {
+  const sk = C.skin[1], st = `stroke="${C.ink}" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"`;
+  return `<g transform="translate(${r2(x)} ${r2(y)}) rotate(-26) scale(${pressed ? 0.96 : 1})">
+    <rect x="-16" y="-4" width="32" height="112" rx="16" fill="${sk}" ${st}/>
+    <ellipse cx="0" cy="14" rx="8" ry="7" fill="#f6d2bc"/>
+    <path d="M-36 96C-48 112 -46 160 -14 170C16 180 48 166 50 134C52 108 42 92 18 90L-18 90C-26 90 -32 92 -36 96Z" fill="${sk}" ${st}/>
+    <path d="M18 104h16M18 124h18M16 144h16" stroke="${A.shade(sk, -0.18)}" stroke-width="5" stroke-linecap="round"/>
+    <path d="M-34 104C-58 98 -66 124 -46 134L-22 138" fill="${sk}" ${st}/>
+  </g>`;
+}
+// A point on the phone (its own px, 0..418 x 0..872) in the shot.
+function toWorld(ph, u, v) {
+  const a = ((ph.rot ?? 0) * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+  const dx = (u - PW / 2) * ph.s, dy = (v - PH / 2) * ph.s;
+  return [ph.x + dx * c - dy * s, ph.y + dx * s + dy * c];
+}
+
+// -- the frame ---------------------------------------------------------------------------------------
+const camT = (cam) => `translate(${r2(W / 2)} ${r2(H / 2)}) scale(${r2(cam.z)}) translate(${r2(-cam.x)} ${r2(-cam.y)})`;
+function layersAt(t) {
+  // The shots on screen now, with how much of each.
+  const list = [];
+  for (const [name, a, b] of CUTS) {
+    if (t < a || t >= b) continue;
+    list.push([name, name === "outside2" ? clamp((t - a) / DISSOLVE, 0, 1) : 1]);
+  }
+  return list;
+}
+const app = () => $("app").contentDocument;
+function draw(t) {
+  let bg = "", back = "", front = "", light = "", blur = 0, phone = null, phoneO = 0, cam0 = null;
+  for (const [name, o] of layersAt(t)) {
+    const L = shots[name](t);
+    const g = (svg) => (svg ? `<g opacity="${r2(o)}" transform="${camT(L.cam)}">${svg}</g>` : "");
+    if (L.bg) {
+      bg += `<g opacity="${r2(o)}" transform="${camT(L.bgCam)}">${L.bg}</g>`;
+      blur = L.blur;
+    }
+    back += g(L.back);
+    front += g(L.front);
+    light += L.light ? `<g opacity="${r2(o)}">${L.light}</g>` : "";
+    if (L.phone) {
+      phone = { ...L.phone, cam: L.cam };
+      phoneO = o;
+    }
+    cam0 = L.cam;
+  }
+  $("bg").innerHTML = bg;
+  $("bg").style.filter = blur ? `blur(${blur}px)` : "";
+  $("back").innerHTML = back;
+  $("front").innerHTML = front;
+  $("light").innerHTML = light + doorLight(t);
+  const el = $("phone");
+  if (phone && phoneO > 0) {
+    const { cam } = phone;
+    const cx = W / 2 + (phone.x - cam.x) * cam.z, cy = H / 2 + (phone.y - cam.y) * cam.z, sc = phone.s * cam.z;
+    el.style.transform = `translate(${r2(cx)}px, ${r2(cy)}px) rotate(${phone.rot ?? 0}deg) scale(${sc.toFixed(4)}) translate(${-PW / 2}px, ${-PH / 2}px)`;
+    el.style.opacity = phoneO.toFixed(3);
+    el.style.visibility = "visible";
+    // Small on screen, the bezel's shadow is too heavy for the boy's hands.
+    el.style.boxShadow = sc < 0.5 ? "inset 0 0 0 1.2px rgba(255,255,255,.13), inset 0 0 0 4px #07080b, 0 0 0 1px #020304" : "";
+  } else {
+    el.style.visibility = "hidden";
+  }
+  // Where the app's seal is, for the finger.
+  const st = app()?.getElementById("start")?.getBoundingClientRect();
+  if (st && st.width) sealAt = [BEZEL + st.left + st.width / 2, BEZEL + st.top + st.height / 2];
+
+  // The credit: once the app has named the du'a, in the close shot.
+  const cr = $("credit");
+  if (!cr.dataset.set) {
+    cr.querySelector(".ar").textContent = run.source.name_ar;
+    cr.querySelector(".en").textContent = run.source.name;
+    cr.querySelector(".by").textContent = run.source.credit;
+    cr.dataset.set = 1;
+  }
+  const shown = t >= FOUND + 0.4 && t < S.close[1] ? ease((t - FOUND - 0.4) / 0.6) : 0;
+  cr.style.opacity = shown.toFixed(3);
+  cr.style.transform = `translateY(${((1 - shown) * 10).toFixed(2)}px)`;
+
+  // The end: the night again, the seal drawing itself, the name.
+  const e = ease((t - OUTRO) / 1.2);
+  $("end").style.opacity = e.toFixed(3);
+  const strokes = [...$("seal").querySelectorAll(".star > *")];
+  strokes.forEach((s, i) => (s.style.strokeDashoffset = (1 - ease((t - OUTRO - 0.6 - 0.25 * i) / 1.5)).toFixed(4)));
+  const filled = ease((t - OUTRO - 2.2) / 0.7);
+  strokes.slice(0, 2).forEach((s) => (s.style.fill = `rgba(217, 180, 106, ${filled.toFixed(3)})`));
+  strokes[2].style.fill = `rgba(14, 19, 32, ${filled.toFixed(3)})`;
+  $("seal").querySelector(".mic").style.opacity = filled.toFixed(3);
+  const mark = (id, y, delay) => {
+    const v = ease((t - OUTRO - delay) / 0.9);
+    $(id).style.opacity = v.toFixed(3);
+    $(id).style.top = `${(y + (1 - v) * 12).toFixed(2)}px`;
+  };
+  $("seal").style.opacity = ease((t - OUTRO - 0.4) / 0.6).toFixed(3);
+  $("seal").style.top = "190px";
+  mark("mark-ar", 450, 1.5);
+  mark("mark-en", 646, 1.8);
+  mark("mark-url", 744, 2.3);
+  $("fade").style.opacity = Math.max(1 - ease(t / 1.4), ease((t - (END - 1.3)) / 1.3)).toFixed(3);
+  return cam0;
+}
+
+// -- the film's handle (film.mjs) ---------------------------------------------------------------------
+const demo = (window.__demo = {
+  c0: null, t0: null, END,
+  plan: [{ voice: 0, tap: TAP, start: START, found: FOUND, leave: END }],
+  begin() {
+    demo.c0 = performance.now();
+    setTimeout(() => app().getElementById("start").click(), START * 1000);
+  },
+  engine(frame) {
+    return {
+      kind: "device", model: "replay", words: true,
+      prepare: () => Promise.resolve(),
+      async start(onUpdate) {
+        demo.t0 = performance.now();
+        for (const r of run.updates) setTimeout(() => onUpdate(r.u), r.at * 1000);
+        this.ear = { get quiet() { return quietAt((performance.now() - demo.t0) / 1000); } };
+      },
+      push() {}, lock() {}, seek() {}, follow() {}, stop() {},
+    };
+  },
+  bandDb() {
+    if (demo.t0 == null || !sounds) return null;
+    const s = sounds[0];
+    const i = Math.floor(((performance.now() - demo.t0) / 1000) * s.band_hz);
+    return s.band_db[clamp(i, 0, s.band_db.length - 1)] ?? -90;
+  },
+  get t() { return demo.c0 == null ? 0 : (performance.now() - demo.c0) / 1000; },
+  get done() { return demo.c0 != null && demo.t >= END; },
+  starts: () => [demo.t0 == null ? null : (demo.t0 - demo.c0) / 1000],
+  // The recording: muffled through the walls outside, clear inside; the night's crickets outside.
+  mix: () => {
+    const t = demo.t;
+    const inside = clamp((t - (DOOR - 0.5)) / 0.9, 0, 1) * (1 - clamp((t - S.outside2[0]) / 1.4, 0, 1));
+    const gain = (0.45 * ease((t - 0.4) / 2.5) + 0.35 * inside) * (1 - ease((t - OUTRO - 1) / (END - OUTRO - 1)));
+    return [[Number(gain.toFixed(4)), 0, Number((1 - inside).toFixed(4))]];
+  },
+  bed: () => {
+    const t = demo.t;
+    const out = Math.max(1 - clamp((t - (DOOR - 0.6)) / 1.1, 0, 1), clamp((t - S.outside2[0]) / 1.4, 0, 1));
+    return Number((1.4 * out * ease(t / 1.5) * (1 - ease((t - OUTRO - 1) / (END - OUTRO - 1)))).toFixed(4));
+  },
+  // The small sounds of what happens on screen (story-sounds.mjs): footsteps up the path, pages,
+  // the book shutting, the tap on the glass, the cat.
+  sfx: [
+    ...steps(),
+    ...FLIPS.map((at) => ({ at, file: "page.wav", gain: 0.75, pan: 0.45 })),
+    { at: 19.3, file: "thud.wav", gain: 0.65, pan: 0.1 },
+    { at: TAP, file: "tap.wav", gain: 0.9, pan: 0.1 },
+    { at: S.med2[0] + 7.3, file: "purr.wav", gain: 0.55, pan: 0.5 },
+  ],
+  motion: 0,
+});
+function steps() {
+  const out = [];
+  for (const [rate, ph, pan, k] of [[0.95, 0, -0.12, 1], [1.25, 1, 0.12, 0.7]]) {
+    for (let n = 1; ; n++) {
+      const at = (n * Math.PI - ph) / (2 * Math.PI * rate);
+      const p = (at - 0.2) / 7.2;
+      if (p > 0.88) break;
+      if (p < 0) continue;
+      const s = 1.3 * Math.pow(0.27 / 1.3, p);
+      out.push({ at, file: "step.wav", gain: 0.5 * k * (s / 1.3), pan });
+    }
+  }
+  return out;
+}
+// The app loads only now, so it finds the replay in place of its engine.
+$("app").src = "/app/index.html?log=0";
+function quietAt(t) {
+  let q = null;
+  for (const [at, v] of run.quiet) { if (at > t) break; q = v; }
+  return q;
+}
+
+if (STILL != null) {
+  draw(STILL);
+  window.__draw = draw;
+  window.__ready = true;
+} else {
+  let lastCam = null;
+  const frame = () => {
+    requestAnimationFrame(frame);
+    if (demo.c0 == null) return;
+    const cam = draw(demo.t);
+    if (cam && lastCam) demo.motion += Math.hypot(cam.x - lastCam.x, cam.y - lastCam.y) * cam.z + Math.abs(cam.z - lastCam.z) * 900;
+    lastCam = cam && { ...cam };
+  };
+  requestAnimationFrame(frame);
+  draw(0);
+  window.__stageReady = true;
+}
+</script>
+</body>
+</html>
