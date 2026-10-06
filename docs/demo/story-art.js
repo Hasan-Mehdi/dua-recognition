@@ -23,6 +23,9 @@ export const C = {
 };
 
 export const r2 = (x) => Math.round(x * 100) / 100;
+// Scales and the camera: a zoom rounded to 0.01 holds for frames and then jumps (10 px at the
+// frame's edge), so these keep five places.
+export const r5 = (x) => Math.round(x * 1e5) / 1e5;
 export const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 export const ease = (k) => (k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k));
 export const easeIO = (k) => (k <= 0 ? 0 : k >= 1 ? 1 : k < 0.5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2);
@@ -99,15 +102,17 @@ export function puzzled(x, y, s, pop, wobble = 0) {
 // cap ("kufi" | "kufi-black" | "turban" | "none"), capColor, beard ("full" | "short" | null),
 // eyes ("open" | "closed" | "happy"), blink 0..1, look [x, y] -1..1, brows (0 calm, 1 worried,
 // -0.6 raised), mouth (0 shut .. 1 wide open), smile (0 flat .. 1), hands {l, r} as [x, y] in the
-// person's units (null: in the lap), held (markup over the body and under the hands), split (true:
-// return {back, front} with the arms and hands apart, for a phone between the two), lit (a warm
-// light from the side: -1 left .. 1 right, 0 none), glow (a phone's light on the face, 0..1).
+// person's units (null: in the lap), grip (how the hands hold what they hold: "thumb", a thumb
+// over a book's page; "fingers", fingers round a phone's back; null: plain hands), held (markup
+// over the body and under the hands), split (true: return {back, front} with the arms and hands
+// apart, for a phone between the two), lit (a warm light from the side: -1 left .. 1 right, 0
+// none), glow (a phone's light on the face, 0..1).
 export function person(o) {
   const {
     x = 0, y = 0, s = 1, kid = false, turn = 0, sway = 0, skin = C.skin[1], cloth = C.black,
     trim = null, cap = "kufi", capColor = C.cream, beard = null, eyes = "open", blink = 0,
     look = [0, 0], brows = 0, mouth = 0, smile = 0.5, hands = null, held = "", split = false,
-    glow = 0, bob = 0, headTilt = 0, hair = C.hair, pitch = 0, reading = 0,
+    glow = 0, bob = 0, headTilt = 0, hair = C.hair, pitch = 0, reading = 0, grip = null,
   } = o;
   const P = kid
     ? { R: 74, hy: -205, sx: 44, sy: -128, lap: 112, waist: 54, arm: 30, hand: 14, ow: 4.4, ua: 46, fa: 46 }
@@ -155,15 +160,67 @@ export function person(o) {
   };
   const hand = (side) => {
     const [a, b] = H[side];
+    if (grip) return gripHand(a, b, P.hand, side === "l" ? 1 : -1, grip, skin, ow);
     return `<circle cx="${r2(a)}" cy="${r2(b)}" r="${P.hand}" fill="${skin}" ${sw(ow * 0.9)}/>`;
   };
   const arms = arm("l") + arm("r");
   const handsSvg = hand("l") + hand("r");
 
   const headSvg = head({ hx, hy, R, kid, off, turn, skin, cap, capColor, beard, eyes, blink, look, brows, mouth, smile, glow, ow, headTilt, hair, pitch, reading });
-  const g = (inner) => `<g transform="translate(${r2(x)} ${r2(y)}) rotate(${r2(sway)}) scale(${r2(s)})">${inner}</g>`;
+  const g = (inner) => `<g transform="translate(${r2(x)} ${r2(y)}) rotate(${r2(sway)}) scale(${r5(s)})">${inner}</g>`;
+  // Fingers round a phone held out before him: his forearms are behind it, only his hands before.
+  if (split && grip === "fingers") return { back: g(legs + body + headSvg + arms + held), front: g(handsSvg) };
   if (split) return { back: g(legs + body + headSvg + held), front: g(arms + handsSvg) };
   return g(legs + body + headSvg + arms + held + handsSvg);
+}
+
+// A hand holding the edge of something, at (x, y), r its size; in (1: the left hand, the thing
+// to its right; -1 the right hand). "thumb": the palm at the edge and the thumb over the page;
+// "fingers": the palm at the edge and three fingers round the back of a phone, toward us.
+function gripHand(x, y, r, in_, grip, skin, ow) {
+  const crease = shade(skin, -0.2);
+  let s = "";
+  if (grip === "fingers") {
+    // Four fingers lying across the phone's back, outlined as one shape with the palm, a line
+    // between each two.
+    const fingers = [-0.78, -0.26, 0.26, 0.74].map((k, i) => ({
+      y0: y + k * r * 0.9, x0: x - in_ * r * 0.3, x1: x + in_ * r * [0.95, 1.12, 1.05, 0.8][i],
+    }));
+    const fw = r * 0.5;
+    const palm = (grow) => `<ellipse cx="${r2(x - in_ * r * 0.35)}" cy="${r2(y + r * 0.05)}" rx="${r2(r * 0.85 + grow)}" ry="${r2(r * 1.1 + grow)}" fill="${grow ? C.ink : skin}"/>`;
+    for (const f of fingers) s += `<path d="M${r2(f.x0)} ${r2(f.y0)}L${r2(f.x1)} ${r2(f.y0)}" stroke="${C.ink}" stroke-width="${r2(fw + ow * 1.8)}" stroke-linecap="round"/>`;
+    s += palm(ow * 0.9);
+    for (const f of fingers) s += `<path d="M${r2(f.x0)} ${r2(f.y0)}L${r2(f.x1)} ${r2(f.y0)}" stroke="${skin}" stroke-width="${r2(fw)}" stroke-linecap="round"/>`;
+    s += palm(0);
+    for (let i = 0; i < 3; i++) {
+      const ym = (fingers[i].y0 + fingers[i + 1].y0) / 2, x1 = Math.min(fingers[i].x1 * in_, fingers[i + 1].x1 * in_) * in_;
+      s += `<path d="M${r2(x + in_ * r * 0.15)} ${r2(ym)}L${r2(x1)} ${r2(ym)}" stroke="${crease}" stroke-width="${r2(ow * 0.6)}" stroke-linecap="round"/>`;
+    }
+    return s;
+  }
+  // "thumb": the palm round the edge, and the thumb lying in over the page.
+  const tx = x + in_ * r * 0.95, ty = y - r * 0.55;
+  s += `<ellipse cx="${r2(x - in_ * r * 0.2)}" cy="${r2(y + r * 0.1)}" rx="${r2(r * 0.95)}" ry="${r2(r * 1.1)}" fill="${skin}" ${sw(ow * 0.9)}/>
+    <path d="M${r2(x + in_ * r * 0.05)} ${r2(y - r * 0.3)}L${r2(tx)} ${r2(ty)}" stroke="${C.ink}" stroke-width="${r2(r * 0.6 + ow * 1.8)}" stroke-linecap="round"/>
+    <path d="M${r2(x + in_ * r * 0.05)} ${r2(y - r * 0.3)}L${r2(tx)} ${r2(ty)}" stroke="${skin}" stroke-width="${r2(r * 0.6)}" stroke-linecap="round"/>`;
+  return s;
+}
+
+// A phone seen from behind, held up to the face: its back, the camera, the screen's light round
+// its edges. (0, 0) its centre, w x h, in the holder's units.
+export function phoneBack({ x = 0, y = 0, w = 54, h = 112, glow = 1 }) {
+  const rx = w * 0.17, ow = w * 0.06;
+  const cam = w * 0.4;
+  return `<g transform="translate(${r2(x)} ${r2(y)})">
+    ${glow > 0.01 ? `<rect x="${r2(-w / 2 - 6)}" y="${r2(-h / 2 - 8)}" width="${r2(w + 12)}" height="${r2(h + 8)}" rx="${r2(rx + 6)}" fill="#bfd0ff" opacity="${r2(0.22 * glow)}" filter="url(#f-soft)"/>` : ""}
+    <rect x="${r2(-w / 2)}" y="${r2(-h / 2)}" width="${r2(w)}" height="${r2(h)}" rx="${r2(rx)}" fill="#2a2e3a" ${sw(ow)}/>
+    <rect x="${r2(-w / 2 + ow * 1.2)}" y="${r2(-h / 2 + ow * 1.2)}" width="${r2(w - ow * 2.4)}" height="${r2(h - ow * 2.4)}" rx="${r2(rx * 0.8)}" fill="none" stroke="#4a5062" stroke-width="${r2(ow * 0.6)}"/>
+    <rect x="${r2(-w / 2 + w * 0.1)}" y="${r2(-h / 2 + w * 0.1)}" width="${r2(cam)}" height="${r2(cam)}" rx="${r2(cam * 0.3)}" fill="#1b1e27" stroke="#4a5062" stroke-width="${r2(ow * 0.5)}"/>
+    <circle cx="${r2(-w / 2 + w * 0.1 + cam * 0.3)}" cy="${r2(-h / 2 + w * 0.1 + cam * 0.3)}" r="${r2(cam * 0.17)}" fill="#0b0d12" stroke="#5c6378" stroke-width="${r2(ow * 0.4)}"/>
+    <circle cx="${r2(-w / 2 + w * 0.1 + cam * 0.3)}" cy="${r2(-h / 2 + w * 0.1 + cam * 0.72)}" r="${r2(cam * 0.17)}" fill="#0b0d12" stroke="#5c6378" stroke-width="${r2(ow * 0.4)}"/>
+    <circle cx="${r2(-w / 2 + w * 0.1 + cam * 0.72)}" cy="${r2(-h / 2 + w * 0.1 + cam * 0.3)}" r="${r2(cam * 0.08)}" fill="#f6e7b0" opacity=".7"/>
+    <path d="M${r2(w * 0.3)} ${r2(-h * 0.36)}L${r2(w * 0.3)} ${r2(h * 0.1)}" stroke="#fff" stroke-opacity=".08" stroke-width="${r2(w * 0.08)}" stroke-linecap="round"/>
+  </g>`;
 }
 
 function head(o) {
@@ -324,7 +381,7 @@ export function walker({ x, y, s = 1, kid = false, phase = 0, cloth = C.black, s
   g += `<path d="M${r2(-R * 1.0)} ${r2(b0)}C${r2(-R * 1.04)} ${r2(top - R * 0.12)} ${r2(R * 1.04)} ${r2(top - R * 0.12)} ${r2(R * 1.0)} ${r2(b0)}Q0 ${r2(b0 + R * 0.16)} ${r2(-R * 1.0)} ${r2(b0)}Z" fill="${fill}" ${sw(ow)}/>
     <path d="M${r2(-R * 0.98)} ${r2(b0 - R * 0.16)}Q0 ${r2(b0)} ${r2(R * 0.98)} ${r2(b0 - R * 0.16)}" fill="none" stroke="${C.gold}" stroke-width="${r2(R * 0.07)}" stroke-dasharray="${r2(R * 0.05)} ${r2(R * 0.06)}" stroke-linecap="round"/>`;
   g += `</g>`;
-  return `<g transform="translate(${r2(x)} ${r2(y)}) scale(${r2(s)})">${g}</g>`;
+  return `<g transform="translate(${r2(x)} ${r2(y)}) scale(${r5(s)})">${g}</g>`;
 }
 
 // -- the cat ------------------------------------------------------------------------------------
@@ -394,10 +451,19 @@ export function lantern({ x, y, s = 1, chain = 60, lit = 1, swing = 0, halo = 1 
 }
 
 // -- the book -------------------------------------------------------------------------------------
-// An open du'a book held at (0, 0), w across. flip 0..1: a page turning right to left.
-export function book({ x = 0, y = 0, w = 200, flip = -1, rot = 0, open = 1 }) {
-  const h = w * 0.62, half = w / 2;
-  const line = (x0, y0, len) => `<path d="M${r2(x0)} ${r2(y0)}h${r2(-len)}" stroke="#6a5a48" stroke-width="${r2(w * 0.012)}" stroke-linecap="round" stroke-dasharray="${r2(w * 0.05)} ${r2(w * 0.012)} ${r2(w * 0.02)} ${r2(w * 0.012)}"/>`;
+// A du'a book at (x, y), w across its two open pages. sq: how much of its height we see (1: the
+// pages face us, as on the reciter's stand; about 0.5: open in a lap, seen from in front and a
+// little above). flip 0..1: a page turning right to left. shut 0..1: the right half, cover and
+// all, closing over the left; at 1 the book lies closed, cover up, where its left half was.
+const PAGE = "#fbf4e3", PAGE_BACK = "#f1e6cc", COVER = "#2c6a52";
+export function book({ x = 0, y = 0, w = 200, flip = -1, rot = 0, sq = 1, shut = 0 }) {
+  const h = w * 0.62 * sq, half = w / 2, k = w / 200;
+  const dip = 8 * k * sq; // the pages curve down into the spine
+  const th = 9 * k * (1.4 - sq); // the pages' thickness, at the near edge
+  const lw = r2(w * 0.016);
+  // Out of the page's plane is up the screen, by how far the book lies back.
+  const up = sq < 1 ? Math.sqrt(1 - sq * sq) * 0.9 : 0.25 * sq * 0.62;
+  const line = (x0, y0, len) => `<path d="M${r2(x0)} ${r2(y0)}h${r2(-len)}" stroke="#6a5a48" stroke-width="${r2(w * 0.012 * Math.max(sq, 0.7))}" stroke-linecap="round" stroke-dasharray="${r2(w * 0.05)} ${r2(w * 0.012)} ${r2(w * 0.02)} ${r2(w * 0.012)}"/>`;
   const lines = (side) => {
     let s = "";
     for (let i = 0; i < 6; i++) {
@@ -406,18 +472,39 @@ export function book({ x = 0, y = 0, w = 200, flip = -1, rot = 0, open = 1 }) {
     }
     return s;
   };
-  let g = `<path d="M${-half - 6} ${-h / 2 + 6}L${half + 6} ${-h / 2 + 6}L${half + 6} ${h / 2 + 10}Q0 ${h / 2 + 2} ${-half - 6} ${h / 2 + 10}Z" fill="#2c6a52" ${sw(w * 0.02)}/>
-    <path d="M${-half} ${-h / 2}Q${-half / 2} ${-h / 2 - 8} 0 ${-h / 2 + 4}V${h / 2}Q${-half / 2} ${h / 2 - 8} ${-half} ${h / 2}Z" fill="#fbf4e3" ${sw(w * 0.016)}/>
-    <path d="M${half} ${-h / 2}Q${half / 2} ${-h / 2 - 8} 0 ${-h / 2 + 4}V${h / 2}Q${half / 2} ${h / 2 - 8} ${half} ${h / 2}Z" fill="#fbf4e3" ${sw(w * 0.016)}/>
-    ${lines(-1)}${lines(1)}
-    <path d="M0 ${-h / 2 + 4}V${h / 2}" stroke="#c9b897" stroke-width="${r2(w * 0.016)}"/>`;
-  if (flip >= 0 && flip <= 1) {
-    // The turning page: its width follows a cosine from the right half over the spine to the left.
-    const k = Math.cos(flip * Math.PI); // 1 right .. -1 left
-    const px = half * k, lift = Math.sin(flip * Math.PI) * h * 0.12;
-    g += `<path d="M0 ${-h / 2 + 4}Q${r2(px / 2)} ${r2(-h / 2 - 8 - lift)} ${r2(px)} ${r2(-h / 2 - lift)}V${r2(h / 2 - lift)}Q${r2(px / 2)} ${r2(h / 2 - 8 - lift)} 0 ${h / 2}Z" fill="${k > 0 ? "#fbf4e3" : "#f1e6cc"}" ${sw(w * 0.016)}/>`;
+  // A leaf turned about the spine (a = 0: lying right, PI: lying left): its free edge at px,
+  // lifted toward the reader.
+  const leaf = (a, fill, extra = "") => {
+    const px = half * Math.cos(a), lift = Math.sin(a) * half * up;
+    const bow = Math.sin(a) * half * 0.12 * Math.sign(Math.cos(a) || 1);
+    return `<path d="M0 ${r2(-h / 2 + dip)}Q${r2(px / 2 + bow)} ${r2(-h / 2 - dip - lift)} ${r2(px)} ${r2(-h / 2 - lift)}V${r2(h / 2 - lift)}Q${r2(px / 2 + bow)} ${r2(h / 2 - dip - lift)} 0 ${r2(h / 2 + dip)}Z" fill="${fill}" ${sw(lw)}/>${extra}`;
+  };
+  const coverHalf = (side) => `<path d="M0 ${r2(-h / 2 + 4 * k)}H${r2(side * (half + 6 * k))}V${r2(h / 2 + th + 6 * k)}Q${r2(side * half * 0.5)} ${r2(h / 2 + th + 2 * k)} 0 ${r2(h / 2 + th + 4 * k)}Z" fill="${COVER}" ${sw(w * 0.02)}/>`;
+  const block = (side) => `<path d="M0 ${r2(h / 2)}H${r2(side * half)}V${r2(h / 2 + th)}Q${r2(side * half * 0.5)} ${r2(h / 2 + th - dip * 0.5)} 0 ${r2(h / 2 + th + dip * 0.4)}Z" fill="#eadcbc" ${sw(lw)}/>`;
+  const page = (side) => `<path d="M${r2(side * half)} ${r2(-h / 2)}Q${r2(side * half / 2)} ${r2(-h / 2 - dip)} 0 ${r2(-h / 2 + dip)}V${r2(h / 2 + dip)}Q${r2(side * half / 2)} ${r2(h / 2 - dip)} ${r2(side * half)} ${r2(h / 2)}Z" fill="${PAGE}" ${sw(lw)}/>${lines(side)}`;
+  let g = coverHalf(-1) + (shut > 0 ? "" : coverHalf(1)) + block(-1) + (shut > 0 ? "" : block(1)) + page(-1);
+  if (shut <= 0) g += page(1);
+  g += `<path d="M0 ${r2(-h / 2 + dip)}V${r2(h / 2 + dip)}" stroke="#c9b897" stroke-width="${lw}"/>`;
+  if (shut <= 0 && flip >= 0 && flip <= 1) {
+    // The turning page shows its face until it stands up, then its back.
+    const a = flip * Math.PI;
+    g += leaf(a, Math.cos(a) > 0 ? PAGE : PAGE_BACK);
   }
-  return `<g transform="translate(${r2(x)} ${r2(y)}) rotate(${r2(rot)}) scale(${r2(open)} 1)">${g}</g>`;
+  if (shut > 0) {
+    // The right half closing: its pages until it stands up, then the cover's outside.
+    const a = Math.min(1, shut) * Math.PI;
+    if (Math.cos(a) > 0) g += leaf(a, PAGE);
+    else {
+      g += leaf(a, COVER);
+      if (shut >= 0.98) {
+        // The ornament on the closed cover.
+        const cx = -half / 2, cy = 0;
+        g += `<path d="M${r2(cx)} ${r2(cy - h * 0.22)}L${r2(cx + half * 0.18)} ${r2(cy)}L${r2(cx)} ${r2(cy + h * 0.22)}L${r2(cx - half * 0.18)} ${r2(cy)}Z" fill="none" stroke="${C.gold}" stroke-width="${r2(w * 0.014)}"/>
+          <circle cx="${r2(cx)}" cy="${r2(cy)}" r="${r2(half * 0.04)}" fill="${C.gold}"/>`;
+      }
+    }
+  }
+  return `<g transform="translate(${r2(x)} ${r2(y)}) rotate(${r2(rot)})">${g}</g>`;
 }
 
 // -- outside: the mosque on a Thursday night ------------------------------------------------------
@@ -562,14 +649,17 @@ export function hall(t, { lit = [], moonIn = true } = {}) {
   s += `<rect x="0" y="540" width="1920" height="26" fill="${C.wallHi}"/><rect x="0" y="542" width="1920" height="22" fill="url(#p-band)"/>
     <rect x="0" y="566" width="1920" height="146" fill="${C.wallLow}"/>
     ${Array.from({ length: 14 }, (_, i) => `<path d="M${400 + i * 120} 700V616a40 40 0 0 1 80 0V700" fill="none" stroke="${C.gold}" stroke-opacity=".25" stroke-width="3"/>`).join("")}`;
-  // The carpet, row on row, toward us.
+  // The carpet: flat on the floor, its rows (one for each line of people) marked by a border, a
+  // small medallion now and then between them. (Raised, lit prayer arches read as rows of seats.)
   s += `<rect x="0" y="712" width="1920" height="368" fill="url(#g-floor)"/>`;
   const rows = [712, 742, 780, 830, 896, 980, 1090];
   for (let i = 0; i < rows.length - 1; i++) {
-    const y0 = rows[i], y1 = rows[i + 1], h = y1 - y0, w = h * 1.7;
-    s += `<path d="M0 ${y0}H1920" stroke="${C.gold}" stroke-opacity=".55" stroke-width="${r2(1.2 + h * 0.04)}"/>`;
-    for (let x = (i % 2) * w * 0.5 - w; x < 1920 + w; x += w) {
-      s += `<path d="M${r2(x + w * 0.12)} ${r2(y1 - h * 0.12)}V${r2(y0 + h * 0.45)}C${r2(x + w * 0.12)} ${r2(y0 + h * 0.2)} ${r2(x + w * 0.4)} ${r2(y0 + h * 0.18)} ${r2(x + w * 0.5)} ${r2(y0 + h * 0.08)}C${r2(x + w * 0.6)} ${r2(y0 + h * 0.18)} ${r2(x + w * 0.88)} ${r2(y0 + h * 0.2)} ${r2(x + w * 0.88)} ${r2(y0 + h * 0.45)}V${r2(y1 - h * 0.12)}Z" fill="${C.carpetHi}" stroke="${C.gold}" stroke-opacity=".4" stroke-width="${r2(1 + h * 0.025)}"/>`;
+    const y0 = rows[i], y1 = rows[i + 1], h = y1 - y0, w = h * 3.2;
+    s += `<path d="M0 ${r2(y0 + h * 0.06)}H1920" stroke="${C.carpetLow}" stroke-width="${r2(h * 0.14)}"/>
+      <path d="M0 ${r2(y0 + h * 0.06)}H1920" stroke="${C.gold}" stroke-opacity=".28" stroke-width="${r2(0.8 + h * 0.022)}" stroke-dasharray="${r2(h * 0.1)} ${r2(h * 0.08)}"/>`;
+    for (let x = (i % 2) * w * 0.5; x < 1920 + w; x += w) {
+      const cy = y0 + h * 0.56, rx = h * 0.42, ry = h * 0.2;
+      s += `<path d="M${r2(x - rx)} ${r2(cy)}L${r2(x)} ${r2(cy - ry)}L${r2(x + rx)} ${r2(cy)}L${r2(x)} ${r2(cy + ry)}Z" fill="${C.carpetHi}" fill-opacity=".45" stroke="${C.gold}" stroke-opacity=".22" stroke-width="${r2(0.8 + h * 0.016)}"/>`;
     }
   }
   // The lanterns, across the hall.
@@ -577,6 +667,20 @@ export function hall(t, { lit = [], moonIn = true } = {}) {
     const x = 470 + i * 140, chain = 30 + 26 * Math.sin(i * 1.9) ** 2;
     s += lantern({ x, y: -10, s: 0.62, chain: chain / 0.62, lit: lit[i] ?? 1, swing: Math.sin(t * 0.8 + i) * 1.6, halo: 1 });
   }
+  return s;
+}
+
+// The low platform the reciter sits on, before the mihrab, under a white sheet: x0..x1 across,
+// its top at y (the back edge) to y + 22 (the front), its front face below.
+export function dais(x0, x1, y) {
+  const d = 22, face = 30;
+  let s = `<ellipse cx="${(x0 + x1) / 2}" cy="${y + d + face + 4}" rx="${r2((x1 - x0) * 0.56)}" ry="12" fill="#000" opacity=".25"/>
+    <path d="M${x0 - 10} ${y + d}L${x0 + 6} ${y}H${x1 - 6}L${x1 + 10} ${y + d}V${y + d + face}H${x0 - 10}Z" fill="#4a2e22" ${sw(3)}/>`;
+  // The sheet over its top, falling a little over the front in soft folds.
+  let hem = "";
+  for (let x = x0 - 10, i = 0; x < x1 + 10; x += 30, i++) hem += `Q${r2(x + 15)} ${y + d + 16 + (i % 2) * 3} ${r2(Math.min(x1 + 10, x + 30))} ${y + d + 10}`;
+  s += `<path d="M${x0 - 10} ${y + d + 10}V${y + d}L${x0 + 6} ${y}H${x1 - 6}L${x1 + 10} ${y + d}V${y + d + 10}${hem}Z" fill="${C.cream}" ${sw(3)}/>
+    <path d="M${x0 + 4} ${y + d - 2}H${x1 - 4}" stroke="${C.creamShade}" stroke-width="3" stroke-linecap="round"/>`;
   return s;
 }
 

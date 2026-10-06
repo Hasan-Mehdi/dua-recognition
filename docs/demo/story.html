@@ -6,7 +6,7 @@
      found the du'a, and the app's name at the end.
      ?still=S draws film second S once (for looking at stills without filming).
 
-       node docs/demo/capture.mjs --sid majlis:mj-rSPgtn4Km_w-2226:0 --line 4 --into 1.2 --seconds 84
+       node docs/demo/capture.mjs --sid majlis:mj-rSPgtn4Km_w-2226:0 --line 4 --into 3.4 --seconds 84
          --credit "Congregation at KSIJ, Dar es Salaam" --out docs/demo/story-runs/1-kumayl.json
        node docs/demo/story-sounds.mjs
        node docs/demo/film.mjs --stage story.html --runs docs/demo/story-runs --pre 30
@@ -95,7 +95,7 @@
 
 <script type="module">
 import * as A from "./story-art.js";
-const { C, r2, clamp, ease, easeIO, person, cat, lantern, book, sparkle, puzzled, blinkAt, seeded } = A;
+const { C, r2, r5, clamp, ease, easeIO, person, cat, lantern, book, sparkle, puzzled, blinkAt, seeded } = A;
 const $ = (id) => document.getElementById(id);
 const W = 1920, H = 1080, PW = 418, PH = 872, BEZEL = 14;
 const params = new URLSearchParams(location.search);
@@ -254,25 +254,33 @@ function crowd(t) {
       mouth: mouthAt(t, p.k, p.lag), smile: 0.4,
     };
     if (p.book) {
-      o.hands = p.kid ? { l: [-46, -60], r: [46, -60] } : { l: [-58, -84], r: [58, -84] };
-      o.held = book({ x: 0, y: p.kid ? -70 : -96, w: p.kid ? 120 : 150 });
+      // Open in the lap, read from above.
+      const [by, w] = p.kid ? [-50, 110] : [-62, 130];
+      o.hands = { l: [-w / 2 - 2, by + 3], r: [w / 2 + 2, by + 3] };
+      o.grip = "thumb";
+      o.held = book({ x: 0, y: by, w, sq: 0.5 });
+      o.pitch = 0.6;
     }
     s += person(o);
   }
   return s;
 }
+// The reciter, on a low platform before the mihrab, his book on its stand and a microphone.
 function reciter(t) {
-  const x = 252, y = 738, s = 0.8;
-  return A.rahl(372, 740, 0.62) + person({
+  const x = 252, y = 742, s = 0.8;
+  return A.dais(70, 470, 722) + person({
     x, y, s, turn: 0.45, cloth: "#2e2a36", skin: C.skin[3], cap: "turban", beard: "full", eyes: "closed",
     mouth: mouthAt(t, 1.1), sway: Math.sin(t * 1.1) * 1.4, smile: 0.4,
-  }) + A.micStand(318, 556, 0.62, 742);
+  }) + A.rahl(392, 748, 0.62) + A.micStand(322, 560, 0.62, 746);
 }
 
 // -- the three of them ------------------------------------------------------------------------------
 // At (x, y) and s for each of the boy, his father and the cat, as each shot places them; what the
-// boy holds comes from the time. Returns {back, front, phone}: the phone's centre, size and turn in
-// the shot, between back and front.
+// boy holds comes from the time: his book open in his lap; shut and set down on the floor in front
+// of him (out of the frame); then the phone, held up before him, so we see its back (its screen
+// is the close shot's).
+const KBOOK = { y: -56, w: 140 }, FLOOR = 76; // the book in his hands, and set down
+const KPHONE = { y: -68, w: 60, h: 120 };
 function family(t, at, opts = {}) {
   const k = kidFace(t), d = dadFace(t), c = catState(t);
   let back = "", front = "", phone = null;
@@ -289,19 +297,25 @@ function family(t, at, opts = {}) {
     turn: k.turn, look: k.look, brows: k.brows, smile: k.smile, eyes: k.eyes, mouth: k.mouth, blink: k.blink, pitch: k.pitch,
     glow: 0, split: true,
   };
-  const ph = at.phone; // where he holds it: centre (x, y) in his units, size s (of the phone's 418 px)
+  const half = KBOOK.w / 2;
   if (t < 19.75) {
-    const close = clamp((t - 19.0) / 0.35, 0, 1), down = easeIO((t - 19.3) / 0.45);
-    const by = -78 + down * 140;
-    ko.hands = { l: [-60 + close * 40, by + 36], r: [60 - close * 40, by + 36] };
-    ko.held = book({ x: 0, y: by, w: 150, flip: flipAt(t), open: Math.max(0.06, 1 - close) });
+    // Reading; at 19.0 the right half closes over the left (his right hand with it), and he sets
+    // the shut book down in front of him.
+    const shut = easeIO((t - 19.0) / 0.35), down = easeIO((t - 19.3) / 0.45);
+    const bx = (half / 2) * down, by = KBOOK.y + (FLOOR - KBOOK.y) * down;
+    const right = half + 2 - (half + 2) * shut;
+    ko.hands = { l: [bx - half - 2, by + 3], r: [bx + right, by + 3 - Math.sin(shut * Math.PI) * 26] };
+    ko.grip = "thumb";
+    ko.held = book({ x: bx, y: by, w: KBOOK.w, sq: 0.5, flip: flipAt(t), shut });
   } else {
+    // The phone comes up from his lap into both hands, its light on his face.
     const up = easeIO((t - 19.75) / 0.8);
-    const cy = ph.y + (1 - up) * 150;
-    const hw = (PW * ph.s) / 2, hh = (PH * ph.s) / 2;
-    ko.hands = { l: [ph.x - hw + 2, cy + hh * 0.72], r: [ph.x + hw - 2, cy + hh * 0.72] };
+    const cy = KPHONE.y + (1 - up) * 60;
+    ko.hands = { l: [-KPHONE.w / 2 - 1, cy + KPHONE.h * 0.2], r: [KPHONE.w / 2 + 1, cy + KPHONE.h * 0.2] };
+    ko.grip = "fingers";
     ko.glow = 0.55 * up;
-    phone = { x: at.kid.x + ph.x * at.kid.s, y: at.kid.y + cy * at.kid.s, s: ph.s * at.kid.s, rot: ph.rot ?? 0 };
+    const o = clamp((t - 19.75) / 0.2, 0, 1);
+    ko.held = `<g opacity="${r2(o)}">${A.phoneBack({ y: cy, w: KPHONE.w, h: KPHONE.h, glow: up })}</g>`;
   }
   const kid = person(ko);
   back += kid.back;
@@ -349,7 +363,8 @@ const shots = {
     // His hands and the phone, the hall behind out of focus. One push in once the du'a is found.
     const push = easeIO((t - (FOUND + 0.5)) / 2.2);
     const ph = { x: 1150, y: 548, s: 1.04, rot: -2 };
-    return { bg: hallAll(t), bgCam: { x: 720, y: 700, z: 2.3 }, blur: 14, front: hands(t, ph), phone: ph,
+    const hd = hands(t, ph);
+    return { bg: hallAll(t), bgCam: { x: 720, y: 700, z: 2.3 }, blur: 14, back: hd.back, front: hd.front, phone: ph,
       light: warmLight(0.6), cam: { x: 960 + (1010 - 960) * push, y: 540 + (400 - 540) * push, z: 1 + 0.36 * push } };
   },
   med2(t) {
@@ -403,48 +418,65 @@ function doorLight(t) {
   const r = 220 + 2100 * ease(Math.min(1, u / 0.46));
   return `<circle cx="${r2(x)}" cy="${r2(y)}" r="${r2(r)}" fill="url(#g-bloom)" opacity="${r2(up)}"/>`;
 }
-// The close shot's hands: both hold the phone by its sides, until his right lets go, reaches over
-// and taps the seal (where the app has it), and comes back.
+// The close shot's hands, seen as he sees them: both hold the phone by its sides, fingers behind
+// it and thumbs over the glass's edge, until his right lets go, taps the seal (where the app has
+// it) with a forefinger, and comes back. Returns {back, front}: behind the phone, over it.
 let sealAt = null;
+const SKIN = C.skin[1], NAIL = "#f3cdb4";
+const outline = (d, w, fill = SKIN) => `<path d="${d}" fill="none" stroke="${C.ink}" stroke-width="${w + 14}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${fill}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
 function hands(t, ph) {
-  const L = toWorld(ph, 0, 650), Rr = toWorld(ph, PW, 630);
+  const L = toWorld(ph, 0, 640), Rr = toWorld(ph, PW, 640);
   const press = clamp((t - (TAP - 0.6)) / 0.6, 0, 1), lift = clamp((t - (TAP + 0.32)) / 0.65, 0, 1);
   const reach = easeIO(press) * (1 - easeIO(lift));
   const seal = sealAt ? toWorld(ph, sealAt[0], sealAt[1]) : toWorld(ph, PW / 2, 420);
   const pressed = t >= TAP - 0.02 && t < TAP + 0.3;
-  const sleeve = (from, to, w, bow) => {
-    const d = `M${r2(from[0])} ${r2(from[1])}Q${r2((from[0] + to[0]) / 2 + bow)} ${r2((from[1] + to[1]) / 2 + 30)} ${r2(to[0])} ${r2(to[1])}`;
-    return `<path d="${d}" fill="none" stroke="${C.ink}" stroke-width="${w + 12}" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${C.teal}" stroke-width="${w}" stroke-linecap="round"/>`;
-  };
-  let s = sleeve([700, 1240], [L[0] - 44, L[1] + 70], 96, -50) + holder(L[0], L[1], 1);
-  if (reach < 0.02) return s + sleeve([1600, 1240], [Rr[0] + 44, Rr[1] + 70], 96, 50) + holder(Rr[0], Rr[1], -1);
-  // From the phone's edge to the seal, along an arc that lifts off the glass.
-  const k = reach;
-  const tip = [Rr[0] + 40 + (seal[0] - Rr[0] - 40) * k, Rr[1] - 40 + (seal[1] - Rr[1] + 40) * k - Math.sin(k * Math.PI) * 50];
-  const a = (-26 * Math.PI) / 180, fist = [tip[0] - Math.sin(a) * 150, tip[1] + Math.cos(a) * 150];
-  return s + sleeve([1600, 1240], [fist[0] + 30, fist[1] + 40], 96, 60) + pointer(tip[0], tip[1], pressed);
+  const left = holder(L[0], L[1], 1, ph.rot);
+  let back = left.back, front = left.front;
+  // The right hand: holding, or (crossfading over a tenth of the move) pointing.
+  const hold = 1 - clamp(reach / 0.12, 0, 1);
+  if (hold > 0) {
+    const right = holder(Rr[0], Rr[1], -1, ph.rot);
+    back += `<g opacity="${r2(hold)}">${right.back}</g>`;
+    front += `<g opacity="${r2(hold)}">${right.front}</g>`;
+  }
+  if (reach > 0) {
+    // From beside the phone to the seal, along an arc that lifts off the glass.
+    const from = [Rr[0] - 10, Rr[1] - 90];
+    const tip = [from[0] + (seal[0] - from[0]) * reach, from[1] + (seal[1] - from[1]) * reach - Math.sin(reach * Math.PI) * 60];
+    front += `<g opacity="${r2(1 - hold)}">${pointer(tip[0], tip[1], pressed)}</g>`;
+  }
+  return { back, front };
 }
-// A hand round the phone's side, at (x, y) on its edge: the palm outside, the thumb over the glass.
-// side 1: his left hand; -1: his right (mirrored).
-function holder(x, y, side) {
-  const sk = C.skin[1], st = `stroke="${C.ink}" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"`;
-  const cap = (x0, y0, x1, y1, w) => `<path d="M${x0} ${y0}L${x1} ${y1}" stroke="${C.ink}" stroke-width="${w + 14}" stroke-linecap="round"/><path d="M${x0} ${y0}L${x1} ${y1}" stroke="${sk}" stroke-width="${w}" stroke-linecap="round"/>`;
-  return `<g transform="translate(${r2(x)} ${r2(y)}) scale(${side} 1)">
-    <path d="M8 -58C-24 -66 -62 -44 -64 -2C-66 40 -50 76 -18 86C4 92 14 80 12 60Z" fill="${sk}" ${st}/>
-    <path d="M-56 -8C-46 -4 -40 4 -42 14M-54 30C-44 34 -40 42 -42 52" fill="none" stroke="${A.shade(sk, -0.16)}" stroke-width="5" stroke-linecap="round"/>
-    ${cap(-14, -26, 30, -70, 34)}
-    <ellipse cx="30" cy="-68" rx="9" ry="7" transform="rotate(-45 30 -68)" fill="#f6d2bc"/>
-  </g>`;
+// A hand round the phone's side, (x, y) on its edge; side 1: his left hand, -1: his right
+// (mirrored). The palm and the wrist outside the edge and the fingers behind the phone (back),
+// the thumb over the glass (front); the sleeve comes up from the bottom of the frame.
+function holder(x, y, side, rot = 0) {
+  const g = (inner) => `<g transform="translate(${r2(x)} ${r2(y)}) rotate(${r2(rot)}) scale(${side} 1)">${inner}</g>`;
+  const palm = "M40 -86C-6 -104 -70 -84 -84 -24C-96 28 -80 92 -44 128L24 140L60 40Z";
+  const back = g(`<path d="M-120 520C-110 380 -90 260 -58 150" fill="none" stroke="${C.ink}" stroke-width="122" stroke-linecap="round"/>
+    <path d="M-120 520C-110 380 -90 260 -58 150" fill="none" stroke="${C.teal}" stroke-width="108" stroke-linecap="round"/>
+    <path d="${palm}" fill="${SKIN}" stroke="${C.ink}" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M-104 168C-80 150 -40 146 -10 156" fill="none" stroke="${C.tealDeep}" stroke-width="10" stroke-linecap="round"/>`);
+  const front = g(`${outline("M-30 -6L36 -78", 46)}
+    <path d="M-30 -6L36 -78" fill="none" stroke="${SKIN}" stroke-width="46" stroke-linecap="round"/>
+    <ellipse cx="34" cy="-74" rx="13" ry="10" transform="rotate(-48 34 -74)" fill="${NAIL}"/>
+    <path d="M-12 -2C-2 -8 4 -16 6 -24" fill="none" stroke="${A.shade(SKIN, -0.16)}" stroke-width="5" stroke-linecap="round"/>`);
+  return { back, front };
 }
-// A hand with the forefinger out, its tip at (x, y).
+// His right hand pointing, the forefinger's tip at (x, y): the back of the hand, the other
+// fingers curled under (their knuckles along its top), the sleeve down to the bottom right.
 function pointer(x, y, pressed) {
-  const sk = C.skin[1], st = `stroke="${C.ink}" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"`;
-  return `<g transform="translate(${r2(x)} ${r2(y)}) rotate(-26) scale(${pressed ? 0.96 : 1})">
-    <rect x="-16" y="-4" width="32" height="112" rx="16" fill="${sk}" ${st}/>
-    <ellipse cx="0" cy="14" rx="8" ry="7" fill="#f6d2bc"/>
-    <path d="M-36 96C-48 112 -46 160 -14 170C16 180 48 166 50 134C52 108 42 92 18 90L-18 90C-26 90 -32 92 -36 96Z" fill="${sk}" ${st}/>
-    <path d="M18 104h16M18 124h18M16 144h16" stroke="${A.shade(sk, -0.18)}" stroke-width="5" stroke-linecap="round"/>
-    <path d="M-34 104C-58 98 -66 124 -46 134L-22 138" fill="${sk}" ${st}/>
+  const st = `stroke="${C.ink}" stroke-width="7" stroke-linejoin="round"`;
+  return `<g transform="translate(${r2(x)} ${r2(y)}) rotate(-28) scale(${pressed ? 0.97 : 1})">
+    ${outline("M60 250C70 330 90 420 120 560", 108, C.teal)}
+    <path d="M-30 96C-60 110 -66 170 -34 206C-4 240 60 244 84 210C104 180 100 120 76 96Z" fill="${SKIN}" ${st}/>
+    ${[[22, 102], [50, 112], [74, 132]].map(([cx, cy]) => `<circle cx="${cx}" cy="${cy}" r="21" fill="${SKIN}" ${st}/>`).join("")}
+    <path d="M-30 96C-60 110 -66 170 -34 206C-4 240 60 244 84 210C100 186 100 150 88 124L4 112Z" fill="${SKIN}"/>
+    ${outline("M-6 10L-6 120", 40)}
+    <path d="M-6 10L-6 120" fill="none" stroke="${SKIN}" stroke-width="40" stroke-linecap="round"/>
+    <rect x="-17" y="2" width="22" height="26" rx="10" fill="${NAIL}"/>
+    <path d="M-20 64h16M-20 86h16" stroke="${A.shade(SKIN, -0.16)}" stroke-width="4" stroke-linecap="round"/>
+    <path d="M-44 132C-64 140 -66 170 -46 178" fill="none" stroke="${A.shade(SKIN, -0.16)}" stroke-width="5" stroke-linecap="round"/>
   </g>`;
 }
 // A point on the phone (its own px, 0..418 x 0..872) in the shot.
@@ -455,7 +487,7 @@ function toWorld(ph, u, v) {
 }
 
 // -- the frame ---------------------------------------------------------------------------------------
-const camT = (cam) => `translate(${r2(W / 2)} ${r2(H / 2)}) scale(${r2(cam.z)}) translate(${r2(-cam.x)} ${r2(-cam.y)})`;
+const camT = (cam) => `translate(${W / 2} ${H / 2}) scale(${r5(cam.z)}) translate(${r5(-cam.x)} ${r5(-cam.y)})`;
 function layersAt(t) {
   // The shots on screen now, with how much of each.
   const list = [];
@@ -581,10 +613,9 @@ const demo = (window.__demo = {
     const out = Math.max(1 - clamp((t - (DOOR - 0.6)) / 1.1, 0, 1), clamp((t - S.outside2[0]) / 1.4, 0, 1));
     return Number((1.4 * out * ease(t / 1.5) * (1 - ease((t - OUTRO - 1) / (END - OUTRO - 1)))).toFixed(4));
   },
-  // The small sounds of what happens on screen (story-sounds.mjs): footsteps up the path, pages,
-  // the book shutting, the tap on the glass, the cat.
+  // The small sounds of what happens on screen (story-sounds.mjs): pages, the book shutting, the
+  // tap on the glass, the cat.
   sfx: [
-    ...steps(),
     ...FLIPS.map((at) => ({ at, file: "page.wav", gain: 0.75, pan: 0.45 })),
     { at: 19.3, file: "thud.wav", gain: 0.65, pan: 0.1 },
     { at: TAP, file: "tap.wav", gain: 0.9, pan: 0.1 },
@@ -592,20 +623,6 @@ const demo = (window.__demo = {
   ],
   motion: 0,
 });
-function steps() {
-  const out = [];
-  for (const [rate, ph, pan, k] of [[0.95, 0, -0.12, 1], [1.25, 1, 0.12, 0.7]]) {
-    for (let n = 1; ; n++) {
-      const at = (n * Math.PI - ph) / (2 * Math.PI * rate);
-      const p = (at - 0.2) / 7.2;
-      if (p > 0.88) break;
-      if (p < 0) continue;
-      const s = 1.3 * Math.pow(0.27 / 1.3, p);
-      out.push({ at, file: "step.wav", gain: 0.5 * k * (s / 1.3), pan });
-    }
-  }
-  return out;
-}
 // The app loads only now, so it finds the replay in place of its engine.
 $("app").src = "/app/index.html?log=0";
 function quietAt(t) {

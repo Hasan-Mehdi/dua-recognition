@@ -1,6 +1,6 @@
 // The story film's own sounds, synthesized (nothing recorded, nothing to license): the night
 // outside the mosque (crickets, a little air), and small sounds for what happens on screen: a
-// page turning, a book closing, footsteps on the path, a finger on the glass, the cat purring.
+// page turning, a book closing, a finger on the glass, the cat purring.
 //
 //   node docs/demo/story-sounds.mjs        # -> data/cache/media/story/*.wav (48 kHz)
 //
@@ -123,16 +123,6 @@ const band = (x, lo, hi) => lowpass(lowpass(highpass(highpass(x, lo), lo), hi), 
     x[i] = x[i] * Math.exp(-t / 0.035) * 1.6 + Math.sin(2 * Math.PI * 110 * t) * Math.exp(-t / 0.05) * 0.5;
   }
   wav("thud", x);
-}
-// -- a footstep on a stone path ------------------------------------------------------------------
-{
-  const n = Math.floor(0.2 * SR);
-  const x = band(Float32Array.from({ length: n }, noise), 150, 2400);
-  for (let i = 0; i < n; i++) {
-    const t = i / SR;
-    x[i] = x[i] * Math.exp(-t / 0.028) * 1.2 + Math.sin(2 * Math.PI * 85 * t) * Math.exp(-t / 0.04) * 0.4;
-  }
-  wav("step", x);
 }
 // -- a fingertip on glass -------------------------------------------------------------------------
 {

@@ -7,9 +7,13 @@
 // du'a in 5.9-7.2 s from a cold start mid-du'a; Iftitah (three times), Waritha and Simaat came up
 // first as a text that shares their passages; Hasan's own phone readings took 16 and 27 s.
 //
-//   1-kumayl    --sid majlis:mj-rSPgtn4Km_w-2226:0 --line 4 --into 1.2 --seconds 84
+//   1-kumayl    --sid majlis:mj-rSPgtn4Km_w-2226:0 --line 4 --into 3.4 --seconds 84
 //               --credit "Congregation at KSIJ, Dar es Salaam"
-//   2-ashura    --sid harvest:web:sv-0E4Vf:0.0 --line 2 --into 1.2 --seconds 70 --credit "Kareem al-Ghurawi"
+//               (from 1.2 s in it was found as line 7 began, showed line 6's last word, then
+//               jumped back to its second; from 3.4 s in it lands on line 7 and only goes forward)
+//   2-ashura    --sid harvest:web:sv-0E4Vf:0.0 --line 2 --into -2.8 --seconds 74 --credit "Kareem al-Ghurawi"
+//               (from 1.2 s in it was found during "ahla l-bayt" but placed on "ʿalaykum", then went
+//               on to the next line; from 2.8 s before the line it follows "...ʿalaykum ahla l-bayt")
 //   3-nudbah    --sid harvest:soundcloud:sc-354021932:0.0 --line 4 --into 1.2 --seconds 56 --credit "Sheikh Arastu"
 //   4-jawshan   --sid harvest:soundcloud:sc-821680771:0.0 --line 6 --into 1.2 --seconds 44
 //               --credit "Sheikh Fadhil al-Maliki"
@@ -70,12 +74,15 @@ const LINES = bench ? bench.lines.map((l) => ({ seg: l.seg, from: l.from, to: l.
   : Object.entries(JSON.parse(readFileSync(AUDIO.replace(/\.mp3$/, ".json"), "utf8")).slide_start_ms)
     .map(([seg, ms]) => ({ seg: Number(seg), from: ms / 1000 })).sort((a, b) => a.from - b.from);
 const LINE = Number(arg("line", -1));
-// Where the reader comes in for the film: the breath before the line, never inside the one before.
-const ENTRY = LINE >= 0 ? Number(Math.max(LINES[LINE].from - 0.3, LINES[LINE - 1]?.to ?? 0).toFixed(2)) : null;
 // The app starts listening --into s after the line begins (the film lets the reader be heard
-// first, then a finger taps start), or in that breath.
+// first, then a finger taps start), or in the breath before it; a negative --into starts it that
+// long before the line, at the end of the one before (so it can be following when the line comes).
 const INTO = Number(arg("into", 0));
-const START = LINE >= 0 ? Number((INTO > 0 ? LINES[LINE].from + INTO : ENTRY).toFixed(2)) : Number(arg("start", 312.0));
+// Where the reader comes in for the film: the breath before the line, never inside the one before;
+// with a negative --into, 1.5 s before the app starts, as long as the others are heard.
+const ENTRY = LINE < 0 ? null : INTO < 0 ? Number((LINES[LINE].from + INTO - 1.5).toFixed(2))
+  : Number(Math.max(LINES[LINE].from - 0.3, LINES[LINE - 1]?.to ?? 0).toFixed(2));
+const START = LINE >= 0 ? Number((INTO !== 0 ? LINES[LINE].from + INTO : ENTRY).toFixed(2)) : Number(arg("start", 312.0));
 const CREDIT = arg("credit", bench ? bench.voice : "Hussein Ghareeb"); // who the film says is reciting
 const SECONDS = Number(arg("seconds", 49.2));
 const ASR_MS = Number(arg("asr-ms", 1200));
