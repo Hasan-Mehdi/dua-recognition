@@ -128,6 +128,24 @@ def summary(path: Path, audio: np.ndarray, log: dict, lines: Lines) -> list[str]
             f"ASR {percentile([h['asr_ms'] for h in hops], 50):.0f} ms (p90 {percentile([h['asr_ms'] for h in hops], 90):.0f})"
             f"  ·  delay {percentile(delay, 50):.1f} s  ·  no text {len(silent) / len(hops):.0%} "
             f"({len(paused)} in pauses, {len(silent) - len(paused)} while sound)")
+    steps = [e for e in kinds("ctc") if isinstance(e.get("ms"), (int, float))]
+    if len(steps) >= 30:
+        # The word model's step time (ctc event "ms"), first and last third: a phone that slows as
+        # it warms up takes longer at the end.
+        ms = [e["ms"] for e in steps]
+        k = len(ms) // 3
+        out.append(f"  word model: {len(ms)} steps, {percentile(ms, 50):.0f} ms (p90 {percentile(ms, 90):.0f})  ·  "
+                   f"first third {percentile(ms[:k], 50):.0f} ms, last third {percentile(ms[-k:], 50):.0f} ms")
+    bat = kinds("battery")
+    if bat:
+        # Drain only over the time it wasn't charging (Chrome reports the level in 1% steps).
+        runs = [(a, b) for a, b in zip(bat, bat[1:]) if not a["charging"]]
+        used = sum(a["level"] - b["level"] for a, b in runs)
+        mins = sum(b["t"] - a["t"] for a, b in runs) / 60
+        rate = f" ({used / mins * 60:.0%} an hour)" if mins >= 10 and used > 0 else ""
+        out.append(f"  battery {bat[0]['level']:.0%} -> {bat[-1]['level']:.0%}"
+                   f"{', charging' if any(e['charging'] for e in bat) else ''}"
+                   + (f"  ·  {used:.0%} in {mins:.0f} min unplugged{rate}" if mins > 0 else ""))
     found = kinds("dua")
     if found:
         out.append("  du'a shown: " + ", ".join(f"{lines.name(e['dua'])} at {e['t']:.0f} s" for e in found))

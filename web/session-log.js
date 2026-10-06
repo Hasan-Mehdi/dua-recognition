@@ -98,6 +98,14 @@ export class SessionLog {
       if (document.hidden) this.flush();
     });
     addEventListener("pagehide", () => this.flush());
+    // Battery level (1% steps on Chrome) and charging, at the start and on every change: drain per
+    // hour of following (scripts/session_report.py). No Battery Status API (Firefox, Safari): nothing.
+    navigator.getBattery?.().then((b) => {
+      this.battery = () => this.event("battery", { level: b.level, charging: b.charging });
+      b.addEventListener("levelchange", this.battery);
+      b.addEventListener("chargingchange", this.battery);
+      this.battery();
+    }, () => {});
   }
 
   get t() {
@@ -113,6 +121,7 @@ export class SessionLog {
     this.live = { t0: performance.now(), samples: 0, seq: 0, pcm: [], events: [],
       rec: { id, started: now.getTime(), meta, seconds: 0, bytes: 0, sent: false } };
     this.write(() => putSession(this.live.rec));
+    this.battery?.();
     this.timer = setInterval(() => this.flush(), FLUSH_MS);
     return id;
   }
