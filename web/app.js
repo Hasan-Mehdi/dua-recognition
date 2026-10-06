@@ -1,7 +1,7 @@
-// Du'a Companion: one front end, two engines.
-//   server engine: audio streams to app/server.py over a WebSocket
-//   device engine: Whisper runs in a Web Worker, tracker.js in the page;
-//                  nothing leaves the device (used when there's no server)
+// Du'a Companion: one front end, one engine (DeviceEngine), with its models in one of two places.
+//   device: Whisper and the CTC model run in Web Workers; nothing leaves the device
+//   server: they run on app/server.py (RemoteEar), the audio streamed to it over a WebSocket
+// Either way the tracker, the stream decoder and the highlight run here, the same code.
 import { CorpusIndex, DEFAULTS, RECITER, Tracker } from "./tracker.js";
 import { Highlight } from "./display.js";
 import { LiveQuiet } from "./gate.js";
@@ -10,6 +10,7 @@ import { STREAM_DEFAULTS, StreamFollower } from "./stream-follower.js";
 import { VoiceLevel, voiceBandDb } from "./voice.js";
 import { SessionLog, clearSessions, listSessions, sessionFile, shareFiles } from "./session-log.js";
 import { kids } from "./kids.js";
+import { FrameCommitter, PracticeChecker, linesOf } from "./practice.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -31,54 +32,110 @@ function captureTime(ctxTime) {
 }
 
 // -- engines ----------------------------------------------------------------
-class ServerEngine {
-  kind = "server";
-  async prepare() {}
-  async start(onUpdate) {
-    // ?lead=0 turns off showing the predicted current position (for comparing by feel).
-    // The server's word follower places the word unless ?words=off (docs/results/phone_follower.md).
-    const q = ["lead", "pauses"].filter((k) => params.get(k) === "0").map((k) => `${k}=0`)
-      .concat(`follow=${following()}`, params.get("words") === "off" ? ["words=off"] : []).join("&");
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws${q ? "?" + q : ""}`);
+// The server engine (app/server.py /ws/ear): Whisper and the CTC model run on the server, on the
+// audio the page streams to it, and everything that follows the recitation runs in the page, the
+// same DeviceEngine code as on the phone. Its two ports stand in for asr-worker.js and ctc-worker.js
+// and take their messages, except that a window is named by the sample it ends at instead of sent:
+// the server keeps the audio. Replies from an earlier session (`gen`) are dropped.
+class RemoteEar {
+  asr = { postMessage: (m) => this._send("asr", m), onmessage: null };
+  ctc = { postMessage: (m) => this._send("ctc", m), onmessage: null };
+  total = 0; // samples streamed this session
+  gen = 0;
+  pending = {}; // channel -> the request awaiting its answer
+  connect() {
+    if (this.open) return this.open;
+    const ws = new WebSocket(`${wsBase()}/ws/ear`);
     ws.binaryType = "arraybuffer";
-    ws.onmessage = (e) => {
-      const m = JSON.parse(e.data);
-      if (m.type === "word") {
-        log.event("wordstep", { end: m.t, ms: m.step_ms, dua: m.dua, seg: m.segment, token: m.token });
-        return onUpdate({ word: true, dua: m.dua, segment: m.segment, token: m.token, ms: m.step_ms });
-      }
-      if (m.voice_db != null && !this.noPauses) this.ear.voiceDb = m.voice_db;
-      log.event("hop", { end: m.t, asr_ms: m.step_ms, text: m.heard, quiet: m.quiet, quiet_now: m.quiet_now,
-        paused: m.paused, voice_db: m.voice_db, dua: m.dua, seg: m.segment,
-        token: m.token, eol: m.pause_at_line_end, dua_p: m.dua_confidence, seg_p: m.segment_confidence,
-        unknown: m.unknown, speed: m.speed, cand: cands((m.candidates || []).map((c) => [c.id, c.p])) });
-      onUpdate({ dua: m.dua, segment: m.segment, token: m.token, speed: m.speed, back: !!m.back, unknown: m.unknown, pause: m.pause_at_line_end, heard: m.heard, ms: m.step_ms,
-        candidates: (m.candidates || []).map((c) => ({ id: c.id, p: c.p })), sameAs: m.same_as || [] });
+    ws.onmessage = (e) => this._receive(e.data);
+    // Audio sent while closed is lost: the server is told where the stream is now, and hears silence before it.
+    this.open = new Promise((ok, err) => {
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ ch: "ear", type: "at", total: this.total }));
+        ok(ws);
+      };
+      ws.onerror = () => err(new Error("no connection to the server"));
+    });
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      Object.assign(this, { ws: null, open: null });
+      for (const [ch, m] of Object.entries(this.pending)) this._fail(ch, m, "the connection to the server closed");
     };
-    await new Promise((ok, err) => ((ws.onopen = ok), (ws.onerror = err)));
     this.ws = ws;
-    // The page hears the reciter stop before the server's next update says so (gate.js LiveQuiet):
-    // the gliding highlight stops at once. The server sends the voice level to compare with.
-    this.ear = new LiveQuiet();
-    this.noPauses = params.get("pauses") === "0";
+    return this.open;
+  }
+  // A new session: sample numbers start again from 0.
+  restart() {
+    this.total = 0;
+    this.gen += 1;
+    this.pending = {};
+    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ ch: "ear", type: "at", total: 0 }));
   }
   push(chunk) {
-    this.ear?.push(chunk);
-    if (this.ws?.readyState === 1) this.ws.send(chunk.buffer);
+    this.total += chunk.length;
+    if (this.ws?.readyState !== 1) return;
+    const pcm = new Int16Array(chunk.length);
+    for (let i = 0; i < chunk.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, Math.round(chunk[i] * 32768)));
+    this.ws.send(pcm.buffer);
   }
-  lock(duaId) {
-    this.ws?.send(`lock:${duaId}`);
+  async _send(ch, { audio, ...m }) {
+    const req = { ch, ...m, sent: clock() };
+    if (m.type !== "load") { // (a load outlives sessions: it carries none)
+      req.gen = this.gen;
+      this.pending[ch] = req;
+    }
+    try {
+      (await this.connect()).send(JSON.stringify(req));
+    } catch (e) {
+      this._fail(ch, req, e.message);
+    }
   }
-  seek(duaId, segment) {
-    if (this.ws?.readyState === 1) this.ws.send(`seek:${duaId}:${segment}`);
+  // As the workers answer when inference fails: the page carries on (no transcript, no frames).
+  _fail(ch, req, message) {
+    if (this.pending[ch] === req) delete this.pending[ch];
+    if (req.gen != null && req.gen !== this.gen) return;
+    this[ch].onmessage?.({ data: { type: "error", message } });
+    if (req.type === "transcribe") {
+      this.asr.onmessage?.({ data: { type: "text", id: req.id, text: "", quiet: null, paused: null, voiceDb: req.voiceDb,
+        ms: clock() - req.sent, gate: null, skip: "error" } });
+    }
   }
-  follow(mode) {
-    if (this.ws?.readyState === 1) this.ws.send(`follow:${mode}`);
+  _receive(data) {
+    if (typeof data !== "string") { // the frames whose header came just before
+      const m = this.frames;
+      this.frames = null;
+      if (m?.gen === this.gen) this.ctc.onmessage?.({ data: { ...m, frames: halfToFloat(new Uint16Array(data)) } });
+      return;
+    }
+    const m = JSON.parse(data);
+    const req = this.pending[m.ch];
+    const answers = m.gen === this.gen && req && m.id === req.id;
+    if (answers) delete this.pending[m.ch];
+    // As the workers time a step: all of it, here the round trip (the server's own part is server_ms).
+    if (answers && m.type !== "error") {
+      const now = clock();
+      Object.assign(m, { ms: now - req.sent, recv: now - (m.server_ms ?? 0), done: now });
+    }
+    if (m.type === "frames") return void (this.frames = m); // its frames come next
+    if (m.gen == null || m.gen === this.gen) this[m.ch]?.onmessage?.({ data: m });
   }
-  stop() {
-    this.ws?.close();
-    this.ws = null;
+}
+
+// float16 to float32 (the server's CTC frames), through a table of all 65536 values.
+let HALF = null;
+function halfToFloat(h) {
+  if (!HALF) {
+    HALF = new Float32Array(65536);
+    for (let i = 0; i < 65536; i++) {
+      const e = (i >> 10) & 31;
+      const f = i & 1023;
+      const v = e === 0 ? f * 2 ** -24 : e === 31 ? (f ? NaN : Infinity) : (1024 + f) * 2 ** (e - 25);
+      HALF[i] = i & 0x8000 ? -v : v;
+    }
   }
+  const out = new Float32Array(h.length);
+  for (let i = 0; i < h.length; i++) out[i] = HALF[h[i]];
+  return out;
 }
 
 // Audio reaches the engine in chunks of this many 16 kHz samples (capture-worklet.js): 50 ms, so a
@@ -94,10 +151,14 @@ const CTC_SLOW_MS = 400;
 
 class DeviceEngine {
   kind = "device";
-  constructor(corpus, model) {
+  // remote: a RemoteEar, the server's models in place of the workers (the server engine), with the
+  // name of the server's CTC model.
+  constructor(corpus, model, remote = null, remoteCtc = null) {
     this.corpus = corpus;
     this.tracker = new Tracker(new CorpusIndex(corpus));
     this.model = model;
+    this.remote = remote;
+    if (remote) this.kind = "server";
     this.window = 6 * SR;
     this.buf = new Float32Array(this.window);
     // Speech gate policy (web/gate.js; docs/results/browser_gate.md): legacy unless ?gate=...
@@ -110,13 +171,13 @@ class DeviceEngine {
     // A phone too slow for it (the model's step over 400 ms) gets the whisper-tiny one from its next
     // session on: fewer, later steps cost more than a weaker ear (docs/results/phone_follower.md).
     const kept = stored("ctc-model"); // a fallback chosen in an earlier session (older names don't count)
-    this.ctcModel = params.get("ctc") || ([CTC_MODEL, CTC_FALLBACK].includes(kept) ? kept : null) || CTC_MODEL;
+    this.ctcModel = remoteCtc || params.get("ctc") || ([CTC_MODEL, CTC_FALLBACK].includes(kept) ? kept : null) || CTC_MODEL;
     // A step as soon as the last is done and 0.1 s of audio has come in: the step's wait is part of
     // the delay too (0.2 s until 2026-10-01).
     this.ctcHop = Number(params.get("ctchop") || 0.1) * SR;
     // While the follower places the words, Whisper only anchors it: every 2 s leaves the phone's
-    // CPU to the CTC model.
-    this.anchorHop = Number(params.get("anchorhop") || 2) * SR;
+    // CPU to the CTC model. A server has the time for every second, as on the bench.
+    this.anchorHop = Number(params.get("anchorhop") || (remote ? 1 : 2)) * SR;
     this.followCfg = { lapseHold: Number(params.get("lapse") ?? 0) };
     // The stream decoder (stream-follower.js: one belief over the whole du'a, reading moves as its
     // transitions; docs/results/bench.md) since 2026-10-03; ?follower=rules: the rule-based follower.js.
@@ -129,7 +190,7 @@ class DeviceEngine {
   }
   prepare(onProgress) {
     if (this.ready) return this.ready;
-    this.worker = new Worker("asr-worker.js", { type: "module" });
+    this.worker = this.remote?.asr ?? new Worker("asr-worker.js", { type: "module" });
     const t0 = performance.now();
     this.ready = new Promise((resolve, reject) => {
       this.worker.onmessage = ({ data }) => {
@@ -148,7 +209,7 @@ class DeviceEngine {
     return this.ready;
   }
   _prepareCtc() {
-    this.ctc = new Worker("ctc-worker.js", { type: "module" });
+    this.ctc = this.remote?.ctc ?? new Worker("ctc-worker.js", { type: "module" });
     this.ctcReady = false;
     this.ctc.onmessage = ({ data }) => {
       if (data.type === "ready") {
@@ -174,7 +235,10 @@ class DeviceEngine {
   }
   async start(onUpdate) {
     this.onUpdate = onUpdate;
+    this.remote?.restart();
     this.tracker = new Tracker(new CorpusIndex(this.corpus), followConfig());
+    this.streamCfg = urlCfg("sc");
+    this.practice = null;
     Object.assign(this, { filled: 0, total: 0, lastSent: 0, lastUpdate: 0, busy: false, live: true, marks: [],
       firstText: true, voiceDb: null });
     // The stop detector on the audio as it arrives (gate.js LiveQuiet): an update is shown a second
@@ -200,6 +264,7 @@ class DeviceEngine {
     this.filled = Math.min(W, this.filled + chunk.length);
     this.total += chunk.length;
     this.ear.push(chunk);
+    this.remote?.push(chunk); // before anything asks the server about it
     this._maybeSend();
     this._maybeCtc();
   }
@@ -217,7 +282,7 @@ class DeviceEngine {
     this.ctcBusy = false;
     if (!this.live) return;
     this.ctcTimes.push(data.ms);
-    if (this.ctcTimes.length === 20 && !params.get("ctc")) {
+    if (this.ctcTimes.length === 20 && !params.get("ctc") && !this.remote) {
       // Too slow for the full model: the small one from the next session. Fast on the small one
       // (the full one takes ~2.5x as long): back to the full one.
       const p50 = [...this.ctcTimes].sort((a, b) => a - b)[10];
@@ -242,6 +307,7 @@ class DeviceEngine {
       : this.follower.step(data.frames, data.T, data.C, data.id / SR, this.anchor, this.ear.quiet, lineMass);
     const followMs = performance.now() - f0; // on the page's own thread: the phone's budget is ~100 ms a step
     if (w != null) this.framesAt = data.id;
+    if (this.practice) this._practiceStep(data, w);
     if (log.live) log.event("ctc", { end: data.id / SR, ms: data.ms, delay: (this.total - data.id) / SR,
       word: w, anchor: this.anchor, follow_ms: Number(followMs.toFixed(1)) });
     if (w != null) {
@@ -337,6 +403,56 @@ class DeviceEngine {
   stop() {
     this.live = false;
   }
+  // Practice mode (practice.js, docs/results/practice_bench.md): the du'a the reader chose (locked),
+  // read on from where they start. No jumps across the du'a (cFar), so a repeated block can't pull
+  // the highlight to its other copy; the checker judges each line from the frames the follower
+  // commits, once the highlight has stayed two lines past it.
+  startPractice(duaId, onDecide) {
+    this.streamCfg = { ...this.streamCfg, cFar: -40 };
+    this.follower = null;
+    this.practice = { dua: duaId, onDecide, committer: new FrameCommitter(), checker: null, lo: 0, decided: 0, t: 0 };
+  }
+  _practiceLines() {
+    const pr = this.practice;
+    const ix = this.tracker.ix;
+    const d = ix.duaIds.indexOf(pr.dua);
+    if (d < 0) return null;
+    if (pr.ix !== ix) Object.assign(pr, { ix, d, lines: linesOf(ix, d), checker: null });
+    return pr.lines;
+  }
+  _practiceStep(data, w) {
+    const pr = this.practice;
+    const lines = this._practiceLines();
+    if (!lines) return;
+    pr.checker ??= new PracticeChecker(lines.letters, pr.lo, lines.letters.length - 1, {}, lines.firstWords);
+    const t = data.id / SR;
+    const { rows, times } = pr.committer.add(data.frames, data.T, data.C, t);
+    pr.checker.addFrames(rows, data.C, times);
+    const li = w == null || pr.ix.wordDua[w] !== pr.d ? null : lines.lineOf.get(pr.ix.wordSegment[w]) ?? null;
+    pr.t = t;
+    const t0 = performance.now();
+    const out = pr.checker.step(t, li);
+    if (out.length) {
+      const ms = (performance.now() - t0) / out.length; // on the page's own thread, like follow_ms
+      pr.decided += out.length;
+      pr.onDecide(out.map((x) => ({ ...x, segment: lines.segs[x.line], ms })));
+    }
+  }
+  // The reader starts at this line (the first, or one they tap before any line is judged); once lines
+  // are judged, a tap only moves the highlight.
+  practiceFrom(segment) {
+    const pr = this.practice;
+    if (!pr || pr.decided) return;
+    const lines = this._practiceLines();
+    pr.lo = lines?.lineOf.get(segment) ?? 0;
+    pr.checker = null;
+  }
+  // The session is over: the lines not judged yet, through the furthest one the highlight reached.
+  finishPractice() {
+    const pr = this.practice;
+    if (!pr?.checker) return [];
+    return pr.checker.finish(pr.t, pr.checker.furthest).map((x) => ({ ...x, segment: pr.lines.segs[x.line] }));
+  }
 }
 
 // -- app state ----------------------------------------------------------------
@@ -366,10 +482,10 @@ async function init() {
   });
   const mode = await fetch("api/mode").then((r) => (r.ok ? r.json() : null)).catch(() => null);
   state.mode = mode;
-  state.engine = mode?.mode === "server"
-    ? new ServerEngine()
+  state.engine = mode?.mode !== "server"
     // Trained with synthetic ordinary voices, at an 8 s context (docs/results/synthetic_voices.md, phone_speed.md).
-    : new DeviceEngine(corpus, params.get("model") || "whisper-base-syn-v5-ctx8ft");
+    ? new DeviceEngine(corpus, params.get("model") || "whisper-base-syn-v5-ctx8ft")
+    : new DeviceEngine(corpus, mode.model, new RemoteEar(), mode.ctc);
   log.upload = log.enabled && !!mode?.sessions;
   $("footnote").textContent = state.engine.kind === "device"
     ? (log.upload ? "Runs on this device. Debug sessions go to this server." : "Runs entirely on this device. No audio leaves it.")
@@ -386,7 +502,19 @@ async function init() {
 
   $("start").onclick = () => begin(micSource);
   $("play").onclick = showRecordings;
-  $("choose").onclick = openPicker;
+  $("choose").onclick = () => openPicker();
+  // Practice mode checks each line against the CTC frames (the phone's own, or the server's). Chosen
+  // beneath the seal, as a camera chooses photo or video: the seal, the picker and the chips then
+  // practise (setPractising). Each visit starts in follow: a Thursday night's Kumayl isn't a test.
+  $("modes").hidden = !state.engine.startPractice;
+  $("mode-follow").onclick = () => setPractising(false);
+  $("mode-practise").onclick = () => setPractising(true);
+  setPractising(params.get("mode") === "practise" && !!state.engine.startPractice, false);
+  setHideText(stored("practice-hide") === "1", false);
+  for (const id of ["opt-hide", "home-hide"]) $(id).onchange = (e) => setHideText(e.target.checked);
+  $("hint-btn").onclick = hintWord;
+  $("review-again").onclick = practiseAgain;
+  $("review-done").onclick = closeReview;
   $("picker").onclick = (e) => e.target === $("picker") && closePicker();
   $("search").oninput = () => fillPicker($("search").value);
   addEventListener("keydown", (e) => e.key === "Escape" && closePicker());
@@ -394,7 +522,7 @@ async function init() {
     const f = e.target.files[0];
     if (f) begin(fileSource(URL.createObjectURL(f), f.name));
   };
-  $("stop").onclick = () => end("stop");
+  $("stop").onclick = () => (state.review ? closeReview() : end("stop"));
   $("menu-btn").onclick = () => ($("menu").hidden = !$("menu").hidden);
   $("opt-en").onchange = (e) => {
     document.body.classList.toggle("no-en", !e.target.checked);
@@ -457,7 +585,11 @@ function watchForDebugging() {
   $("text").addEventListener("click", (e) => {
     const ln = e.target.closest(".ln");
     if (state.pressed) return (state.pressed = false); // that was a long-press (sharing)
+    // Practice, stopped: a line marked left out, tapped, is "I did say it" (and tapped again, undone).
+    if (state.review) return ln?.matches(".v-left, .dismissed") && dismiss(ln);
     if (!ln || !state.dua) return;
+    // Practice: a red rosette tapped is "I did say that line" (the checker was wrong).
+    if (state.practice && ln.classList.contains("v-left") && e.target.closest(".mark")) return dismiss(ln);
     const i = Number(ln.dataset.i);
     log.event("tap", { seg: state.duas[state.dua].segments[i].id, shown: state.segment });
     if (state.source && document.body.dataset.state === "following") seekTo(state.dua, state.duas[state.dua].segments[i].id);
@@ -625,12 +757,15 @@ function resume() {
   if (!p) return showResume();
   log.event("resume", { dua: p.dua, line: p.line });
   state.chosen = p.dua;
+  if (state.practising) state.practiceFrom = p.line - 1; // practice can't find the line itself: it starts there
   begin(micSource);
 }
 
 // Audio seconds received per second of real time. A microphone whose sound arrives at the wrong
-// speed breaks everything after it: on 2026-10-02 a USB headset in Firefox 157 delivered 2.00 s of
+// speed breaks everything after it: on 2026-10-02 Firefox 157 with a USB headset delivered 2.00 s of
 // audio per second (chunks heard twice), and the page followed a slowed-down, stuttering recitation.
+// The same 2.0x on 2026-10-04 was two captures started by a second tap (see begin()); the headset
+// itself ran at 1.00 that day, so the Firefox case may have been the same.
 // Logged every 30 s; past 15% off, the reader is told instead of left with a page that wanders.
 function checkClock(n) {
   const now = performance.now();
@@ -802,23 +937,40 @@ async function showRecordings() {
   list.hidden = false;
 }
 
+// One capture at a time. Starting waits on the models, the audio context and the microphone, and every
+// tap in that time (Start again, a du'a, a chip) used to start another capture beside the first: the
+// engine then heard each chunk once per capture. On 2026-10-04 (session uuc5, Android) the even and odd
+// chunks were the same audio 10 ms apart, the clock read 2.0x, and Munajat Kha'ifeen took 103 s to
+// find and stuck at a line; repeated taps in headless Chrome gave 3.0x. A du'a picked while already
+// listening locks onto it instead.
 async function begin(makeSource) {
-  $("samples").hidden = true;
-  if (state.engine.kind === "device") {
-    setState("loading");
-    $("start").disabled = true;
-    $("load").hidden = false;
-    $("hint").textContent = "Preparing… (only the first time)";
-    try {
-      await state.engine.prepare((p) => ($("load-bar").style.width = `${Math.round(p)}%`));
-    } catch (e) {
-      $("hint").textContent = "Couldn't load the speech model on this device.";
-      $("start").disabled = false;
-      return setState("idle");
-    }
-    $("load").hidden = true;
-    $("start").disabled = false;
+  if (state.node || state.starting) {
+    if (state.node && state.chosen && makeSource === micSource) state.engine.lock(state.chosen);
+    return;
   }
+  state.starting = true;
+  try {
+    await startCapture(makeSource);
+  } finally {
+    state.starting = false;
+  }
+}
+
+async function startCapture(makeSource) {
+  $("samples").hidden = true;
+  setState("loading");
+  $("start").disabled = true;
+  $("load").hidden = false;
+  $("hint").textContent = "Preparing… (only the first time)";
+  try {
+    await state.engine.prepare((p) => ($("load-bar").style.width = `${Math.round(p)}%`));
+  } catch (e) {
+    $("hint").textContent = state.engine.remote ? "Couldn't reach the server." : "Couldn't load the speech model on this device.";
+    $("start").disabled = false;
+    return setState("idle");
+  }
+  $("load").hidden = true;
+  $("start").disabled = false;
   if (!state.ctx) {
     state.ctx = new AudioContext();
     // A suspended context (phone locked, a call) stops the audio, and the log's clock with it.
@@ -834,8 +986,14 @@ async function begin(makeSource) {
     $("hint").textContent = "Microphone access is needed to follow along.";
     return setState("idle");
   }
+  // ?practice=<du'a id>: practise that du'a; ?practice=1: practise whichever is recited (replays, a link).
+  if (params.has("practice")) state.practiceNext = true;
+  if (!state.chosen && state.duas[params.get("practice")]) state.chosen = params.get("practice");
   await state.engine.start(update);
   if (state.chosen) state.engine.lock(state.chosen);
+  state.practice = !!((state.practiceNext || (state.practising && !kids.on)) && state.engine.startPractice);
+  state.practiceNext = false;
+  document.body.classList.toggle("practice", state.practice);
   const track = state.stream?.getAudioTracks()[0];
   const mic = track?.getSettings() ?? {};
   log.start({
@@ -866,6 +1024,7 @@ async function begin(makeSource) {
   keepAwake();
   showListening();
   meter();
+  if (state.practice && state.chosen) practiceBegin(state.chosen); // else once the du'a is found (render)
 }
 
 // While the du'a is being found, the star answers the reciter's voice: it glows
@@ -921,6 +1080,9 @@ function meter() {
 }
 
 function end(reason) {
+  // Practice stopped by the reader: the text stays, with what was checked (a recording that ends, as
+  // in page_replay.mjs, goes home as before).
+  const review = state.practice && practiceEnd(reason === "stop");
   const { node, source, stream } = state;
   if (source && node) source.disconnect(node);
   if (source && state.analyser) source.disconnect(state.analyser);
@@ -941,19 +1103,19 @@ function end(reason) {
   $("back").hidden = true;
   showResume();
   showToday();
-  setState("idle");
+  setState(review ? "review" : "idle");
 }
 
 // -- rendering ------------------------------------------------------------------
 function showListening() {
   setState("listening");
   $("dua-ar").textContent = "";
-  $("dua-en").textContent = "Listening";
+  $("dua-en").textContent = state.practice ? "Practice" : "Listening";
   $("dua-also").textContent = "";
   $("progress").style.width = "0";
   $("text").replaceChildren();
   $("folio-head").hidden = true;
-  $("listen-msg").textContent = "Begin reciting";
+  $("listen-msg").textContent = state.practice ? "Begin reciting the du'a you're practising" : "Begin reciting";
 }
 
 // The word follower: its messages place the line and word directly (no glide) while they
@@ -992,6 +1154,10 @@ function preview(on) {
 // (Tracker.seek) and the display goes there now, at the line's first word.
 function seekTo(duaId, segment) {
   const p = state.engine.seek?.(duaId, segment);
+  if (state.practice) {
+    state.engine.practiceFrom?.(segment); // the start line, until the first line is judged
+    if (!state.verdicts?.size) state.practiceStart = state.duas[duaId].segments.findIndex((s) => s.id === segment);
+  }
   log.event("seek", { dua: duaId, seg: segment });
   render({ dua: duaId, segment, token: p?.token ?? 0, speed: 0, unknown: 0, pause: false, heard: "", ms: 0,
     candidates: state.last?.candidates || [], sameAs: [] });
@@ -1028,6 +1194,7 @@ function render(u) {
     buildText(dua);
     reveal(document.body.dataset.state === "listening");
     setState("following");
+    if (state.practice && !state.practiceDua) practiceBegin(u.dua, u.segment);
   }
   const words = state.wordLive && performance.now() - state.wordAt < 1000;
   if (!words) {
@@ -1054,7 +1221,8 @@ function reveal(fromListening) {
 // the recitation could be either: say so under the title until it's told apart.
 function showSameAs(ids) {
   const names = ids.map((id) => state.duas[id]?.name_en).filter(Boolean);
-  const text = names.length ? `Also in ${names.slice(0, 2).join(", ")}${names.length > 2 ? "…" : ""}` : "";
+  const text = names.length ? `Also in ${names.slice(0, 2).join(", ")}${names.length > 2 ? "…" : ""}`
+    : state.practice && state.practiceStart != null ? `Practice · from line ${state.practiceStart + 1}` : "";
   if ($("dua-also").textContent === text) return;
   $("dua-also").textContent = text;
   log.event("same_as", { ids });
@@ -1064,6 +1232,267 @@ function listenMsg(text) {
   if ($("listen-msg").textContent === text) return;
   $("listen-msg").textContent = text;
   log.event("msg", { text });
+}
+
+// -- practice mode (practice.js) ------------------------------------------------------
+// "practise" beneath the seal (setPractising), then recite. A du'a chosen (the picker, a chip) is
+// checked from its first line, or from a line tapped before the first verdict; otherwise the du'a is
+// found from the recitation, checked from the line it was found at, and the page follows only it.
+// Each line's rosette then says what the checker heard: gilded once heard, red if left out (tapped, "I
+// did say it"), its outline broken if the sound left it unsure. Nothing is gilded just for being
+// passed. Stopped, the text stays with the verdicts (showReview). Lines left out are remembered per
+// du'a: marked the next time, and offered on the home screen and in the picker.
+function setPractising(on, remember = true) {
+  state.practising = on;
+  document.body.classList.toggle("practising", on);
+  $("mode-follow").setAttribute("aria-checked", String(!on));
+  $("mode-practise").setAttribute("aria-checked", String(on));
+  $("tagline").textContent = on ? "Recite, and each line is checked." : "Recite, and the words follow you.";
+  $("start").setAttribute("aria-label", on ? "Start practising" : "Start listening");
+  $("play").hidden = $("play-dot").hidden = on;
+  $("hide-opt").hidden = $("hide-dot").hidden = !on;
+  showToday();
+  if (remember) log.event("option", { practising: on });
+}
+
+// "Hide the text until it's heard": on the home screen while practising, and in the menu (practice.css).
+function setHideText(on, remember = true) {
+  document.body.classList.toggle("hide-text", on);
+  $("opt-hide").checked = $("home-hide").checked = on;
+  if (!remember) return;
+  stored("practice-hide", on ? "1" : "0");
+  log.event("option", { hideText: on });
+}
+
+function practiceBegin(duaId, segment = null) {
+  const dua = state.duas[duaId];
+  Object.assign(state, { practiceDua: duaId, verdicts: new Map(), unsureRun: 0, unclearShown: false, hints: new Map(),
+    hintCount: 0 });
+  if (segment != null) state.engine.lock(duaId); // found from the recitation: follow only it from here on
+  state.engine.startPractice(dua.id, onVerdicts);
+  // Where it was found; or, a du'a chosen, the line asked for (practise again, a chip, ?from=<line
+  // number>) or the top.
+  const found = dua.segments.findIndex((s) => s.id === segment);
+  const from = state.practiceFrom ?? (Number(params.get("from")) || 1) - 1;
+  state.practiceFrom = null;
+  const i = found >= 0 ? found : Math.max(0, Math.min(dua.segments.length - 1, from));
+  log.event("practice_start", { dua: dua.id, line: i + 1, found: found >= 0, c_far: state.engine.streamCfg?.cFar });
+  seekTo(dua.id, dua.segments[i].id);
+  const weak = practiceWeights(dua.id);
+  for (const [id, ln] of state.lines) ln.classList.toggle("weak", (weak[id] || 0) >= 0.5);
+  if (found < 0 && state.stream) toast("Tap a line to start there instead", 3500);
+}
+
+const storedObject = (key) => {
+  try {
+    const v = JSON.parse(stored(key) || "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+};
+// Per du'a: segment id -> how often left out lately (savePractice); du'a id -> when last practised.
+const practiceWeights = (id) => storedObject(`practice:${id}`);
+const practiceSeen = () => storedObject("practice-seen");
+
+// The line numbers to work on: left out lately (the rosette's heavier outline, practice.css .weak).
+function weakLines(id) {
+  const w = practiceWeights(id);
+  return state.duas[id].segments.map((s, i) => ((w[s.id] || 0) >= 0.5 ? i + 1 : 0)).filter(Boolean);
+}
+
+// Under a du'a's name in the picker while practising.
+function practiceNote(id) {
+  const at = practiceSeen()[id];
+  if (!at) return "";
+  const day = (t) => new Date(t).setHours(0, 0, 0, 0);
+  const days = Math.round((day(Date.now()) - day(at)) / 864e5);
+  const n = weakLines(id).length;
+  return `Practised ${days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`}`
+    + (n ? ` · ${n} line${n === 1 ? "" : "s"} to work on` : "");
+}
+
+// Practising, on the home screen in place of today's du'as: those with lines to work on, the most
+// recently practised first, each from the line before the first of them.
+function showWorkOn() {
+  const seen = practiceSeen();
+  const ids = Object.keys(seen).filter((id) => state.duas[id] && weakLines(id).length)
+    .sort((a, b) => seen[b] - seen[a]).slice(0, 3);
+  if (!ids.length) return false;
+  $("today").hidden = false;
+  $("today-label").textContent = "To work on";
+  $("today-chips").replaceChildren(...ids.map((id) => {
+    const weak = weakLines(id);
+    const b = Object.assign(document.createElement("button"), { className: "chip", textContent: state.duas[id].name_en });
+    b.append(Object.assign(document.createElement("span"), { className: "note",
+      textContent: `${weak.length} line${weak.length === 1 ? "" : "s"} · from line ${Math.max(1, weak[0] - 1)}` }));
+    b.onclick = () => {
+      log.event("today", { dua: id, weak });
+      Object.assign(state, { chosen: id, practiceFrom: Math.max(0, weak[0] - 2) });
+      begin(micSource);
+    };
+    return b;
+  }));
+  return true;
+}
+
+const VERDICT_CLASS = { heard: "v-heard", "left out": "v-left", "not sure": "v-unsure" };
+
+function onVerdicts(list) {
+  for (const v of list) {
+    state.verdicts.set(v.segment, v.verdict);
+    const ln = state.lines?.get(v.segment);
+    ln?.classList.remove("v-heard", "v-left", "v-unsure", "dismissed");
+    ln?.classList.add(VERDICT_CLASS[v.verdict]);
+    log.event("practice", { seg: v.segment, t: Number(v.t.toFixed(2)), score: Number(v.score.toFixed(1)), shown: v.shown,
+      verdict: v.verdict, check_ms: v.ms == null ? null : Number(v.ms.toFixed(1)) });
+    // Several lines in a row it couldn't vouch for: the sound (echo, a phone far away), not the reader.
+    state.unsureRun = v.verdict === "not sure" ? state.unsureRun + 1 : 0;
+    if (state.unsureRun >= 3 && !state.unclearShown) {
+      state.unclearShown = true;
+      toast("I can't hear clearly enough to check every line", 5000);
+    }
+  }
+}
+
+// "I did say it": a line marked left out counts as heard (logged while listening). Once stopped, a
+// second tap takes it back.
+function dismiss(ln) {
+  const dua = state.review?.dua ?? state.duas[state.dua];
+  const seg = dua.segments[ln.dataset.i].id;
+  const undo = ln.classList.contains("dismissed");
+  ln.classList.toggle("v-left", undo);
+  ln.classList.toggle("v-heard", !undo);
+  ln.classList.toggle("dismissed", !undo);
+  state.verdicts.set(seg, undo ? "left out" : "heard");
+  log.event("dismiss", { seg, undo });
+  if (!state.review) return;
+  savePractice();
+  showReview();
+  toast(undo ? "Marked as left out" : "Marked as said");
+}
+
+// The line numbers of each verdict.
+function verdictLines(dua) {
+  const no = new Map(dua.segments.map((s, i) => [s.id, i + 1]));
+  const lines = (kind) => [...state.verdicts].filter(([, v]) => v === kind).map(([seg]) => no.get(seg)).sort((a, b) => a - b);
+  return { heard: lines("heard"), left: lines("left out"), unsure: lines("not sure") };
+}
+
+// The session is over: the lines not judged yet are judged, through the furthest one reached. Stopped
+// by the reader (review), the text stays with the verdicts and this returns true; otherwise (a
+// recording ended) a summary in passing.
+function practiceEnd(review) {
+  // Stopping partway through a line isn't leaving it out. The furthest line reached is judged now on
+  // the part said so far, and the display was on it, so the reader was in it: found left out, it
+  // stays unjudged (logged). On 2026-10-04 a replay of Du'a Ahd stopped mid-line 6 marked it left out.
+  const last = state.engine.finishPractice?.() || [];
+  const furthest = Math.max(-1, ...last.map((v) => v.line));
+  for (const v of last) {
+    if (v.line === furthest && v.verdict === "left out") {
+      log.event("practice_unfinished", { seg: v.segment, score: Number(v.score.toFixed(1)) });
+    }
+  }
+  onVerdicts(last.filter((v) => v.line !== furthest || v.verdict !== "left out"));
+  const begun = !!state.practiceDua;
+  const dua = state.duas[state.practiceDua];
+  Object.assign(state, { practice: false, practiceDua: null });
+  if (!begun || !state.verdicts.size) {
+    document.body.classList.remove("practice");
+    if (begun) toast("Stopped before any line was checked", 4000);
+    return false;
+  }
+  state.review = { dua, base: practiceWeights(dua.id), from: state.practiceStart, hints: state.hintCount };
+  const { heard, left, unsure } = verdictLines(dua);
+  log.event("practice_end", { heard: heard.length, left, unsure, hints: state.hintCount });
+  savePractice();
+  if (review) {
+    showReview();
+    return true;
+  }
+  state.review = null;
+  document.body.classList.remove("practice");
+  const parts = [`${heard.length} line${heard.length === 1 ? "" : "s"} heard`];
+  if (left.length) parts.push(`left out: ${left.join(", ")}`);
+  if (unsure.length) parts.push(`${unsure.length} not sure`); // the sound's doing, not the reader's: no list
+  toast(parts.join(" · "), 8000);
+  return false;
+}
+
+// Remembered per line: up one for each time left out, halved each time heard. Counted from the
+// weights before this session, so a line marked as said after stopping counts as heard.
+function savePractice() {
+  const { dua, base } = state.review;
+  const w = { ...base };
+  for (const [seg, v] of state.verdicts) {
+    const x = (w[seg] || 0) * (v === "heard" ? 0.5 : 1) + (v === "left out" ? 1 : 0);
+    if (x >= 0.1) w[seg] = Number(x.toFixed(2));
+    else delete w[seg];
+  }
+  stored(`practice:${dua.id}`, JSON.stringify(w));
+  stored("practice-seen", JSON.stringify({ ...practiceSeen(), [dua.id]: Date.now() }));
+}
+
+// Stopped: the whole text, every line shown with its verdict (practice.css, data-state review), and a
+// card: the counts, the lines left out (a tap goes to the line), practise again from the same line.
+function showReview() {
+  const { dua, hints } = state.review;
+  const { heard, left, unsure } = verdictLines(dua);
+  const n = heard.length + left.length + unsure.length;
+  const sum = [`${n} line${n === 1 ? "" : "s"} checked`, `${heard.length} heard`];
+  if (left.length) sum.push(`${left.length} left out`);
+  if (unsure.length) sum.push(`${unsure.length} not sure`);
+  $("review-sum").textContent = sum.join(" · ");
+  $("review-left").replaceChildren(...left.map((k) => {
+    const b = Object.assign(document.createElement("button"), { className: "review-line" });
+    b.setAttribute("aria-label", `Line ${k}`);
+    b.append(marker(k));
+    b.onclick = () => state.lines.get(dua.segments[k - 1].id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return b;
+  }));
+  const note = [];
+  if (hints) note.push(hints === 1 ? "1 word shown as a hint." : `${hints} words shown as hints.`);
+  if (left.length) note.push("Tap a line in red if you did say it.");
+  note.push("This checks whether each line was said, not its words, vowels or tajweed.");
+  $("review-note").textContent = note.join(" ");
+  for (const ln of state.lines.values()) ln.classList.remove("now", "next", "coming");
+  $("review").hidden = false;
+}
+
+function closeReview() {
+  if (!state.review) return;
+  state.review = null;
+  $("review").hidden = true;
+  document.body.classList.remove("practice");
+  setState("idle");
+  scrollTo({ top: 0, behavior: "instant" });
+}
+
+function practiseAgain() {
+  const { dua, from } = state.review;
+  closeReview();
+  Object.assign(state, { chosen: dua.id, practiceFrom: from, practiceNext: true });
+  begin(micSource).finally(() => (state.practiceNext = false)); // a refused microphone: not the next start
+}
+
+// Hidden text: one more word each tap, logged as a hint, not a mistake. The first word of the line
+// being read that isn't shown yet; once it's all shown, the first of the next line.
+function hintWord() {
+  if (!state.practice || !state.dua) return;
+  for (const seg of [state.segment, state.segment + 1]) {
+    const ln = state.lines.get(seg);
+    if (!ln || ln.matches(".v-heard, .v-left, .passed")) continue;
+    if (!ln.querySelector(".wd")) setWords(ln, true);
+    const next = [...ln.querySelectorAll(".wd")].find((w) => !w.matches(".said, .w, .hinted"));
+    if (!next) continue;
+    const i = Number(next.dataset.i);
+    next.classList.add("hinted");
+    if (!state.hints.has(seg)) state.hints.set(seg, new Set());
+    state.hints.get(seg).add(i);
+    state.hintCount += 1;
+    log.event("hint", { seg, word: i });
+    return;
+  }
 }
 
 // -- choosing a du'a --------------------------------------------------------------
@@ -1110,7 +1539,7 @@ function pickerItem(d, favs) {
   b.className = "pick";
   const en = document.createElement("span");
   en.textContent = d.name_en;
-  const note = noteFor(d.id);
+  const note = (state.practising && practiceNote(d.id)) || noteFor(d.id);
   if (note) en.append(Object.assign(document.createElement("span"), { className: "note", textContent: note }));
   const ar = document.createElement("span");
   ar.className = "ar";
@@ -1150,10 +1579,14 @@ function fillPicker(query) {
   };
   if (q) section("", all);
   else {
-    const recent = storedList("recent").filter((id) => !favs.includes(id));
+    // Practising: the du'as practised before head the list, the most recent first (practiceNote).
+    const seen = state.practising ? practiceSeen() : {};
+    const practised = Object.keys(seen).filter((id) => state.duas[id]).sort((a, b) => seen[b] - seen[a]);
+    const recent = storedList("recent").filter((id) => !favs.includes(id) && !practised.includes(id));
+    section("Practised", practised.map((id) => state.duas[id]));
     section("Favourites", favs.map((id) => state.duas[id]));
     section("Recent", recent.map((id) => state.duas[id]));
-    section(favs.length || recent.length ? "All" : "", all);
+    section(favs.length || recent.length || practised.length ? "All" : "", all);
   }
   $("picker-list").replaceChildren(...items.filter((li) => li.className !== "section" || li.textContent));
 }
@@ -1201,6 +1634,7 @@ function duasForNow(now = new Date()) {
 }
 
 function showToday() {
+  if (state.practising && !kids.on && showWorkOn()) return;
   const ids = duasForNow();
   $("today").hidden = !ids.length;
   const h = new Date().getHours();
@@ -1259,11 +1693,11 @@ async function shareLine(i) {
   }
 }
 
-function toast(text) {
+function toast(text, ms = 2000) {
   $("toast").textContent = text;
   $("toast").hidden = false;
   clearTimeout(state.toastTimer);
-  state.toastTimer = setTimeout(() => ($("toast").hidden = true), 2000);
+  state.toastTimer = setTimeout(() => ($("toast").hidden = true), ms);
 }
 
 // -- Arabic font -----------------------------------------------------------------------
@@ -1410,23 +1844,31 @@ function tidyEn(text) {
   return capital(tidy(text));
 }
 
-// Only the line being recited is split into words; the rest stay plain text.
+// Only the line being recited is split into words; the rest stay plain text. Practising, words shown
+// as hints (hintWord) stay shown.
 function setWords(ln, split) {
   const ar = ln.querySelector(".ar");
-  const text = state.duas[state.dua].segments[ln.dataset.i].ar;
+  const seg = state.duas[state.dua].segments[ln.dataset.i];
+  const hinted = (split && state.practice && state.hints?.get(seg.id)) || new Set();
   const words = split
-    ? text.split(/\s+/).filter(Boolean).flatMap((w, i) => {
-      const span = Object.assign(document.createElement("span"), { className: "wd", textContent: w });
+    ? seg.ar.split(/\s+/).filter(Boolean).flatMap((w, i) => {
+      const span = Object.assign(document.createElement("span"), { className: hinted.has(i) ? "wd hinted" : "wd", textContent: w });
       span.dataset.i = i;
       return [span, " "];
     })
-    : [text, " "];
+    : [seg.ar, " "];
   ar.replaceChildren(...words, ar.querySelector(".mark"));
 }
 
 function moveTo(dua, segment) {
   clearTimeout(state.catchTimer); // a catch-up run belongs to the line it started on
   const prev = state.lines.get(state.segment);
+  // Practice, text hidden: a line the reader went on from, having said at least half of it word by
+  // word, shows whole (practice.css). A line skipped, or only passed through, waits for its verdict.
+  if (state.practice && prev && Number(state.lines.get(segment)?.dataset.i) > Number(prev.dataset.i)) {
+    const wds = prev.querySelectorAll(".wd");
+    if (state.perLine || prev.querySelectorAll(".wd.said, .wd.w").length * 2 >= wds.length) prev.classList.add("passed");
+  }
   if (prev) setWords(prev, false);
   state.segment = segment;
   state.token = null;

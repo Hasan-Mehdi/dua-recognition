@@ -11,6 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Amiri+Quran&family=Aref+Ruqaa:wght@400;700&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="kids.css">
+  <link rel="stylesheet" href="practice.css">
   <!-- Static hosts (GitHub Pages) can't send COOP/COEP headers; this vendored
        MIT shim (gzuidhof/coi-serviceworker) adds them, which lets ONNX Runtime
        Web use threads: ~2.4 s -> ~1 s per window on a desktop CPU. -->
@@ -28,6 +29,11 @@
       <symbol id="rosette" viewBox="-50 -50 100 100">
         <path d="M0-46 7.2-36.3 17.6-42.5 20.6-30.8 32.5-32.5 30.8-20.6 42.5-17.6 36.3-7.2 46 0 36.3 7.2 42.5 17.6 30.8 20.6 32.5 32.5 20.6 30.8 17.6 42.5 7.2 36.3 0 46-7.2 36.3-17.6 42.5-20.6 30.8-32.5 32.5-30.8 20.6-42.5 17.6-36.3 7.2-46 0-36.3-7.2-42.5-17.6-30.8-20.6-32.5-32.5-20.6-30.8-17.6-42.5-7.2-36.3Z"/>
         <circle r="29"/>
+      </symbol>
+      <!-- An open book on a rehal: practise mode's mark on the seal. -->
+      <symbol id="rehal" viewBox="0 0 24 24">
+        <path d="M12 7.5C9.5 5.8 6.5 5.5 3.5 6.5V13c3-1 6-.7 8.5 1 2.5-1.7 5.5-2 8.5-1V6.5c-3-1-6-.7-8.5 1ZM12 7.5V14"/>
+        <path d="M8.2 13.6 16.6 20.6M15.8 13.6 7.4 20.6"/>
       </symbol>
     </defs>
   </svg>
@@ -61,21 +67,31 @@
     <p class="bismillah" lang="ar">بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ</p>
     <h1 class="brand-ar" lang="ar">رفيق الدعاء</h1>
     <p class="brand-en">Du'a Companion</p>
-    <p class="tagline">Recite, and the words follow you.</p>
+    <p id="tagline" class="tagline">Recite, and the words follow you.</p>
 
     <button id="start" class="seal" aria-label="Start listening">
       <svg class="seal-star" viewBox="-50 -50 100 100" aria-hidden="true"><use href="#khatam" x="-50" y="-50" width="100" height="100"/></svg>
+      <!-- Practising: a book open on a rehal, the stand du'as are learnt from, in place of the mic (practice.css). -->
+      <svg class="seal-rehal" viewBox="0 0 24 24" aria-hidden="true"><use href="#rehal"/></svg>
       <svg class="seal-mic" viewBox="0 0 24 24" aria-hidden="true">
         <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
       </svg>
     </button>
     <p id="hint" class="hint">Tap to begin</p>
     <div id="load" class="load" hidden><i id="load-bar"></i></div>
+    <!-- What the seal does, chosen beneath it as on a camera (setPractising in app.js): follow along,
+         or practise, where each line is checked (practice.js). -->
+    <div id="modes" class="modes" role="radiogroup" aria-label="Mode">
+      <button id="mode-follow" role="radio" aria-checked="true">follow</button>
+      <button id="mode-practise" role="radio" aria-checked="false">practise</button>
+    </div>
 
     <div class="links">
       <button id="choose" class="link">choose a du'a</button>
-      <span class="dot">·</span>
+      <span id="play-dot" class="dot">·</span>
       <button id="play" class="link">play a recording</button>
+      <span id="hide-dot" class="dot" hidden>·</span>
+      <label id="hide-opt" class="link check" hidden><input type="checkbox" id="home-hide"> hide the text</label>
     </div>
     <div id="today" class="today" hidden>
       <span id="today-label" class="guess-label"></span>
@@ -151,6 +167,7 @@
     <label><input type="checkbox" id="opt-en" checked> Translation</label>
     <label><input type="checkbox" id="opt-tl" checked> Transliteration</label>
     <label><input type="checkbox" id="opt-focus"> Hide other lines</label>
+    <label class="opt-hide"><input type="checkbox" id="opt-hide"> Hide the text until it's heard</label>
     <button id="share" class="link share-btn" hidden>Show on other screens</button>
   </div>
 
@@ -166,6 +183,18 @@
   </div>
 
   <button id="back" class="chip back" hidden>Back to reciter</button>
+  <!-- Practice, text hidden: one more word each tap, logged as a hint (hintWord in app.js). -->
+  <button id="hint-btn" class="chip hint-btn">Next word</button>
+  <!-- Practice, once stopped: the text stays with what was checked (showReview in app.js). -->
+  <div id="review" class="review" hidden>
+    <p id="review-sum" class="review-sum"></p>
+    <div id="review-left" class="review-left"></div>
+    <p id="review-note" class="review-note"></p>
+    <div class="review-actions">
+      <button id="review-again" class="chip review-again">Practise again</button>
+      <button id="review-done" class="link">Done</button>
+    </div>
+  </div>
   <p id="toast" class="toast" role="status" hidden></p>
 
   <audio id="player" hidden></audio>

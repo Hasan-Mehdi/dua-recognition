@@ -1,0 +1,121 @@
+/* Practice mode (app.js practiceBegin, practice.js): the same page; each line's verse-end rosette
+   says what the checker heard. Gilded: heard. Filled in rubric: left out (a tap on it says "I did
+   say it"). Its outline broken: not sure (the sound, not the reader). Nothing is gilded just for
+   being passed, and the words of the line being read aren't painted as said. */
+
+/* ---------- home: follow or practise, chosen beneath the seal as on a camera (setPractising) ---------- */
+.modes { display: flex; gap: 26px; margin-top: 16px; }
+.modes button {
+  position: relative; padding: 6px 0 14px .24em; font-size: 14px; letter-spacing: .24em; text-transform: uppercase;
+  color: var(--muted); transition: color .3s;
+}
+.modes button:hover { color: var(--ink); }
+.modes button[aria-checked="true"] { color: var(--gold); }
+/* The chosen one carries the diamond the progress rule ends in. */
+.modes button::after {
+  content: ""; position: absolute; left: 50%; bottom: 2px; width: 6px; height: 6px; margin-left: -3px;
+  background: var(--gold); transform: rotate(45deg) scale(0); transition: transform .35s cubic-bezier(.2, .7, .2, 1);
+}
+.modes button[aria-checked="true"]::after { transform: rotate(45deg) scale(1); }
+body.kids .modes { display: none; }
+/* Practising, the seal turns an eighth, as a dial clicks over, and a book open on a rehal takes the
+   mic's place in its dark core: the stand du'as are learnt from. */
+body.practising .seal-star { transform: rotate(45deg); }
+.seal-mic, .seal-rehal { transition: opacity .45s ease, transform .9s cubic-bezier(.2, .7, .2, 1); }
+.seal-rehal {
+  position: relative; /* above the star, as the mic is */ width: 38px; height: 38px;
+  fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+  opacity: 0; transform: translateY(5px) scale(.85);
+}
+body.practising .seal-rehal { opacity: 1; transform: none; }
+body.practising .seal-mic { opacity: 0; transform: scale(.8); }
+body.kids .seal-rehal { display: none; }
+/* (In the top bar's 30px seal it was a knot: the line under the title says "Practice" instead.) */
+.links .check { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; text-decoration: none; }
+.links .check input { margin: 0; accent-color: var(--gold); }
+
+/* ---------- the rosettes ---------- */
+/* Reading mode gilds a rosette as the highlight moves past its line: not here. */
+body.practice .ln.past .mark, body.practice .ln.sealed .mark { color: var(--rubric); animation: none; }
+body.practice .ln.past .mark svg, body.practice .ln.sealed .mark svg { fill: none; }
+body.practice .ln.past .mark b, body.practice .ln.sealed .mark b { color: var(--ink); }
+
+body.practice .ln.v-heard .mark { color: var(--gold); animation: gild .7s cubic-bezier(.2, .7, .2, 1); }
+body.practice .ln.v-heard .mark svg { fill: var(--gold); }
+body.practice .ln.v-heard .mark b { color: var(--paper); }
+
+body.practice .ln.v-left { opacity: .7; }
+body.practice .ln.v-left .mark { position: relative; color: var(--rubric); cursor: pointer; animation: gild .7s cubic-bezier(.2, .7, .2, 1); }
+body.practice .ln.v-left .mark svg { fill: var(--rubric); }
+body.practice .ln.v-left .mark b { color: var(--paper); }
+/* A rosette is small for a finger: its tap reaches half a line's height around it. */
+body.practice .ln.v-left .mark::after { content: ""; position: absolute; inset: -.6em; }
+
+body.practice .ln.v-unsure .mark svg { stroke-dasharray: 9 7; }
+
+/* Left out the last time this du'a was practised: a heavier outline until this reading judges it. */
+body.practice .ln.weak:not(.v-heard):not(.v-left) .mark svg { stroke-width: 7; }
+
+/* The line being read: every word in ink, the recited one still washed. */
+body.practice .ln.now .ar .wd { color: var(--ink); }
+
+/* ---------- "Hide the text until it's heard" ---------- */
+/* In the line being read, each word appears as it is said; a line shows whole once the reader goes
+   on from it, or is heard, or is found left out (so the reader sees what they missed). Until then
+   its words are a soft blur: the page keeps its shape and each rosette stays at its line's end, but
+   nothing can be read. A word shown as a hint (hintWord) is gold. */
+body.practice .ln .ar { transition: font-size .5s ease, color .8s ease, text-shadow .8s ease; }
+body.practice.hide-text:not([data-state="review"]) .ln:not(.v-heard):not(.v-left):not(.passed) .ar,
+body.practice.hide-text:not([data-state="review"]) .ln:not(.v-heard):not(.v-left):not(.passed) .ar .wd:not(.said):not(.w):not(.hinted) {
+  /* At .24em one blur still read as words to someone who knows the du'a ("يا حي يا قيوم"). */
+  color: transparent; background: none; text-shadow: 0 0 .55em var(--muted), 0 0 .55em var(--muted);
+}
+body.practice.hide-text .ln .ar .mark, body.practice.hide-text .ln .ar .wd:is(.said, .w, .hinted) { text-shadow: none; }
+body.practice.hide-text .ln .ar .wd.hinted { color: var(--gold); }
+body.practice.hide-text:not([data-state="review"]) .ln:not(.v-heard):not(.v-left):not(.passed) .gloss { visibility: hidden; }
+
+body:not(.practice) .opt-hide { display: none; }
+
+/* Stuck: the next word, one per tap (bottom right; "Back to reciter" moves to the left). */
+.hint-btn {
+  position: fixed; right: 22px; bottom: max(28px, env(safe-area-inset-bottom)); z-index: 11; display: none;
+  background: var(--paper-2); box-shadow: 0 6px 24px rgba(0, 0, 0, .35);
+}
+body.practice.hide-text[data-state="following"] .hint-btn { display: block; }
+body.practice.hide-text .back { left: 22px; transform: none; }
+
+/* ---------- stopped: the whole text with its verdicts (showReview) ---------- */
+body[data-state="review"] .stage { display: block; }
+body[data-state="review"] .listen { display: none; }
+body[data-state="review"] .text { padding-bottom: 70vh; }
+body[data-state="review"] .ln { opacity: .4; }
+body[data-state="review"] .ln.v-heard { opacity: .72; }
+body[data-state="review"] .ln.v-left { opacity: 1; cursor: pointer; }
+body[data-state="review"] .ln.dismissed { cursor: pointer; }
+/* What was left out, with its transliteration and translation, to learn from. */
+body[data-state="review"] .ln.v-left .gloss { grid-template-rows: 1fr; }
+
+.review {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 13; width: min(560px, 100%); margin: 0 auto;
+  display: grid; gap: 12px; justify-items: center; text-align: center;
+  padding: 20px 22px max(20px, env(safe-area-inset-bottom));
+  background: var(--paper); border: 1px solid var(--line); border-bottom: 0; border-radius: 18px 18px 0 0;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, .35); animation: rise .35s ease-out;
+}
+.review-sum { margin: 0; font-size: 19px; }
+.review-left { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; max-height: 26vh; overflow: auto; }
+.review-left:empty { display: none; }
+.review-line { padding: 4px; font-size: 36px; line-height: 1; }
+.review-line .mark { margin: 0; vertical-align: 0; color: var(--rubric); }
+.review-line .mark svg { fill: var(--rubric); }
+.review-line .mark b { color: var(--paper); }
+.review-note { margin: 0; max-width: 30em; font-size: 14px; font-style: italic; color: var(--muted); }
+.review-actions { display: flex; gap: 18px; align-items: center; }
+.review-again { background: var(--gold); border-color: var(--gold); color: var(--paper); }
+.review-again:hover { background: var(--gold-hi); border-color: var(--gold-hi); }
+
+/* A toast's box as wide as its words (style.css centres it with left: 50%, which would otherwise
+   halve the room it has): the summary and the sound notice are one line on a phone. */
+.toast { width: max-content; max-width: calc(100vw - 48px); text-align: center; }
+/* Over the review card while it's up. */
+body[data-state="review"] .toast { bottom: calc(max(20px, env(safe-area-inset-bottom)) + 230px); }
