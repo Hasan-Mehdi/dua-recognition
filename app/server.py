@@ -1,28 +1,28 @@
 #!/usr/bin/env python
-"""Server mode for the web front end (web/): recite into the browser mic, or
-replay a recording, and the du'a follows the line and word being recited.
+"""The web app's server (web/): the page, majlis rooms, debug sessions and, in the server
+engine, the speech models.
 
     python app/server.py                                  # http://localhost:8000
-    DUA_ASR_MODEL=models/whisper-base-quran-dua-ct2 DUA_ASR_DEVICE=cpu python app/server.py
-    DUA_ENGINE=device python app/server.py                # the phone runs the model; this serves
-                                                          # the page, majlis rooms and debug sessions
+    DUA_ENGINE=server python app/server.py                # Whisper and the CTC model run here
+    DUA_ENGINE=server DUA_ASR_DEVICE=cpu DUA_CTC_DEVICE=cpu python app/server.py   # ...on the CPU
 
-The browser streams 16 kHz mono float32 over a WebSocket; the server answers
-each hop with the tracker's position. ASR runs off the event loop, and audio
-that arrives meanwhile is folded into the next step, so a slow machine lags
-gracefully instead of queueing.
+Either way the page runs the same code (web/app.js DeviceEngine): the tracker, the stream
+decoder, the highlight, practice mode. With the phone models exported to web/models/
+(docs/development.md) the browser runs the models as well ("device", then the default), and this
+serves the page, majlis rooms and debug sessions. In the server engine the page streams its audio
+here (16 kHz int16 over /ws/ear) and asks for each Whisper and CTC window by the sample it ends at
+(docs/results/server_engine.md). DUA_ASR_MODEL: Whisper (default the page's, as CTranslate2);
+DUA_CTC_MODEL: the CTC model (default the page's student, on the page's 2 s windows; any Hugging
+Face CTC model works, e.g. models/wav2vec2-quran-dua-voices).
 
-The CTC word follower (docs/results/phone_follower.md; ?words=off turns it off): every
-0.1 s a {"type": "word"} message says which word is being recited. The CTC model
-(DUA_CTC_MODEL, default models/ctc-student-base-v6, the phone's) loads on first use.
-
-Debug sessions the page records (web/session-log.js) are uploaded to
-data/sessions/, one .wav each with its log inside (scripts/session_report.py).
+Debug sessions the page records (web/session-log.js) are uploaded to data/sessions/ (or
+DUA_SESSIONS), one .wav each with its log inside (scripts/session_report.py).
 """
 from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import os
 import re
 import sys
@@ -39,35 +39,48 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from dua_recognition.align import CorpusIndex  # noqa: E402
-from dua_recognition.asr import DEFAULT_MODEL, load_model  # noqa: E402
+from dua_recognition.asr import (  # noqa: E402
+    DEFAULT_MODEL, SAMPLE_RATE, QuietMeter, load_model, speech_in_tail, transcribe_batch)
 from dua_recognition.corpus import load_all, load_recordings, web_json  # noqa: E402
-from dua_recognition.pipeline import StreamingRecognizer  # noqa: E402
-from dua_recognition.tracker import RECITER, TrackerConfig  # noqa: E402
 
 WEB = ROOT / "web"  # the one front end; it detects this server via /api/mode
-MODEL = os.environ.get("DUA_ASR_MODEL", DEFAULT_MODEL)
-ENGINE = os.environ.get("DUA_ENGINE", "server")  # "device": the browser runs speech recognition itself
-SESSIONS = ROOT / "data" / "sessions"
+# The page's Whisper (web/app.js), as a CTranslate2 conversion: the tracker was tuned on its transcripts.
+PAGE_MODEL = ROOT / "models" / "whisper-base-syn-v5-ctx8ft-ct2"
+MODEL = os.environ.get("DUA_ASR_MODEL") or (str(PAGE_MODEL) if PAGE_MODEL.is_dir() else DEFAULT_MODEL)
+# The page's own models (web/app.js: the Whisper default and CTC_MODEL): with them exported the
+# browser runs speech recognition itself ("device"); otherwise this server does ("server").
+PHONE_MODELS = [WEB / "models" / "whisper-base-syn-v5-ctx8ft" / "onnx", WEB / "models" / "ctc-student-base-v6-w2"]
+ENGINE = os.environ.get("DUA_ENGINE") or ("device" if all(p.is_dir() for p in PHONE_MODELS) else "server")
+SESSIONS = Path(os.environ.get("DUA_SESSIONS") or ROOT / "data" / "sessions")  # (replays: elsewhere)
 MAX_SESSION_BYTES = 256 << 20  # 16 kHz int16 mono: over two hours
 CTC_MODEL = os.environ.get("DUA_CTC_MODEL", str(ROOT / "models" / "ctc-student-base-v6"))
-_ctc = None
 _ctc_lock = threading.Lock()
 
 
-def ctc_model():
-    """The word follower's CTC model, loaded once, on first use: the phone's small one by default
-    (docs/results/phone_follower.md), any Hugging Face CTC model with DUA_CTC_MODEL."""
-    global _ctc
-    with _ctc_lock:
-        if _ctc is None:
-            from dua_recognition.ctc_student import load_ctc
+# The page's CTC windows: 2 s, as web/models/ctc-student-base-v6-w2 (the same weights exported with
+# --window 2) sees them. The student itself was trained on 3 s and would pad 2 s with silence.
+EAR_CTC_WINDOW = 2.0
+_ear_ctc = None
 
-            _ctc = load_ctc(CTC_MODEL)
-        return _ctc
+
+def ear_ctc():
+    global _ear_ctc
+    with _ctc_lock:
+        if _ear_ctc is None:
+            from dua_recognition.ctc_student import StudentCtc, load_ctc
+
+            # DUA_CTC_DEVICE=cpu: one 2 s window took 21 ms on this PC's CPU against 29 ms on its GPU,
+            # and CUDA's setup costs 0.6 GB more memory.
+            device = os.environ.get("DUA_CTC_DEVICE")
+            student = (Path(CTC_MODEL) / "student.pt").exists()
+            m = StudentCtc(CTC_MODEL, device) if device and student else load_ctc(CTC_MODEL)
+            m.window_s = EAR_CTC_WINDOW
+            m.window(np.zeros(int(EAR_CTC_WINDOW * SAMPLE_RATE), np.float32))  # the first run is the slow one
+            _ear_ctc = m
+        return _ear_ctc
+
 
 DUAS = load_all()
-INDEX = CorpusIndex(DUAS)
 RECORDINGS = {r.audio_id: r for d in DUAS.values() for r in load_recordings(d)}
 
 app = FastAPI(title="dua-recognition")
@@ -76,12 +89,23 @@ app = FastAPI(title="dua-recognition")
 @app.on_event("startup")
 def _warm() -> None:
     if ENGINE == "server":
+        if not os.environ.get("DUA_ENGINE"):
+            print("web/models/ has no phone models: Whisper and the CTC model run here "
+                  "(docs/development.md)", file=sys.stderr)
         load_model(MODEL)  # first request shouldn't pay for the model load
+        transcribe_batch([np.zeros(SAMPLE_RATE, np.float32) + 0.01], model=MODEL)
+        try:
+            ear_ctc()
+        except Exception as e:  # the page follows without it: Whisper and the tracker alone
+            print(f"no CTC model ({CTC_MODEL}: {e}): no word-by-word following", file=sys.stderr)
 
 
 @app.get("/api/mode")
 def mode():
-    return {"mode": ENGINE, "model": MODEL if ENGINE == "server" else None, "sessions": True}
+    if ENGINE != "server":
+        return {"mode": ENGINE, "model": None, "sessions": True}
+    return {"mode": ENGINE, "model": Path(MODEL).name.removesuffix("-ct2"), "sessions": True,
+            "ctc": f"{Path(CTC_MODEL).name}-w{EAR_CTC_WINDOW:g}"}
 
 
 @app.post("/api/sessions/{name}")
@@ -130,121 +154,158 @@ def audio(audio_id: str):
     return FileResponse(rec.path, media_type="audio/mpeg")
 
 
-def _message(update, step_ms: float, index: CorpusIndex, speed: float, unknown: float = 0.0,
-             still_after: float = 0.3, retreat_after: float = 1.0) -> dict:
-    p = update.position
-    silent = max(update.quiet, update.quiet_now or 0.0)  # at the window's end, or since
-    still = silent > still_after  # the reciter has stopped: so does the gliding highlight
-    word = index.words[p.word] if p.word is not None else None
-    return {
-        "t": round(update.t, 2),
-        "heard": update.transcript,
-        "dua": p.dua,
-        "dua_confidence": round(p.dua_confidence, 3),
-        "segment": p.segment,
-        "segment_confidence": round(p.segment_confidence, 3),
-        "token": word.token if word and p.dua else None,
-        "speed": 0.0 if still else round(speed, 3),  # words/s: the page glides the highlight at this pace
-        "quiet": round(update.quiet, 2),  # seconds the reciter had been silent
-        "quiet_now": None if update.quiet_now is None else round(update.quiet_now, 2),  # ...and when sent
-        "paused": None if update.paused is None else round(update.paused, 2),
-        # The page's own stop detector compares with this (web/gate.js LiveQuiet).
-        "voice_db": None if update.voice_db is None else round(update.voice_db, 1),
-        # Silent a while: the highlight may go back to the word they stopped on.
-        "back": silent > retreat_after,
-        "unknown": round(unknown, 3),  # P(the recitation isn't in the corpus)
-        # Reached the end of the line and the latest window was silent: the
-        # next line is probably coming, so the UI previews it.
-        "pause_at_line_end": bool(p.at_line_end and (not update.transcript or still)),
-        "candidates": [
-            {"id": d, "name": DUAS[d].name_en, "p": round(prob, 3)} for d, prob in p.candidates
-        ],
-        # Other texts reading the same words here (tracker.same_text_words): "also in ...".
-        "same_as": p.same_as,
-        "step_ms": round(step_ms),
-    }
+# -- the page's ear -------------------------------------------------------------
+# The server engine: the page streams its audio here and asks for what web/asr-worker.js and
+# web/ctc-worker.js give it on the device (a window's transcript and stop measures, a window's CTC
+# frames); everything that follows the recitation (tracker.js, the stream decoder, the highlight,
+# practice mode) runs in the page, the same code in either engine. A window is named by the sample
+# it ends at, from the audio already sent, so audio crosses the network once.
+
+class EarAudio:
+    """The audio one page has streamed, kept by sample number."""
+
+    KEEP = 30 * SAMPLE_RATE
+
+    def __init__(self) -> None:
+        self.at(0)
+
+    def at(self, total: int) -> None:
+        """The stream (re)starts at sample `total`: a new session, or a reconnect after audio was lost."""
+        self.buf = np.zeros(0, np.float32)
+        self.total = total
+
+    def push(self, x: np.ndarray) -> None:
+        self.buf = np.concatenate([self.buf, x])[-self.KEEP :]
+        self.total += x.size
+
+    def window(self, end: int, n: int) -> np.ndarray:
+        """The n samples before sample `end`, zeros where none were heard (the page's buffer starts zeroed)."""
+        first = self.total - self.buf.size  # sample number of buf[0]
+        a, b = end - n - first, end - first
+        out = np.zeros(n, np.float32)
+        lo, hi = max(a, 0), min(b, self.buf.size)
+        if hi > lo:
+            out[lo - a : hi - a] = self.buf[lo:hi]
+        return out
 
 
-def _follow(mode: str) -> TrackerConfig:
-    return TrackerConfig(**RECITER) if mode == "reciter" else TrackerConfig()
+WINDOW = 6 * SAMPLE_RATE  # the page's Whisper window (web/app.js DeviceEngine.window)
 
 
-@app.websocket("/ws")
-async def follow(ws: WebSocket):
+def _gate(window: np.ndarray) -> dict:
+    """web/gate.js decide(), policy "legacy": Whisper runs if the last 1.5 s reach -45 dBFS and
+    Silero hears a run of speech in them (asr.speech_in_tail, the same rule)."""
+    tail = window[-int(1.5 * SAMPLE_RATE) :]
+    level = 20 * np.log10(np.sqrt(np.mean(np.square(tail, dtype=np.float64))) + 1e-12) if tail.size else -240.0
+    out = {"policy": "legacy", "level": round(float(level), 1), "run": True, "reason": None}
+    if level < -45:
+        return {**out, "run": False, "reason": "below_floor"}
+    if not speech_in_tail(window):
+        return {**out, "run": False, "reason": "vad_reject"}
+    return out
+
+
+def _hear(window: np.ndarray, voice_db: float | None, dt: float | None) -> dict:
+    """What asr-worker.js answers a "transcribe" with: the stop measures (gate.js stopMeasures is
+    asr.QuietMeter on one window, the voice level handed back by the page) and, past the gate,
+    Whisper's transcript. transcribe_batch also drops Whisper's no-speech and hallucinated outputs,
+    as on the bench the tracker was tuned on."""
+    t0 = time.perf_counter()
+    meter = QuietMeter()
+    meter.voice_db = voice_db
+    quiet = meter(window, dt)
+    gate = _gate(window)
+    text, infer_ms = "", None
+    if gate["run"]:
+        t1 = time.perf_counter()
+        text = transcribe_batch([window], model=MODEL)[0]
+        infer_ms = round((time.perf_counter() - t1) * 1000, 1)
+    return {"type": "text", "text": text, "quiet": quiet, "paused": meter.paused, "voiceDb": meter.voice_db,
+            "gate": gate, "skip": None if text else gate["reason"] or "empty", "hallucinated": False,
+            "infer_ms": infer_ms, "server_ms": round((time.perf_counter() - t0) * 1000, 1)}
+
+
+@app.websocket("/ws/ear")
+async def ear(ws: WebSocket):
+    """Binary messages: 16 kHz mono int16 audio. Text: JSON requests, each with its channel ("asr" or
+    "ctc", as the worker it stands in for) and the page's session number `gen`, echoed back:
+    {"type": "at", "total"}: the stream is at this sample (a new session, or audio lost to a reconnect);
+    {"type": "load"}: answered "ready" once the model is loaded;
+    {"type": "transcribe", "id", "voiceDb", "dt"}: the window ending at sample id;
+    {"type": "frames", "id"}: the CTC frames of the 2 s ending there, as a JSON header
+    {"type": "frames", "id", "T", "C", ...} followed by T x C float16 log probabilities."""
     await ws.accept()
-    # ?lead=0 / ?pauses=0 switch those off, for comparing by feel. ?follow=reciter:
-    # majlis mode, where the display runs on through a reciter's breaths. The word follower places
-    # the word unless ?words=off; with it, the tracker's display shows its evidence, not a lead.
-    words = None if ws.query_params.get("words") == "off" else "ctc"
-    rec = StreamingRecognizer(DUAS, model=MODEL, index=INDEX,
-                              lead=ws.query_params.get("lead") != "0" and words is None,
-                              pauses=ws.query_params.get("pauses") != "0",
-                              config=_follow(ws.query_params.get("follow", "reading")),
-                              words=words, ctc=await asyncio.to_thread(ctc_model) if words else None)
-    running: asyncio.Task | None = None
-    word_running: asyncio.Task | None = None
+    audio = EarAudio()
+    sending = asyncio.Lock()
+    tasks: set[asyncio.Task] = set()
 
-    async def idle():
-        for task in (running, word_running):
-            if task:
-                await task
+    async def answer(req: dict, reply: dict, data: bytes | None = None) -> None:
+        reply = {"ch": req["ch"], "id": req.get("id"), "gen": req.get("gen"), **reply}
+        async with sending:  # a header and its frames go out together
+            await ws.send_json(reply)
+            if data is not None:
+                await ws.send_bytes(data)
 
-    async def run_word():
+    async def transcribe(req: dict, window: np.ndarray) -> None:
+        try:
+            reply = await asyncio.to_thread(_hear, window, req.get("voiceDb"), req.get("dt"))
+        except Exception as e:  # as the worker does: the page carries on with no transcript
+            reply = {"type": "text", "text": "", "quiet": None, "paused": None, "voiceDb": req.get("voiceDb"),
+                     "gate": None, "skip": "error", "hallucinated": False, "error": str(e)}
+        await answer(req, reply)
+
+    async def frames(req: dict, window: np.ndarray) -> None:
         t0 = time.perf_counter()
-        wu = await asyncio.to_thread(rec.word_step)
-        if wu is not None:
-            token = rec.index.words[wu.word].token if wu.word is not None else None
-            await ws.send_json({"type": "word", "t": round(wu.t, 2), "dua": wu.dua, "segment": wu.segment,
-                                "token": token, "step_ms": round((time.perf_counter() - t0) * 1000)})
+        try:
+            lp = await asyncio.to_thread(lambda: ear_ctc().window(window))
+        except Exception as e:
+            return await answer(req, {"type": "error", "message": str(e)})
+        await answer(req, {"type": "frames", "T": lp.shape[0], "C": lp.shape[1],
+                           "server_ms": round((time.perf_counter() - t0) * 1000, 1)}, lp.astype("<f2").tobytes())
 
-    async def run_step():
-        t0 = time.perf_counter()
-        update = await asyncio.to_thread(rec.step)
-        if update is not None:
-            await ws.send_json(_message(update, (time.perf_counter() - t0) * 1000, rec.index, rec.tracker.speed,
-                                        rec.tracker.null, rec.tracker.cfg.still_after, rec.tracker.cfg.retreat_after))
+    async def load(req: dict) -> None:
+        try:
+            if req["ch"] == "asr":
+                await asyncio.to_thread(load_model, MODEL)
+                return await answer(req, {"type": "ready"})
+            await asyncio.to_thread(ear_ctc)
+            await answer(req, {"type": "ready", "meta": {"window_s": EAR_CTC_WINDOW}})
+        except Exception as e:
+            await answer(req, {"type": "error", "message": str(e)})
+
+    def spawn(coro) -> None:
+        task = asyncio.create_task(coro)
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
 
     try:
         while True:
             msg = await ws.receive()
             if msg.get("type") == "websocket.disconnect":
                 break
-            text = msg.get("text") or ""
-            if text.startswith("lock:") and text[5:] in DUAS:
-                await idle()
-                rec.lock(text[5:])
+            if msg.get("bytes"):
+                audio.push(np.frombuffer(msg["bytes"], dtype="<i2").astype(np.float32) / 32768)
                 continue
-            if text.startswith("seek:"):  # "I'm here": the listener tapped the line they're on
-                dua, _, seg = text[5:].rpartition(":")
-                if dua in rec.index.dua_ids and seg.lstrip("-").isdigit():
-                    await idle()
-                    try:
-                        rec.seek(dua, int(seg))
-                    except ValueError:  # no such line
-                        pass
+            try:
+                req = json.loads(msg.get("text") or "")
+                kind, ch = req.get("type"), req.get("ch")
+            except (ValueError, AttributeError):
                 continue
-            if text.startswith("follow:"):  # the page switched between page and majlis mode
-                await idle()
-                rec.config = rec.tracker.cfg = _follow(text[7:])
-                continue
-            if msg.get("text") == "reset":
-                await idle()
-                rec.reset()
-                continue
-            data = msg.get("bytes")
-            if not data:
-                continue
-            rec.push(np.frombuffer(data, dtype=np.float32))
-            if rec.due and (running is None or running.done()):
-                running = asyncio.create_task(run_step())
-            if rec.word_due and (word_running is None or word_running.done()):
-                word_running = asyncio.create_task(run_word())
+            if kind == "at":
+                audio.at(int(req.get("total") or 0))
+            elif kind == "load" and ch in ("asr", "ctc"):
+                spawn(load(req))
+            # The window is cut now, from the audio received so far: the page sent it before asking.
+            elif kind == "transcribe" and ch == "asr":
+                end = int(req["id"])
+                spawn(transcribe(req, audio.window(end, min(WINDOW, max(end, 0)))))
+            elif kind == "frames" and ch == "ctc":
+                spawn(frames(req, audio.window(int(req["id"]), int(EAR_CTC_WINDOW * SAMPLE_RATE))))
     except WebSocketDisconnect:
         pass
     finally:
-        for task in (running, word_running):
-            if task:
-                task.cancel()
+        for task in list(tasks):
+            task.cancel()
 
 
 # -- majlis mode ----------------------------------------------------------------

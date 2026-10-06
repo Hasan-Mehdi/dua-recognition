@@ -54,6 +54,8 @@ def run_one(it: dict, args, name: str | None = None, query: str | None = None) -
         cmd += ["--asr-ms", str(args.asr_ms)]
     if args.ctc_ms:
         cmd += ["--ctc-ms", str(args.ctc_ms)]
+    if args.server:
+        cmd += ["--server", args.server]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
     print(p.stdout.strip() or p.stderr.strip()[-300:], flush=True)
     wav_in.unlink(missing_ok=True)
@@ -114,6 +116,8 @@ def main() -> None:
     ap.add_argument("--asr-ms", type=int, default=1200)
     ap.add_argument("--ctc-ms", type=int, default=150)
     ap.add_argument("--query", default="", help="page URL query, e.g. 'model=...'")
+    ap.add_argument("--server", default=None, help="play into the page app/server.py serves at this URL "
+                    "(DUA_ENGINE=server: the server engine; --asr-ms/--ctc-ms don't reach it)")
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--report", action="store_true", help="only score what has been played")
     ap.add_argument("--variants", nargs="*", default=None, help="name:query pairs (default: --name with --query)")

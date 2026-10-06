@@ -6,6 +6,11 @@
 // scripts/session_stops.py.
 //
 //   node scripts/page_replay.mjs <in.wav> <out.wav> [query, e.g. "model=whisper-base-aug-v4-ctx8"] [--asr-ms N] [--ctc-ms N]
+//   node scripts/page_replay.mjs <in.wav> <out.wav> [query] --server http://127.0.0.1:8000
+//
+// --server URL plays into the page that app/server.py serves there: with DUA_ENGINE=server, the
+// server engine (the server's Whisper and CTC model, the page's tracker and stream decoder). Start
+// that server with DUA_SESSIONS pointing elsewhere, or the replays land in data/sessions/.
 //
 // --asr-ms N makes every transcription take at least N ms (the worker is served with a wait
 // before it answers), to come near a phone: Whisper takes ~0.25 s per update on a desktop and
@@ -29,6 +34,8 @@ const asrMs = at >= 0 ? Number(argv.splice(at, 2)[1]) : 0;
 // --ctc-ms N: the same for the word follower's CTC model (web/ctc-worker.js, ?words=ctc).
 const ct = argv.indexOf("--ctc-ms");
 const ctcMs = ct >= 0 ? Number(argv.splice(ct, 2)[1]) : 0;
+const sv = argv.indexOf("--server");
+const appServer = sv >= 0 ? argv.splice(sv, 2)[1].replace(/\/$/, "") : null;
 const [input, output, query = ""] = argv;
 if (!input || !output) {
   console.error("usage: node scripts/page_replay.mjs <in.wav> <out.wav> [query]");
@@ -64,12 +71,14 @@ const server = createServer((req, res) => {
   res.end(readFileSync(f));
 });
 await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
-const port = server.address().port;
+const base = appServer ?? `http://127.0.0.1:${server.address().port}`;
 
 const browser = await puppeteer.launch({
   executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
   headless: true,
   args: ["--autoplay-policy=no-user-gesture-required"],
+  // The wait for the file to finish is one protocol call: the default 180 s failed every recording longer than 3 min.
+  protocolTimeout: 3_600_000,
 });
 const page = await browser.newPage();
 const errors = [];
@@ -77,7 +86,7 @@ page.on("pageerror", (e) => errors.push(String(e)));
 page.on("response", (r) => r.status() >= 400 && !r.url().endsWith("/api/mode") // (no server: device mode)
   && errors.push(`${r.status()} ${r.url()}`));
 page.on("console", (m) => m.type() === "error" && !m.text().includes("404") && errors.push(m.text()));
-await page.goto(`http://127.0.0.1:${port}/${query ? `?${query}` : ""}`);
+await page.goto(`${base}/${query ? `?${query}` : ""}`);
 // coi-serviceworker.js reloads the page once to make it cross-origin isolated (threads): wait
 // for the page that comes back, or the next evaluate dies with the old one.
 let before;
