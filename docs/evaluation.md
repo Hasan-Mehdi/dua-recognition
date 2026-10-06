@@ -1,14 +1,136 @@
 # Evaluation
 
-## Ground truth
+Two kinds of test. The **scenario bench** plays many voices through every way people read and
+scores the page's display; since 2026-10-02 it is how changes are judged. The **studio test**,
+DuaPlayer's professional recordings with human line timings, is where the models and the
+tracker were first measured; its tables are further down.
+
+## The scenario bench
+
+[`bench.py`](../scripts/bench.py) builds one grid and scores the phone's display on all of it
+([bench.md](results/bench.md)). Each item is a program over source audio (spans, room tone,
+inserted clips, effects), so its audio is rebuilt exactly and only the models' outputs are
+cached.
+
+- **Voices**, in lanes: `studio`, the DuaPlayer test reciters (6 voices, human line timings);
+  `majlis`, du'a nights streamed from other centres (4; crowds, PA echo); `harvest`, uploaders
+  the [data harvest](results/data_harvest.md) keeps out of all training (97; the CTC teacher's
+  forced alignment, confident lines only); `mafatih`, readings of the 17 texts added from
+  Mafatih (22); `user`, Hasan's own phone sessions (1). 1,990 items, 74 h, 121 voices. Voices
+  are split in half by a hash of the voice into **dev** (tune on it) and **test** (report it).
+- **Scenarios** (24): read as recorded, starting mid-du'a, pauses (4 s, one of 15 s), another
+  voice talking between lines (3-6 s), a salawat between lines, repeating a line, going back
+  1-3 lines, skipping 1-4 ahead, jumping around the du'a, stumbling and restarting a line,
+  switching du'a, a du'a the app doesn't have, slow (0.7×) and fast (1.3×) reading; and
+  conditions: a room, a big hall (RT60 1.4 s), people talking, a fan, another recitation
+  nearby, far from the phone, an overdriven mic, a phone-call codec, a low-bitrate codec, and a
+  combination.
+- **Scored** as a reader would notice it: the share of reading time the highlight is on the
+  reader's line, and on the right word; jumps (to a line two or more away, or another du'a,
+  that the reader isn't on) and early moves (to the next line before the reader) per 10
+  minutes; lost episodes (4 s or more off the line) per 10 minutes; how often a go-back, skip,
+  jump, repeat or restart is followed within 3 s; how much of a pause, talk or salawat the
+  highlight stays put; the du'a found within 10 s; for a du'a the app doesn't have, how often
+  some du'a is on screen anyway; and the line-change lag. Each has a bar for "usable"
+  (`bench.BARS`). No lane meets all of them yet.
+
+### How a change is judged
+
+1. **Tune on the dev voices**, on the whole grid, not on the case that motivated the change.
+2. **Score with `--same-text 8`.** A display counts as right where it shows the same 8 words
+   the reader's du'a reads there, so a correct screen inside a passage several texts share
+   isn't called the wrong du'a, and a second clock, *found ≤10 s\**, starts at the first 8
+   words no other text reads ([finding.md](results/finding.md)).
+3. **Check every bar against a baseline** with `bench.py guard`: the gains and the
+   no-regression guards written down before the jump work ([jumps.md](results/jumps.md)), each
+   PASS or FAIL, per lane, with Hasan's sessions per recording.
+4. **Report the test voices.**
+5. **Confirm on the real page.** [`bench_page.py`](../scripts/bench_page.py) plays one held-out
+   item per scenario through the actual page in headless Chrome at phone speed (Whisper held to
+   at least 1.2 s an update, the CTC model to 150 ms a step), the variants side by side so they
+   share the machine's load.
+
+The commands are in [development.md](development.md#judging-a-change).
+
+### Where things stand
+
+The page as it runs since 2026-10-04 (the phone's Whisper, the tracker with the popularity
+prior, the stream decoder with the next-line rule), on the test voices with `--same-text 8`:
+617 items, 22 h, 55 voices. The `user` lane hashes to dev, so it has no test row.
+
+| lane | on line | right word | jumps /10 min | early /10 min | lost /10 min | follows ≤3 s | stays put | found ≤10 s | found ≤10 s\* | wrong du'a | line lag |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| studio | 89% | 75% | 1.24 | 1.02 | 1.95 | 59% | 89% | 75% | 99% | 0.3% | +0.46 s |
+| majlis | 93% | 68% | 2.51 | 3.72 | 1.12 | 87% | 94% | 100% | 100% | 0.6% | +0.45 s |
+| harvest | 88% | 64% | 2.29 | 1.96 | 2.13 | 74% | 89% | 90% | 92% | 0.7% | +0.47 s |
+| mafatih | 94% | 77% | 0.59 | 1.41 | 0.75 | 87% | 93% | 96% | 96% | 0.1% | +0.50 s |
+| **all** | **91%** | **71%** | **1.49** | **1.75** | **1.49** | **79%** | **92%** | **91%** | **95%** | **0.4%** | **+0.48 s** |
+
+By scenario, reading as recorded is 96% on line with 0.22 jumps per 10 minutes; the weakest
+cells are jumping around the du'a (62% on line, 21.8 jumps per 10 minutes), far from the phone
+(77% on line, found within 10 s 53% of the time), the big hall (82%, 75%), and early moves when
+a reader repeats a line (6.2 per 10 minutes) or someone talks between lines (3.9). The test
+voices were looked at while diagnosing jumps, so they are no longer untouched; the settings
+were chosen on dev ([jumps.md](results/jumps.md)).
+
+How it got here, each step on the held-out voices:
+
+- **The stream decoder** in place of the rule-based follower (2026-10-03; 405 items, before
+  `--same-text`): on line 83% → 87%, right word 61% → 67%, jumps 3.4 → 2.3, early moves
+  3.5 → 2.5 and lost episodes 4.2 → 1.8 per 10 minutes, moves followed within 3 s 58% → 72%,
+  stays put 69% → 88%, line lag 0.43 → 0.41 s; a du'a the app doesn't have shown 21% → 28%, and
+  readers who jump around followed 13 points less often ([bench.md](results/bench.md)).
+- **The popularity prior** at 0.5 (2026-10-03): found within 10 s 88% → 90%, from the first
+  distinctive words 93% → 94%, wrong du'a 0.9% → 0.5%, unknown du'as shown +1 point
+  ([finding.md](results/finding.md)).
+- **The next-line rule** (2026-10-04): jumps 1.94 → 1.49 and early moves 2.37 → 1.75 per 10
+  minutes, line lag median 0.42 → 0.48 s; in the majlis and harvest lanes 0.1-0.25 more lost
+  episodes per 10 minutes and about a point fewer exact words. It missed three of its
+  pre-registered bars by a little and was adopted anyway ([jumps.md](results/jumps.md)).
+
+With the true words of each window in place of Whisper's transcript (`score --asr truth`, a
+perfect ear), the du'a is found within 10 s 91% of the time instead of 86%, and 25-30 points
+more often in echo, distance, clipping and babble; jumps and early moves barely change. So
+finding the du'a in bad rooms is mostly hearing, and wrong moves are the display's own
+([finding.md](results/finding.md)).
+
+## Known limits
+
+- **Du'as the app doesn't have** are often shown as one it does. On the bench's unknown
+  texts, some du'a is on screen 35% (dev) to 49% (test) of the time; on an earlier, narrower
+  set it was 14-28%. These are mostly ziyarat that share whole lines with texts the app has,
+  and some recordings run into a text it does have, so part of it is fair
+  ([bench.md](results/bench.md), [unknown_dua.md](results/unknown_dua.md)).
+- **Shared passages.** Ayat al-Kursi is read word for word in three texts (Sahifa 54,
+  Namaz-e-Wahshat and an Eid al-Mubahila text), and the shown du'a can flip between them while
+  the passage lasts. The bench counts those screens as right, but the reader sees the title
+  change. A rule that waits before switching is off: it held Ramadan day 16 over Iftitah
+  through their long shared opening on a test recording ([jumps.md](results/jumps.md)).
+- **Echo and distance.** In a big hall or far from the phone both models hear little (see the
+  perfect-ear result above). A phone Whisper retrained with heavier synthetic reverb gained in
+  those synthetic cells but not on real majlis audio, and was not adopted
+  ([finding.md](results/finding.md)).
+- **Hasan's own voice is identified more slowly than reciters'.** In a screening of real-page
+  runs from a cold start mid-du'a, 14 of 21 recordings by reciters and congregations named the
+  du'a in 6-7 s, while his own phone readings took 16 and 27 s; two of his Kumayl sessions were
+  never identified on the phone ([phone_latency.md](results/phone_latency.md)). On the bench
+  his lane is a single voice, so how far this holds for other ordinary readers isn't measured.
+- **Readers who jump around the du'a** are followed within 3 s about half the time.
+- **Word-level labels are automatic** (see [reliability checks](#reliability-checks)).
+
+## The studio test
+
+### Ground truth
 
 Ground truth comes from [DuaPlayer](https://www.duaplayer.org), where reciters upload
 recordings together with a hand-recorded start time for every line. That gives
 **39 recordings (10 h) of 22 du'as and ziyarat by 12 reciters**, each second labelled
-with the line being recited. The tracker searches all 505 texts (DuaPlayer's 91, plus
-414 from duas.pro and duas.org), so the 483 without test recordings act as distractors.
+with the line being recited. The tables in this section were measured with 505 texts
+(DuaPlayer's 91, plus 414 from duas.pro and duas.org), so the 483 without test recordings act
+as distractors, before the popularity prior and the stream decoder. The 17 texts added from
+Mafatih since then leave the bench's existing grid unchanged ([bench.md](results/bench.md)).
 
-## Method
+### Method
 
 Everything below is measured on **held-out reciters** (6 reciters, 16 recordings, 4 h):
 nobody in the test set was used to tune the tracker or to train an ASR model. The split is
@@ -16,7 +138,7 @@ by reciter, not by recording ([`splits.py`](../src/dua_recognition/splits.py)). 
 evaluation replays each recording exactly as the live system hears it (6 s windows,
 1 s hop) and compares the displayed line with the true line once per second.
 
-## Line following
+### Line following
 
 | front end | line | ±1 line | refrain lines | wrong du'a shown | median lag | du'a found @3 s | @10 s |
 |---|---|---|---|---|---|---|---|
@@ -51,9 +173,11 @@ but kept for identification. On the 91-text corpus, a simulated phone-in-a-room 
 augmentation wins almost all of that back, 84.9% in the room
 ([comparison.md](results/comparison.md)).
 
-## Word following
+### Word following
 
-Lines are half of it; the highlight is on a word. Scored every 0.1 s against forced-aligned
+Lines are half of it; the highlight is on a word. This section is the rule-based follower
+(`follower.py`, now `?follower=rules`); the stream decoder that replaced it on the page is
+measured on the scenario bench above. Scored every 0.1 s against forced-aligned
 word timings on the test reciters, at the phone's delay (Whisper's result shown 1.2 s after its
 window), and on the same recordings with a 4 s pause inserted after every third line
 ([phone_follower.md](results/phone_follower.md)):
@@ -61,7 +185,7 @@ window), and on the same recordings with a 4 s pause inserted after every third 
 | display | word exact | ±1 word | line steps back /min | next line shown in pauses | line change after the human mark |
 |---|---|---|---|---|---|
 | Whisper + tracker, predicted forward, gliding (until 2026-09-30) | 34.7% | 83.9% | 0.51 | 53.3% | +0.28 s |
-| **CTC word follower on the phone's small CTC model** | **79.3%** | **98.1%** | **0.00** | **1.6%** | +0.63 s |
+| **rule-based CTC word follower on the phone's small CTC model** | **79.3%** | **98.1%** | **0.00** | **1.6%** | +0.63 s |
 
 The follower lights the word whose letters were just heard, so it is never early (0.7% of
 line changes more than 0.3 s before the human mark, against 20.7%) and doesn't run on when the
@@ -101,7 +225,12 @@ before it, [test_whisper-base-aug-v4.md](results/test_whisper-base-aug-v4.md)).
 | A CTC word follower (server, wav2vec2) | [follower.md](results/follower.md) |
 | The word follower on the phone: a small CTC model taught by wav2vec2 | [phone_follower.md](results/phone_follower.md) |
 | The follower faster on the phone; the last word; repeats | [phone_latency.md](results/phone_latency.md) |
+| When the reciter stops, the page should too | [stops.md](results/stops.md) |
 | Lines read out of order: a benchmark, and finding a reader who jumps | [out_of_order.md](results/out_of_order.md) |
+| Thousands of hours of uploaded recitations, labelled by their audio | [data_harvest.md](results/data_harvest.md), [data_harvest_numbers.md](results/data_harvest_numbers.md) |
+| One bench for every way people read; the stream decoder; texts added from Mafatih | [bench.md](results/bench.md) |
+| Finding the du'a: a perfect ear, same-text scoring, the popularity prior, retrains on the harvest | [finding.md](results/finding.md) |
+| Fewer jumps and early moves: the next line on evidence; shared passages (not shipped) | [jumps.md](results/jumps.md) |
 | Noha (Urdu, Arabic, Farsi, English): language ID and identification | [noha_lid.md](results/noha_lid.md), [noha_match.md](results/noha_match.md) |
 
 ## Reliability checks
@@ -114,8 +243,9 @@ rules written down before its results ([plan](research/claude-execution-plan-202
   discards. `legacy` stays the default; `?gate=energy_assisted` is opt-in.
 - [follower_reliability.md](results/follower_reliability.md): where the word follower's
   line lag comes from.
-- [small_ctc.md](results/small_ctc.md): a smaller CTC model as the follower's front end.
-  wav2vec2 stays.
+- [small_ctc.md](results/small_ctc.md): Tilawa's FastConformer as the follower's front end.
+  wav2vec2 stayed; since 2026-10-01 the follower runs on a small student of it instead
+  ([phone_follower.md](results/phone_follower.md)).
 
 Human review of word-level labels is still open: the review bundles are exported
 ([`review_bundle.py`](../scripts/review_bundle.py)) but not yet annotated, so all
@@ -123,9 +253,20 @@ word-level numbers rest on automatic alignments.
 
 ## Reproduce
 
+The studio test:
+
 ```bash
 python scripts/fetch_duaplayer.py                         # recordings and line timings (local cache)
 python scripts/transcribe_windows.py --model large-v3-turbo
 python scripts/evaluate.py                                # test reciters
 python scripts/evaluate.py --split train --tune           # tracker grid search (train only)
+```
+
+The scenario bench (its sources come from local caches and the harvest; see
+[development.md](development.md#judging-a-change)):
+
+```bash
+python scripts/bench.py sources && python scripts/bench.py build   # sources, item programs, truth
+python scripts/bench.py asr                                        # GPU: Whisper rows, quiet, CTC frames
+python scripts/bench.py score --name now_test --display stream --split test --same-text 8
 ```

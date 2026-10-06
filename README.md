@@ -25,9 +25,9 @@
 
 ## Features
 
-- **Names the du'a** from anywhere in a recitation, among 505 du'as and ziyarat, usually within 10 s
+- **Names the du'a** from anywhere in a recitation, among 522 du'as and ziyarat, usually within 10 s
 - **Follows line and word**, with the Arabic, transliteration and English side by side
-- **Handles real recitation:** repeated refrains, shared passages, long melodic notes and pauses
+- **Handles real recitation:** repeated refrains, shared passages, words drawn out for seconds, pauses, and readers who go back, repeat a line or stop to talk
 - **Private on-device mode:** fine-tuned Whisper runs in the phone's browser, a new result about once a second, so no audio leaves the phone
 - **Majlis mode:** one phone drives other phones or a projector through a QR code
 - **Easy to read:** five Arabic typefaces, adjustable text size, word or line highlighting, favourites
@@ -55,7 +55,19 @@ listens to an 8 s window instead of Whisper's padded 30 s, which makes it four t
 faster in the browser. On everyday, non-professional voices its character error rate is
 24.1%, down from 30.0% without the synthetic voices
 ([synthetic_voices.md](docs/results/synthetic_voices.md),
-[phone_speed.md](docs/results/phone_speed.md)). → [Full evaluation](docs/evaluation.md)
+[phone_speed.md](docs/results/phone_speed.md)).
+
+The table is 16 studio recordings by 6 held-out reciters, read in order. The scenario bench
+([bench.md](docs/results/bench.md)) adds what people actually do: 121 voices (studio reciters,
+uploads, du'a nights and Hasan's own phone) read with pauses, talk or a salawat between lines,
+lines repeated, gone back to or skipped, and heard in a hall, far from the phone or over a
+phone call (24 scenarios, 74 h). On its held-out voices the current page has the highlight on
+the reader's line 91% of the time and names the du'a within 10 s 91% of the time; per 10
+minutes it jumps away from the reader (two lines or more, or to another du'a) 1.5 times and
+moves on to the next line early 1.8 times ([jumps.md](docs/results/jumps.md)). It does worse
+with echo or a distant phone, on passages several du'as share, and on du'as it doesn't have,
+which it often shows as one it does ([known limits](docs/evaluation.md#known-limits)).
+→ [Full evaluation](docs/evaluation.md)
 
 ## Quick start
 
@@ -80,44 +92,48 @@ run and uses a GPU when one is available.
 
 ```mermaid
 flowchart LR
-    A(["recitation"]) -- "last 6 s,<br/>every second" --> B["<b>Whisper</b><br/>server, or in<br/>the phone's browser"]
-    B --> C["<b>Align</b><br/>against all 505 texts<br/>136,503 words in ~3 ms"]
-    C --> D["<b>HMM tracker</b><br/>predicts where<br/>the reciter is"]
+    A(["recitation"]) -- "last 6 s,<br/>every 1-2 s" --> B["<b>Whisper</b><br/>server, or in<br/>the phone's browser"]
+    B --> C["<b>Align</b><br/>against all 522 texts<br/>140,803 words in ~3 ms"]
+    C --> D["<b>HMM tracker</b><br/>which du'a,<br/>which line"]
     D --> E(["du'a · line · word"])
-    A -- "last 3 s,<br/>~4 times a second" --> F["<b>CTC letters</b><br/>every 20 ms"]
-    F --> G["<b>Word follower</b>"]
-    D -- "du'a, anchor" --> G
+    A -- "last 2 s,<br/>every 0.1 s" --> F["<b>CTC letters</b><br/>every 20 ms"]
+    F --> G["<b>Stream decoder</b><br/>reading moves<br/>over the whole du'a"]
+    D -- "du'a, line<br/>probabilities" --> G
     G --> E
 ```
 
-A single window's text can't tell repeats of a refrain apart. The tracker predicts where the
-reciter should be by now, the way score followers track sheet music, and that settles which
-repeat it is. It adapts to the reciter's tempo and waits through pauses. On the phone, a small
-model also hears letters as they are said, and the word follower lights the word just heard
-rather than a prediction of it.
+Whisper's transcript of the last few seconds is matched against every word of every text. The
+tracker combines those matches with where the reciter should be by now at their own pace, which
+gives a probability for each du'a and each line; a du'a is shown once it holds 70%, and texts
+people recite more often start a little likelier. Predicting the position is also what tells
+the repeats of a refrain apart and keeps the place through pauses. On the phone, a small model
+hears letters as they are said, and a stream decoder follows them through the du'a word by
+word, allowing for what readers do: going back, repeating a line, skipping, stopping to talk.
+It lights the word just heard rather than a prediction of it. The server engine is the same page
+with these two models on the server instead of the phone.
 
 <p align="center">
   <img src="docs/explainer.gif" width="640" alt="Animated explainer: evidence from one window matches all 14 repetitions of a refrain; multiplying by the tracker's prediction leaves only the right one">
-  <br><sub>One window matches all 14 repeats of a refrain. The tracker's prediction leaves only the right one.</sub>
+  <br><sub>One of the hard cases: a window's text matches all 14 repeats of a refrain, and the tracker's prediction leaves only the right one. <a href="docs/explainer.mp4">The full explainer</a>, narrated, starts from scratch: how the app names the du'a, then follows the line and the word.</sub>
 </p>
 
 ## Documentation
 
 | | |
 |---|---|
-| [How it works](docs/how-it-works.md) | the problem, alignment, tracker and phone model |
-| [Evaluation](docs/evaluation.md) | method, full results, per-du'a tables |
-| [Development](docs/development.md) | setup, configuration, training and export, debug sessions, code map |
+| [How it works](docs/how-it-works.md) | the problem, alignment, tracker, phone model and word follower |
+| [Evaluation](docs/evaluation.md) | the scenario bench, full results, per-du'a tables, known limits |
+| [Development](docs/development.md) | setup, configuration, judging a change, training and export, debug sessions, code map |
 | [Research notes](docs/results/) | one write-up per experiment, negative results included |
 
 ### Repository layout
 
 ```
-src/dua_recognition/   text normalization, corpus alignment, HMM tracker, streaming pipeline
+src/dua_recognition/   text normalization, corpus alignment, HMM tracker, word followers, streaming pipeline
 app/                   FastAPI server (streaming, majlis rooms) and terminal demo
 web/                   the app, with server or on-device engine (Transformers.js, ONNX Runtime Web)
-scripts/               data collection, training, export, evaluation
-data/duas/             505 reference texts, one JSON file per du'a
+scripts/               data collection, training, export, evaluation, the scenario bench
+data/duas/             522 reference texts, one JSON file per du'a
 tests/                 pytest suite
 ```
 
@@ -136,7 +152,7 @@ attached, which records what the app heard and showed. Run the tests with
 | **Models** | [Whisper](https://github.com/openai/whisper) · [tarteel-ai/whisper-base-ar-quran](https://huggingface.co/tarteel-ai/whisper-base-ar-quran), the base of the phone model · [wav2vec2-large-xlsr-53-arabic-quran](https://huggingface.co/rabah2026/wav2vec2-large-xlsr-53-arabic-quran-v_final), the base of the word aligner · [Silero VAD](https://github.com/snakers4/silero-vad) |
 | **Runtimes** | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and [CTranslate2](https://github.com/OpenNMT/CTranslate2) on the server · [Transformers.js](https://github.com/huggingface/transformers.js) and [ONNX Runtime Web](https://onnxruntime.ai) in the browser |
 | **Evaluation** | [RetaSy's Quranic audio dataset](https://huggingface.co/datasets/RetaSy/quranic_audio_dataset), for everyday voices |
-| **Design** | [Manim Community](https://www.manim.community/) for the explainer · Amiri, Aref Ruqaa, Scheherazade New, Noto and EB Garamond typefaces |
+| **Design** | [Manim Community](https://www.manim.community/) for the explainer, [OmniVoice](https://huggingface.co/k2-fsa/OmniVoice) for its voice · Amiri, Aref Ruqaa, Scheherazade New, Noto and EB Garamond typefaces |
 
 ## License
 
