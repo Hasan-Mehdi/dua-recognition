@@ -1126,10 +1126,14 @@ def replay(it: dict) -> list[tuple] | None:
     fa, fc, fq = asr_paths(it, _W["asr_tag"], _W["ctc_tag"])
     if not (fa.exists() and fc.exists() and fq.exists()):
         return None
-    # The tracker's replay depends only on its config, the ASR rows and the corpus: cached, so
-    # follower variants re-run in a fraction of the time.
+    # The tracker's replay depends only on its config, the ASR rows and the corpus (its words and,
+    # with the popularity prior on, its recording counts): cached, so follower variants re-run in a
+    # fraction of the time.
     if "tkey" not in _W:
-        ref = hashlib.sha1(" ".join(w.text for w in ix.words).encode("utf-8")).hexdigest()
+        corpus = " ".join(w.text for w in ix.words)
+        if cfg.popularity:
+            corpus += repr([d.recordings for d in ix.duas])
+        ref = hashlib.sha1(corpus.encode("utf-8")).hexdigest()
         _W["tkey"] = hashlib.sha1(repr((_ConfigKey(cfg), _W["asr_tag"], _W["delay"], ref)).encode()).hexdigest()[:12]
     tc = BENCH / "tracker_cache" / _W["tkey"] / f"{it['id']}.pkl"
     if tc.exists() and tc.stat().st_mtime >= fa.stat().st_mtime:

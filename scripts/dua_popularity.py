@@ -11,7 +11,8 @@ no other text reads (a line holding a PASSAGE-word run found in no other text). 
 labeller has to pick one of the texts that share a passage word for word, so a recording
 of Ayat al-Kursi alone would otherwise count for whichever of its three texts it picked
 (Sahifa 54 got 126 that way). The Mafatih blocks the corpus has taken in count under
-their corpus ids (their book lines are checked the same way).
+their corpus ids (their book lines are checked the same way, against every text but the
+corpus text made from them).
 
     python scripts/dua_popularity.py
 """
@@ -37,13 +38,14 @@ PASSAGE = 8  # words: a run this long found in another text is a shared passage
 MIN_OWN = 3  # placed lines of the text's own words a recording needs to count for it
 
 
-def _own_lines(texts: dict[str, list[tuple[int, list[str]]]]) -> dict[str, set[int]]:
-    """text -> its lines holding a PASSAGE-word run no other text has."""
+def _own_lines(texts: dict[str, list[tuple[int, list[str]]]], same: dict[str, str]) -> dict[str, set[int]]:
+    """text -> its lines holding a PASSAGE-word run no other text has. Texts `same` maps to one id
+    are one text (a Mafatih block and the corpus text made from it share every run)."""
     words = {k: [w for _, ws in segs for w in ws] for k, segs in texts.items()}
     seen: dict[tuple, set[str]] = {}
     for k, w in words.items():
         for e in range(PASSAGE - 1, len(w)):
-            seen.setdefault(tuple(w[e - PASSAGE + 1 : e + 1]), set()).add(k)
+            seen.setdefault(tuple(w[e - PASSAGE + 1 : e + 1]), set()).add(same.get(k, k))
     out = {}
     for k, segs in texts.items():
         w, own, i = words[k], set(), 0
@@ -63,7 +65,7 @@ def main() -> None:
     for b in json.loads(EXTRA.read_text(encoding="utf-8")):
         if b["dua_id"] in block:
             texts[b["dua_id"]] = [(s["segment_id"], normalize(s["arabic"]).split()) for s in b["segments"]]
-    own = _own_lines(texts)
+    own = _own_lines(texts, block)
     recs: Counter = Counter()
     for p in LABELS.glob("*/*.json"):
         if p.name.endswith(".captions.json"):

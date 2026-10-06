@@ -55,6 +55,52 @@ tracker.py and tracker.js (parity-tested).
 1.0 found more, but in Hasan's two Namaz-e-Wahshat sessions it held the more recited text sharing
 Ayat al-Kursi after the passage ended. 0.5 is the default since `e8e3589`.
 
+### The added Mafatih texts were undercounted (fixed 2026-10-05)
+
+Each of the 17 texts added on 10-03 was in the count twice: as the book block the harvest labels
+name (`mafatih-0065`) and as the corpus text made from it (`mafatih-munajat-khaifeen`). The two
+share every 8-word run, so neither had lines of its own, and a recording counted only where the
+two spellings happened to differ. Kha'ifeen, Rajeen, Mutawassileen and Zahideen counted 0
+(Kha'ifeen has 36 recordings that read 3+ of its own lines); the other ten Munajat lost 2-9 each;
+Sabah, 'Adeelah and 'Asharat were unaffected. `_own_lines` now treats a block and its corpus text
+as one text. Found from Hasan's phone session `uuc5` (Kha'ifeen, 2026-10-04): with 0 recordings
+the tracker started Kha'ifeen about 28 times less likely than Kumayl, with 36 about 4.6 times.
+
+The bench's tracker cache key now includes the recording counts when the prior is on
+(`bench.replay`): before, new counts would have reused runs computed with the old ones. The cache
+for today's defaults (`f728116d4de1`, built from 10-03 12:15, before the counts were last rebuilt
+and before three tracker commits) was slightly stale: on 54 dev items, 5 of 7,876 tracker updates
+differed in position, the rest only in a float. Both runs below computed every item fresh.
+
+Today's defaults (`--display stream --same-text 8`), old counts vs fixed (results `popold_dev`,
+`popnew_dev`, `popold_test`, `popnew_test`). Acceptance, written before the runs: every guard bar
+of `bench.py guard` on dev, the mafatih lane's found≤10s* not lower, wrong du'a not up in any lane.
+
+| | dev (1,373 items) | test (617 items) |
+|---|---:|---:|
+| guard bars | 48 of 48 pass | 41 of 41 pass |
+| found≤10s*, all | 92.7% → 92.7% | 95.1% → 95.1% |
+| found≤10s*, mafatih lane | 98.1% → 98.1% | 95.9% → 95.9% |
+| Munajat items found sooner / later | 13 / 0 of 199 | 18 / 0 of 94 |
+| other items found later | 5 (one Kumayl source) | 1 (a mid-start of Munajat al-Ta'ibeen) |
+| s a Munajat was held while another text was recited | 3 → 3 | 1 → 1 |
+| wrong du'a, every lane | unchanged | unchanged |
+
+Every change is one tracker update (1 s): the Kha'ifeen, Zahideen (dev) and Kha'ifeen,
+Mutawassileen, Zahideen (test) sources are found 1 s sooner in each scenario built on them. The
+Kumayl source starts 1 s later because its first position report sat at the edge of
+`min_dua_confidence` (0.70 at 3 s) and the Munajat now take a sliver of the prior. The jump
+"gain" bars fail, as expected for a change that does not touch jumps. Shipped: counts and
+`web/corpus.json` (only `rec` of the 14 texts changes). The test voices were looked at in the jump
+work.
+
+On the page it changes nothing for the session that found it: replaying one capture of `uuc5`
+at phone speed (`page_replay.mjs --asr-ms 1500 --ctc-ms 200`) shows Kha'ifeen at 53 s with either
+counts, 19 s after "إلهي أتراك". That delay is hearing: the phone model heard "العفو أترك بعنا عن
+إمان بك" for "إلهي أتراك بعد الإيمان بك", and Kha'ifeen stays below the bar to be shown until "أم
+مع رجائي لرحمتك وصفحك تحرمني" is heard well. In both runs the page offers it as a guess at about
+40 s.
+
 ## The phone CTC student retrained on the harvest (h1): not adopted
 
 `ctc-student-base-h1` failed its pre-registration last night on component metrics; on the whole
