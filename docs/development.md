@@ -28,9 +28,11 @@ python app/demo.py recitation.mp3        # terminal version (no argument = micro
 | environment variable | default | |
 |---|---|---|
 | `DUA_ENGINE` | `device` once `web/models/` has the [phone models](#on-device-no-server-nothing-leaves-the-phone), else `server` | where the speech models run. `device`: in the browser; the server only serves files, rooms and debug sessions. `server`: on the server, which the page streams its audio to ([server_engine.md](results/server_engine.md)). Either way the page runs the tracker, the stream decoder and everything else |
-| `DUA_ASR_MODEL` | `models/whisper-base-syn-v5-ctx8ft-ct2` (the page's Whisper) if present, else `large-v3-turbo` | the server engine's Whisper: any faster-whisper model name or CTranslate2 directory |
+| `DUA_ASR_MODEL` | `models/whisper-turbo-srv2-ct2` (large-v3-turbo fine-tuned in full at 8 s) if present and there's a GPU, else `models/whisper-base-syn-v5-ctx8ft-ct2` (the page's Whisper) if present, else `large-v3-turbo` | the server engine's Whisper: any faster-whisper model name or CTranslate2 directory ([server_profile.md](results/server_profile.md)) |
 | `DUA_ASR_DEVICE` | GPU if available | `cpu` or `cuda` |
-| `DUA_CTC_MODEL` | `models/ctc-student-base-v6` | the server engine's CTC model, on the page's 2 s windows: a student folder or any Hugging Face CTC model, e.g. `models/wav2vec2-quran-dua-voices` |
+| `DUA_CTC_MODEL` | `models/ctc-student-base-v6` | the server engine's CTC model: a student folder, a `server_ctc.py` model, or any Hugging Face CTC model, e.g. `models/wav2vec2-quran-dua-voices` |
+| `DUA_CTC_WINDOW` | `3.0` | seconds of audio per CTC window in the server engine (the student was trained on 3 s; the phone sends 2 s) |
+| `DUA_SERVER_PROFILE` | `app/server.py` `SERVER_PROFILE` | a JSON file with the server engine's settings for the page: `ctcHop`, stream decoder `sc` and tracker `tc` by their JavaScript names (`{}` = the phone's) |
 | `DUA_CTC_DEVICE` | GPU if available | `cpu` or `cuda` for a student (on this PC one 2 s window takes 21 ms on the CPU, 29 ms on the GPU) |
 | `DUA_SESSIONS` | `data/sessions` | where uploaded debug sessions go (replays: somewhere else) |
 

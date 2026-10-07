@@ -58,16 +58,31 @@ def test_transcribe_and_frames(server):
     with TestClient(server.app) as client, client.websocket_connect("/ws/ear") as ws:
         ws.send_text(json.dumps({"ch": "ctc", "type": "load"}))
         ready = ws.receive_json()
-        assert ready["type"] == "ready" and ready["meta"]["window_s"] == 2.0 and ready["gen"] is None
+        assert ready["type"] == "ready" and ready["meta"]["window_s"] == server.EAR_CTC_WINDOW and ready["gen"] is None
+        T = (int(server.EAR_CTC_WINDOW * SR) // 160 + 1) // 2  # the student's frames for one window
         ws.send_text(json.dumps({"ch": "ear", "type": "at", "total": 0}))
         for i in range(0, y.size, 800):
             ws.send_bytes((y[i : i + 800] * 32768).astype("<i2").tobytes())
         ws.send_text(json.dumps({"ch": "ctc", "type": "frames", "id": y.size, "gen": 3}))
         head = ws.receive_json()
-        assert (head["type"], head["id"], head["gen"], head["T"], head["C"]) == ("frames", y.size, 3, 100, 43)
-        lp = np.frombuffer(ws.receive_bytes(), "<f2").reshape(100, 43).astype(np.float32)
+        assert (head["type"], head["id"], head["gen"], head["T"], head["C"]) == ("frames", y.size, 3, T, 43)
+        lp = np.frombuffer(ws.receive_bytes(), "<f2").reshape(T, 43).astype(np.float32)
         assert np.isfinite(lp).all() and np.allclose(np.logaddexp.reduce(lp, axis=1), 0, atol=0.05)
         ws.send_text(json.dumps({"ch": "asr", "type": "transcribe", "id": y.size, "gen": 3, "voiceDb": None, "dt": 1.0}))
         text = ws.receive_json()
         assert text["type"] == "text" and text["id"] == y.size and text["gen"] == 3
         assert text["gate"]["policy"] == "legacy" and text["quiet"] is not None and "paused" in text
+
+
+def test_mode_carries_the_server_profile(server, tmp_path, monkeypatch):
+    """/api/mode hands the page the server engine's profile (CTC step, stream decoder and tracker
+    settings by their JavaScript names); DUA_SERVER_PROFILE replaces it."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(server, "ENGINE", "server")
+    client = TestClient(server.app)  # outside `with`: the startup that loads Whisper doesn't run
+    assert client.get("/api/mode").json()["profile"] == server.SERVER_PROFILE
+    f = tmp_path / "profile.json"
+    f.write_text(json.dumps({"ctcHop": 0.05, "sc": {"hop": 0.05}}), encoding="utf-8")
+    monkeypatch.setenv("DUA_SERVER_PROFILE", str(f))
+    assert client.get("/api/mode").json()["profile"] == {"ctcHop": 0.05, "sc": {"hop": 0.05}}

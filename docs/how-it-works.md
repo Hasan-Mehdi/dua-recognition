@@ -3,13 +3,14 @@
 ![Animated explainer: evidence from one window matches all 14 repetitions of a refrain; multiplying by the tracker's prediction leaves only the right one](explainer.gif)
 
 *The tracker at one second of a held-out recording. The [full video](explainer.mp4) is a
-narrated walkthrough, with subtitles, for someone who knows nothing about it yet: the two models
-and their two jobs, first how Whisper and the probabilities over every du'a find the du'a, then
-how the letter model and the stream decoder follow the line and the word, on a held-out reciter
-going back a line, with the real app shown following the same recording between the steps.
-Every number in it is real
-([source](anim/explainer.py), made with [Manim](https://www.manim.community/), voiced by
-[OmniVoice](https://huggingface.co/k2-fsa/OmniVoice)).*
+narrated walkthrough, with subtitles, for someone who knows nothing about it yet. It follows one
+recitation of Du'a al-Iftitah, by a reciter the models never trained on, from start to end: how a
+phone hears and what the two models are, how the du'a gets named, how the highlight follows the
+word, and what the app does when he stops, when someone talks to him and when he goes back two
+lines, with the real app shown on the same recording and his recitation heard under the narration
+(Abu Thar Al-Halawaji's recording, from [DuaPlayer](https://www.duaplayer.org)). The pictures are the page's own decisions
+on that reading, replayed ([source](anim/explainer.py), made with
+[Manim](https://www.manim.community/), voiced by [OmniVoice](https://huggingface.co/k2-fsa/OmniVoice)).*
 
 ## The problem
 
@@ -48,8 +49,11 @@ mic ─┬─▶ 6 s window, every 1-2 s ─▶ Whisper ─▶ align against eve
 Whisper and the tracker find the du'a and the line; the small CTC model and the stream decoder
 place the word ([word by word](#word-by-word)). On the phone Whisper runs every second until the
 du'a is found and every 2 s once the decoder is placing words. The server engine runs the same
-page with its two models on the server instead of the phone, and Whisper every second
-([server_engine.md](results/server_engine.md)).
+page with its models on the server instead of the phone, and Whisper every second
+([server_engine.md](results/server_engine.md)). Since 2026-10-07 the server has its own: a
+large-v3-turbo fine-tuned in full, the CTC model on 3 s windows every 0.05 s, and a profile of
+decoder and tracker settings the page takes from the server
+([server_profile.md](results/server_profile.md)).
 
 ### 1. Transcribe
 

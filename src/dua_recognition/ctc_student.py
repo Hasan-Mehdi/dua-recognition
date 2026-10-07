@@ -189,9 +189,14 @@ def check_mel(seconds: float = 3.0) -> float:
 
 
 def load_ctc(name: str):
-    """A student folder (student.pt) or a Hugging Face CTC model, behind the same window interface."""
+    """A student folder (student.pt), a server model (server_ctc.pt) or a Hugging Face CTC model, behind the
+    same window interface."""
     if (Path(name) / "student.pt").exists():
         return StudentCtc(name)
+    if (Path(name) / "server_ctc.pt").exists():  # a bigger model for the server engine (server_ctc.py)
+        from .server_ctc import ServerCtc
+
+        return ServerCtc(name)
     from .ctc import CtcModel
 
     return CtcModel(name)

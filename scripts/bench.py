@@ -65,7 +65,10 @@ SR = 16000
 WINDOW = 6.0  # Whisper window, s (the page's)
 ASR_TAG = "whisper-base-syn-v5-ctx8ft"
 CTC_TAG = "ctc-student-base-v6"
-CTC_WINDOW, CTC_HOP = 2.0, 0.1
+# CTC window (s) and hop: the page's 2 s every 0.1 s; DUA_BENCH_CTC_WINDOW / _HOP score a server model on others
+# (its own cache, ctc/<model>_w<window>_h<hop>; spawned scorers inherit the variables)
+CTC_WINDOW = float(os.environ.get("DUA_BENCH_CTC_WINDOW", "2.0"))
+CTC_HOP = float(os.environ.get("DUA_BENCH_CTC_HOP", "0.1"))  # (the stream decoder: --sc hop=... to match)
 MIN_LINES = 6  # a source is a run of at least this many consecutive, fully timed lines
 MORE_OOC = 40  # out-of-corpus readings from uploaders outside the held-out side (sources_harvest)
 MAFATIH_MIN = 3  # voices per added text in lane mafatih, from other uploaders where the held-out side is short
@@ -1114,12 +1117,21 @@ def asr_paths(it: dict, asr_tag: str, ctc_tag: str) -> tuple[Path, Path, Path]:
             BENCH / "quiet" / f"{it['id']}.npz")
 
 
+def _save(path: Path, write) -> None:
+    """write(file) to a temporary name, then rename: a pass stopped mid-write leaves no file that a
+    rerun would take as done."""
+    tmp = path.with_name(path.name + ".part")
+    with open(tmp, "wb") as f:
+        write(f)
+    os.replace(tmp, path)
+
+
 def cmd_asr(args) -> None:
     os.environ.setdefault("DUA_ASR_DEVICE", args.device)
     from dua_recognition.asr import _quiet, _tail_activity, transcribe_batch
     from dua_recognition.ctc_student import load_ctc
 
-    items = load_items(args.scenarios)
+    items = load_items(args.scenarios, split=args.split)
     asr_tag, ctc_tag = Path(args.model).name.removesuffix("-ct2"), Path(args.ctc_model).name
     todo = []
     for it in items:
@@ -1138,7 +1150,7 @@ def cmd_asr(args) -> None:
         y = render(it)
         if not fq.exists():
             qt, qv = quiet_track(y)
-            np.savez(fq, t=qt, q=qv)
+            _save(fq, lambda f: np.savez(f, t=qt, q=qv))
         if not fa.exists():
             times = list(range(1, int(len(y) / SR) + 1))
             wins = [y[int(max(0, s - WINDOW) * SR) : int(s * SR)] for s in times]
@@ -1149,14 +1161,14 @@ def cmd_asr(args) -> None:
             for w in wins:
                 probs, db, floor = _tail_activity(w, 3.0)
                 quiet.append(3.0 if probs is None else round(_quiet(probs, db, floor, 6.0), 3))
-            fa.write_text(json.dumps({"rows": [[s, x] for s, x in zip(times, texts)], "quiet": quiet},
-                                     ensure_ascii=False), encoding="utf-8")
+            body = json.dumps({"rows": [[s, x] for s, x in zip(times, texts)], "quiet": quiet}, ensure_ascii=False)
+            _save(fa, lambda f: f.write(body.encode("utf-8")))
         if not fc.exists():
             ctc = ctc or load_ctc(args.ctc_model)
             end = len(y) / SR
             times = [round((j + 1) * CTC_HOP, 3) for j in range(int((end + 1e-6) // CTC_HOP))]
             arr, lens, _, _ = ctc.windows(y, times, CTC_WINDOW, 32)
-            np.savez(fc, lp=arr, n_frames=lens, t=np.array(times))
+            _save(fc, lambda f: np.savez(f, lp=arr, n_frames=lens, t=np.array(times)))
         done_s += len(y) / SR
         el = time.time() - t_start
         print(f"[{k + 1}/{len(todo)}] {it['id']:28s} {len(y) / SR:6.0f} s audio  "
@@ -1222,7 +1234,14 @@ def _same_text(shown: list, truth_word: list, ix, k: int) -> list:
     du'a reads (Ayat al-Kursi in three texts, the salam passages of the ziyarat): no display
     could tell those apart, and the reader sees their own words."""
     passages, out = _W["passages"], []
+    within = os.environ.get("DUA_SAME_WITHIN") == "1"  # (score --same-within)
     for s, tw in zip(shown, truth_word):
+        if (within and s is not None and tw is not None and s[0] == ix.dua_ids[ix.word_dua[tw]]
+                and s[1] != int(ix.word_segment[tw]) and (win := _window(ix, s[2], k)) is not None
+                and win == _window(ix, tw, k)):
+            # another copy of the reader's words in their own du'a (Tawassul's block after each name)
+            out.append((s[0], int(ix.word_segment[tw]), tw))
+            continue
         if s is None or tw is None or s[0] == ix.dua_ids[ix.word_dua[tw]]:
             out.append(s)
             continue
@@ -1997,7 +2016,10 @@ def cmd_score(args) -> None:
         elif ";" in v:
             sc_kw[k] = tuple(float(x) for x in v.split(";"))
         else:
-            sc_kw[k] = int(v) if k in ("line_steps", "next_steps", "gate_words") else float(v)
+            sc_kw[k] = int(v) if k in ("line_steps", "next_steps", "gate_words", "ctc_every", "shared_words", "shared_near",
+                                       "beam_margin", "ctc_lines") else float(v)
+    if getattr(args, "same_within", False):
+        os.environ["DUA_SAME_WITHIN"] = "1"
     init = (cfg_kw, fw_kw, asr_tag, ctc_tag, args.delay, args.follow_delay, args.display, sc_kw, args.same_text,
             args.practice)
     results = {}
@@ -2262,6 +2284,7 @@ def main() -> None:
     a.add_argument("--ctc-model", default="models/ctc-student-base-v6")
     a.add_argument("--device", default="cuda")
     a.add_argument("--limit", type=int, default=0)
+    a.add_argument("--split", choices=["dev", "test", "all"], default="all")
     s = sub.add_parser("score")
     s.add_argument("scenarios", nargs="*")
     s.add_argument("--name", required=True)
@@ -2276,6 +2299,8 @@ def main() -> None:
     s.add_argument("--compare", help="a previous --name to diff against")
     s.add_argument("--split", choices=["dev", "test", "all"], default="all", help="voices: tune on dev, report test")
     s.add_argument("--lane", help="only this lane (studio, majlis, harvest, user)")
+    s.add_argument("--same-within", action="store_true",
+                   help="with --same-text: a display on another copy of the reader's k words in their own du'a counts too")
     s.add_argument("--same-text", type=int, default=0, metavar="K",
                    help="count the display right where it shows the same K words as the reader's du'a there "
                         "(a passage several texts share); 0 = only the reader's own du'a counts")

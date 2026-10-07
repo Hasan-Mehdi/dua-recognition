@@ -57,9 +57,22 @@ export const STREAM_DEFAULTS = {
   // recitation the tracker can't place is likely a text it doesn't know, not a lull.
   lapseVoice: 4.0,
   lapseQuiet: 1.0,
+  // ...counting only the steps the frames themselves put at least this share off the text (talk,
+  // salawat, something else; 0 = every step with voice). A reader the CTC model still hears in
+  // the du'a while Whisper's transcripts fail (a drawn-out last line, session 5o18) keeps the
+  // du'a until lapseS.
+  lapseOff: 0.0,
+  // ...and not the steps the frames put at least this share in the salawat chain (2 = every step): a long
+  // salawat between lines lost the tracker's du'a and, after lapseVoice, the reader's place.
+  lapseIntj: 2.0,
   // A du'a change counts once the tracker has held the new du'a this long (0 = at once): texts that
   // share a passage flip the tracker's du'a for a moment.
   switchS: 2.0,
+  // ...and none of it counts while the tracker's last sharedWords words in the other du'a are the letters
+  // ending at a word within sharedNear words of the shown one (0 = off): the two read the same passage here.
+  sharedWords: 0,
+  sharedNear: 8,
+  sharedAfter: 10.0, // ...once the shown du'a has been on screen this long (s)
   // The beam (0 = off): only lines holding beam of the belief, beamMargin lines either side, the shown
   // word's line and the tracker's proposals (proposeMass, +-1) are updated (stream_follower.py _prune).
   beam: 1e-6,
@@ -72,12 +85,22 @@ export const STREAM_DEFAULTS = {
   ctcWindow: 1.5,
   ctcLines: 3,
   ctcMargin: 4.0,
+  // ...and when one line beats every other but its neighbours by ctcSure nats and isn't the shown line or
+  // next to it, ctcPushP of the belief moves to just after its best word (0 = off): after a far jump the
+  // frames name the new line within a second, but the belief never got there before the tracker did.
+  ctcPushP: 0.0,
+  ctcSure: 4.0,
   // The tracker's push (stream_follower.py): the shown word unchanged stuckS s while the reader makes
   // sound, the tracker pushWords or more words ahead (or on a later line): pushP of the belief moves
   // to just before the tracker's word. In echo the frames blur and the belief stalls; Whisper still knows.
   stuckS: 1.5,
   pushWords: 3,
   pushP: 0.0, // off: more false jumps when readers go back, no gain in echo
+  // Copies (stream_follower.py): lines with the same words are one line for the display, which weighs
+  // each word by the belief summed over its copies and shows the copy nearest the word on screen (the
+  // next-line gate still weighs each line by its own belief).
+  copies: false,
+  copySplit: 0.5, // ...the nearest copy only while no copy holds this share of their summed belief
 };
 
 const dd0 = (f) => f._dua(f.dua);
@@ -113,10 +136,13 @@ export class StreamFollower {
     this.candN = 0;
     this.gateS = 0; // audio (s) a move into the next line has leant on the frames, steps in a row
     this.tStep = null; // the last step's time
-    this.tStream = null;
+    this.fStream = null;
     this.lastAnchorT = null;
     this.lapseSince = null;
     this.lapseVoice = 0;
+    this.off = 1; // the last step's share off the text (posterior)
+    this.intj = 0; // ...and in the salawat chain (with lapseIntj < 1)
+    this.duaT = null; // when the decoder started on its du'a
     this.switchTo = null;
     this.switchSince = null;
     this.active = null;
@@ -193,8 +219,23 @@ export class StreamFollower {
     }
     const startWord = new Int32Array(J).fill(-1);
     for (let w = 0; w < nw; w++) startWord[wordFirst[w]] = w;
+    // per word: the same word of the first line with its letters (copies)
+    const wordCopy = new Int32Array(nw);
+    for (let w = 0; w < nw; w++) wordCopy[w] = w;
+    const firstOf = new Map();
+    let hasCopies = false;
+    for (let k = 0; k < nl; k++) {
+      let key = Array.prototype.join.call(r.subarray(lineLo[k], lineHi[k]), ",") + "|";
+      for (let w = lineFirstWord[k]; w <= lineLastWord[k]; w++) key += `${wordFirst[w] - lineLo[k]},`;
+      if (!firstOf.has(key)) firstOf.set(key, k);
+      const f = firstOf.get(key);
+      if (f !== k) {
+        hasCopies = true;
+        for (let w = lineFirstWord[k]; w <= lineLastWord[k]; w++) wordCopy[w] = w - lineFirstWord[k] + lineFirstWord[f];
+      }
+    }
     const dd = { lo, J, nw, nl, r, wordOf, wordFirst, wordLast, lineOfWord, lineFirstWord, lineLastWord, diff,
-      midCost, lineStartLetter, logWordsInLine, lineLo, lineHi, startWord };
+      midCost, lineStartLetter, logWordsInLine, lineLo, lineHi, startWord, wordCopy, hasCopies };
     this.duas.set(d, dd);
     return dd;
   }
@@ -465,6 +506,49 @@ export class StreamFollower {
     for (let k = 0; k < dd.nl; k++) if (perLine[k] > best) best = perLine[k];
     const order = Array.from({ length: dd.nl }, (_, k) => k).sort((a, b) => perLine[b] - perLine[a]);
     this.ctcProp = order.slice(0, cfg.ctcLines).filter((k) => perLine[k] >= best - cfg.ctcMargin);
+    if (cfg.ctcPushP > 0) this._framePush(dd, sc, perLine);
+  }
+
+  // cfg.ctcPushP: the frames' sure line gets that share of the belief (stream_follower.py _frame_push).
+  _framePush(dd, sc, perLine) {
+    const cfg = this.cfg;
+    const nl = dd.nl;
+    for (let k = 0; k < nl; k++) if (!Number.isFinite(perLine[k])) return; // a broken window: no push
+    let bl = 0;
+    for (let k = 1; k < nl; k++) if (perLine[k] > perLine[bl]) bl = k;
+    let other = -Infinity;
+    let any = false;
+    for (let k = 0; k < nl; k++) {
+      if (Math.abs(k - bl) <= 1) continue;
+      any = true;
+      if (perLine[k] > other) other = perLine[k];
+    }
+    if (any && perLine[bl] - other < cfg.ctcSure) return;
+    if (this.word != null && this.ix.wordDua[this.word] === this.dua
+        && Math.abs(bl - dd.lineOfWord[this.word - dd.lo]) <= 1) return;
+    // the line's best word: the highest end score over its letters, word by word (first best)
+    let bw = dd.lineFirstWord[bl];
+    let bs = -Infinity;
+    for (let w = dd.lineFirstWord[bl]; w <= dd.lineLastWord[bl]; w++) {
+      let ws = -Infinity;
+      for (let j = dd.wordFirst[w]; j <= dd.wordLast[w]; j++) if (sc[j] > ws) ws = sc[j];
+      if (ws > bs) {
+        bs = ws;
+        bw = w;
+      }
+    }
+    const j = dd.wordLast[bw];
+    const parts = [this.st.L, this.st.B, this.st.F, this.st.IL, this.st.IB];
+    let m = -Infinity;
+    for (const x of parts) for (let i = 0; i < x.length; i++) if (x[i] > m) m = x[i];
+    let z = 0;
+    for (const x of parts) for (let i = 0; i < x.length; i++) z += Math.exp(x[i] - m);
+    const logz = m + Math.log(z);
+    const p = cfg.ctcPushP;
+    const lq = Math.log(1 - p);
+    for (const x of parts) for (let i = 0; i < x.length; i++) x[i] += lq;
+    this.st.B[j] = lae(this.st.B[j], Math.log(p) + logz);
+    if (this.active) for (let i = Math.max(0, bl - 1); i <= Math.min(nl - 1, bl + 1); i++) this.active[i] = 1;
   }
 
   // Move pushP of the belief to the blank before word w (its line made active).
@@ -516,6 +600,47 @@ export class StreamFollower {
   }
 
   // Belief per word of the du'a ({pw}), and the share off the text (filler, interjection: pf).
+  // cfg.sharedWords: the letters of the words ending at `other` (another du'a) also end at a word near `cur`
+  // in the shown du'a (stream_follower.py _shared_here).
+  _sharedHere(cur, other) {
+    const ix = this.ix;
+    const cfg = this.cfg;
+    const fl = this.firstLetter;
+    const db = ix.wordDua[other];
+    if (other - cfg.sharedWords + 1 < ix.duaWordSpan[db][0]) return false;
+    const a = fl[other - cfg.sharedWords + 1];
+    const b = fl[other + 1];
+    const n = b - a;
+    const [lo, hi] = ix.duaWordSpan[this.dua];
+    for (let w = Math.max(lo, cur - cfg.sharedNear); w < Math.min(hi, cur + cfg.sharedNear + 1); w++) {
+      const e = fl[w + 1];
+      if (e - n < fl[lo]) continue;
+      let same = true;
+      for (let i = 0; i < n && same; i++) same = ix.letters[e - n + i] === ix.letters[a + i];
+      if (same) return true;
+    }
+    return false;
+  }
+
+  // The share of the belief in the interjection chain (the salawat between lines).
+  _interjShare(st) {
+    const dd = this._dua(this.dua);
+    const { L, B, F, IL, IB } = st;
+    const K = this.chain.K;
+    if (!K) return 0;
+    let m = NEG;
+    for (let j = 0; j < L.length; j++) m = Math.max(m, lae(L[j], B[j]));
+    for (let k = 0; k < F.length; k++) m = Math.max(m, F[k]);
+    for (let i = 0; i < IL.length; i++) m = Math.max(m, IL[i], IB[i]);
+    let z = 0;
+    let pi = 0;
+    for (let j = 0; j < L.length; j++) z += Math.exp(lae(L[j], B[j]) - m);
+    for (let k = 0; k < F.length; k++) z += Math.exp(F[k] - m);
+    for (let i = 0; i < IL.length; i++) pi += Math.exp(IL[i] - m) + Math.exp(IB[i] - m);
+    z += pi;
+    return z > 0 ? pi / z : 0;
+  }
+
   posterior(st) {
     const dd = this._dua(this.dua);
     const { L, B, F, IL, IB } = st;
@@ -571,7 +696,9 @@ export class StreamFollower {
         this.lapseSince = t;
         this.lapseVoice = 0;
       }
-      if (quietNow != null && quietNow < cfg.lapseQuiet) this.lapseVoice += cfg.hop;
+      if (quietNow != null && quietNow < cfg.lapseQuiet && this.off >= cfg.lapseOff && this.intj < cfg.lapseIntj) {
+        this.lapseVoice += cfg.hop;
+      }
       if (t - this.lapseSince > cfg.lapseS || this.lapseVoice > cfg.lapseVoice) {
         this.reset();
         return null;
@@ -583,6 +710,13 @@ export class StreamFollower {
     if (d === this.dua) {
       this.switchTo = null;
       this.switchSince = null;
+    } else if (this.dua != null && cfg.switchS > 0 && cfg.sharedWords && this.word != null
+        && this.duaT != null && t - this.duaT >= cfg.sharedAfter && this._sharedHere(this.word, hmmWord)) {
+      this.switchTo = null;
+      this.switchSince = null;
+      hmmWord = this.word;
+      lineMass = null;
+      d = this.dua;
     } else if (this.dua != null && cfg.switchS > 0) {
       if (this.switchTo !== d) {
         this.switchTo = d;
@@ -596,22 +730,25 @@ export class StreamFollower {
     }
     if (d !== this.dua) {
       this._start(d, hmmWord, lineMass);
-      this.tStream = null;
+      this.fStream = null;
+      this.duaT = t;
     }
     if (anchorT != null && anchorT !== this.lastAnchorT) {
       this.lastAnchorT = anchorT;
       if (lineMass) this._trackerEvidence(lineMass);
     }
-    const la = Math.round(cfg.lookahead / cfg.frameS);
-    const hop = Math.round(cfg.hop / cfg.frameS);
+    const la = Math.floor(cfg.lookahead / cfg.frameS + 0.5);
+    const hop = Math.floor(cfg.hop / cfg.frameS + 0.5);
     const commitEnd = T - la;
+    // committed frames counted from the session's start (a 0.05 s step is 2.5 frames: stream_follower.py)
+    const fNow = Math.floor((t - cfg.lookahead) / cfg.frameS + 1e-6);
     let from;
-    if (this.tStream == null) from = Math.max(0, commitEnd - hop);
+    if (this.fStream == null) from = Math.max(0, commitEnd - hop);
     else {
-      const k = Math.round((t - cfg.lookahead - this.tStream) / cfg.frameS);
+      const k = fNow - this.fStream;
       from = k > 0 ? Math.max(0, commitEnd - k) : commitEnd;
     }
-    this.tStream = t - cfg.lookahead;
+    this.fStream = fNow;
     if (quietThen == null && quietNow != null) quietThen = quietNow - cfg.lookahead;
     const qThen = quietThen != null && quietThen >= cfg.quietS;
     const qNow = quietNow != null && quietNow >= cfg.quietS;
@@ -636,6 +773,8 @@ export class StreamFollower {
     const tent = StreamFollower._copy(this.st);
     if (T > commitEnd) this._advance(tent, frames, C, Math.max(0, commitEnd), T, qNow);
     const { pw, pf } = this.posterior(tent);
+    this.off = pf;
+    if (cfg.lapseIntj < 1) this.intj = this._interjShare(tent);
     const dd = this._dua(this.dua);
     if (pf > 0.5) {
       this.cand = null;
@@ -643,10 +782,37 @@ export class StreamFollower {
       this.gateS = 0;
       return this.word;
     }
-    let best = 0;
-    for (let w = 1; w < dd.nw; w++) if (pw[w] > pw[best]) best = w;
-    const w = dd.lo + best;
     const cur = this.word;
+    let pwd = pw; // the display's belief per word (copies pooled)
+    if (cfg.copies && dd.hasCopies) pwd = StreamFollower._poolCopies(dd, pw);
+    let best = 0;
+    for (let w = 1; w < dd.nw; w++) if (pwd[w] > pwd[best]) best = w;
+    if (cfg.copies && dd.hasCopies) {
+      // the copy with the most belief, unless none holds copySplit of it (split, as through a repeated
+      // block): then of the copies holding at least half the best's, the nearest the word on screen
+      const c = dd.wordCopy[best];
+      let n = 0;
+      let top = -1;
+      for (let w = 0; w < dd.nw; w++) {
+        if (dd.wordCopy[w] !== c) continue;
+        n++;
+        if (top < 0 || pw[w] > pw[top]) top = w;
+      }
+      best = top;
+      if (cur != null && ix.wordDua[cur] === this.dua && n > 1 && pw[top] < cfg.copySplit * pwd[top]) {
+        const rel = cur - dd.lo;
+        let bestScore = Infinity;
+        for (let w = 0; w < dd.nw; w++) {
+          if (dd.wordCopy[w] !== c || !(pw[w] >= 0.5 * pw[top])) continue;
+          const score = Math.abs(w - rel) * 2 + (w < rel ? 1 : 0); // ties: ahead
+          if (score < bestScore) {
+            bestScore = score;
+            best = w;
+          }
+        }
+      }
+    }
+    const w = dd.lo + best;
     if (cur == null || ix.wordDua[cur] !== this.dua) {
       this.word = w;
       return w;
@@ -674,7 +840,7 @@ export class StreamFollower {
       needP = cfg.lineP;
       needN = cfg.lineSteps;
     }
-    if (pw[best] < needP) {
+    if (pwd[best] < needP) {
       this.cand = null;
       this.candN = 0;
       this.gateS = 0;
@@ -684,7 +850,7 @@ export class StreamFollower {
     this.cand = w;
     let gate = true;
     if (intoNext && cfg.nextMargin > 0) {
-      const pg = cfg.gateTentative ? pw : this.posterior(this.st).pw;
+      const pg = cfg.gateTentative ? pw : this.posterior(this.st).pw; // each line by its own belief (copies)
       const m = this._nextMargin(dd, lineC, pg, best);
       this.gateS = m >= -cfg.nextSlack ? this.gateS + dt : 0;
       gate = m >= cfg.nextMargin || this.gateS >= cfg.nextHold - 1e-3;
@@ -698,6 +864,15 @@ export class StreamFollower {
       this.gateS = 0;
     }
     return this.word;
+  }
+
+  // Each word's belief summed over its copies (cfg.copies), summed in word order as numpy's bincount does.
+  static _poolCopies(dd, pw) {
+    const pc = new Float64Array(dd.nw);
+    for (let w = 0; w < dd.nw; w++) pc[dd.wordCopy[w]] += pw[w];
+    const out = new Float64Array(dd.nw);
+    for (let w = 0; w < dd.nw; w++) out[w] = pc[dd.wordCopy[w]];
+    return out;
   }
 
   // Nats by which the frames prefer the words of line k+1 read so far (to upTo) over the same

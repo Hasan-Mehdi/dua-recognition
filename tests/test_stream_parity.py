@@ -85,28 +85,43 @@ def test_numba_equals_numpy():
 @pytest.mark.parametrize("extra", [{}, {"trackerWeight": 0.0, "nextSteps": 1}, {"quietPen": 0.0, "interjection": ""},
                                    {"nextMargin": 3.0, "nextHold": 0.5, "gateWords": 2},
                                    {"nextMargin": 2.0, "nextHold": 0.3, "nextSlack": 0.5, "gateTentative": False},
-                                   {"_flip": True}, {"_flip": True, "nextMargin": 0.0}])
+                                   {"_flip": True}, {"_flip": True, "nextMargin": 0.0},
+                                   {"lapseVoice": 0.5}, {"lapseVoice": 0.5, "lapseOff": 0.5},
+                                   {"copies": True, "_dua": 2}, {"copies": True, "_dua": 2, "gateTentative": False},
+                                   {"lapseVoice": 0.5, "lapseIntj": 0.5}, {"ctcPushP": 0.2, "ctcSure": 2.0},
+                                   {"ctcPushP": 0.2, "ctcSure": 4.0, "copies": True, "_dua": 2},
+                                   {"_flip": True, "sharedWords": 2}, {"_flip": True, "sharedWords": 1, "sharedNear": 40},
+                                   {"_flip": True, "sharedWords": 1, "sharedNear": 40, "sharedAfter": 0.0},
+                                   {"hop": 0.05, "_steps": (2, 3), "lineSteps": 3, "nextSteps": 3}])
 def test_js_stream_matches_python(tmp_path, extra):
     extra = dict(extra)
     flip = extra.pop("_flip", False)  # the tracker reports another du'a for a while (a shared passage)
+    dua_i = extra.pop("_dua", 1)  # 2: Tawassul, read from inside its repeated block (copies)
+    step_pat = extra.pop("_steps", (5,))  # frames between windows, in turn: (2, 3) = steps of 0.05 s
     all_duas = load_all()
     corpus = {k: all_duas[k] for k in DUAS}
     ix = CorpusIndex(corpus)
     rng = random.Random(1)
-    lo, hi = ix.dua_word_span[1]
-    words = list(range(lo + 5, lo + 90))
-    words[40:40] = list(range(lo + 20, lo + 32))  # the reciter goes back two lines and reads on
-    frames = _frames(ix, words, rng, salawat_after={lo + 60})
+    lo, hi = ix.dua_word_span[dua_i]
+    words = list(range(lo + 5, lo + 90)) if dua_i == 1 else list(range(lo + 388, lo + 470))
+    back = (20, 32) if dua_i == 1 else (400, 412)
+    words[40:40] = list(range(lo + back[0], lo + back[1]))  # the reciter goes back two lines and reads on
+    frames = _frames(ix, words, rng, salawat_after={lo + (60 if dua_i == 1 else 420)})
     steps, anchors, quiet, masses_at = [], [], [], []
     true_at = np.repeat(words, int(np.ceil(len(frames) / len(words))))[: len(frames)]
-    for end in range(100, len(frames), 5):  # windows of 2 s every 0.1 s
+    ends, end, i = [], 100, 0
+    while end < len(frames):  # windows of 2 s every 0.1 s (or as step_pat says)
+        ends.append(end)
+        end += step_pat[i % len(step_pat)]
+        i += 1
+    for end in ends:
         a = int(true_at[end - 1]) + rng.choice([-2, -1, 0, 0, 0, 1, 3])
         steps.append(end)
         anchors.append(min(max(lo, a), hi - 1))
         if 600 <= end < 700:
             anchors[-1] = None  # the tracker lost the du'a for a while
         if flip and 300 <= end < 450:
-            lo2, hi2 = ix.dua_word_span[2]
+            lo2, hi2 = ix.dua_word_span[2 if dua_i == 1 else 1]
             anchors[-1] = lo2 + (anchors[-1] - lo) % (hi2 - lo2)
         tail = frames[max(0, end - 25) : end]
         quiet.append(round(float((tail[:, 0] > tail[:, 1:].max(axis=1)).mean()) * 0.6, 3))
@@ -120,7 +135,13 @@ def test_js_stream_matches_python(tmp_path, extra):
                           interjections=(js_cfg["interjection"],) if js_cfg["interjection"] else (),
                           next_margin=js_cfg.get("nextMargin", 3.0), next_hold=js_cfg.get("nextHold", 0.3),
                           next_slack=js_cfg.get("nextSlack", 1.0),
-                          gate_words=js_cfg.get("gateWords", 2), gate_tentative=js_cfg.get("gateTentative", True))
+                          gate_words=js_cfg.get("gateWords", 2), gate_tentative=js_cfg.get("gateTentative", True),
+                          lapse_voice=js_cfg.get("lapseVoice", 4.0), lapse_off=js_cfg.get("lapseOff", 0.0),
+                          copies=js_cfg.get("copies", False), lapse_intj=js_cfg.get("lapseIntj", 2.0),
+                          ctc_push_p=js_cfg.get("ctcPushP", 0.0), ctc_sure=js_cfg.get("ctcSure", 4.0),
+                          shared_words=js_cfg.get("sharedWords", 0), shared_near=js_cfg.get("sharedNear", 8),
+                          shared_after=js_cfg.get("sharedAfter", 10.0),
+                          hop=js_cfg.get("hop", 0.1), line_steps=js_cfg.get("lineSteps", 2))
 
     def mass_fn(anchor):
         if anchor is None:

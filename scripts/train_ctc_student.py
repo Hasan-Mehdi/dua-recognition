@@ -113,9 +113,15 @@ class Crops(torch.utils.data.Dataset):
     """(set, row) -> a crop of `window_s` seconds: audio, teacher frames, letters inside."""
 
     def __init__(self, items: list[tuple[str, int]], window_s: float, train: bool, room_p: float, seed: int = 0,
-                 phone_p: float = 0.0, teach: Path = TEACH, gate_p: float = 0.0):
+                 phone_p: float = 0.0, teach: Path = TEACH, gate_p: float = 0.0, hall_p: float = 0.0,
+                 hall_voices: float = 0.0, shift: int = 0):
         self.items, self.window_s, self.train, self.room_p, self.seed = items, window_s, train, room_p, seed
-        self.phone_p, self.teach, self.gate_p = phone_p, teach, gate_p
+        self.phone_p, self.teach, self.gate_p, self.hall_p = phone_p, teach, gate_p, hall_p
+        self.hall_voices = hall_voices
+        # targets `shift` frames later than the audio (the teacher's frame f + shift at the model's frame
+        # f, the letters up to `shift` frames past the crop's end): a model that says each letter that
+        # much sooner, so the display waits less for it (peak-first distillation)
+        self.shift = shift
         self._open = None
 
     def _lazy(self):
@@ -135,14 +141,26 @@ class Crops(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.items)
 
+    # frames the model emits for a crop of this many samples (a wav2vec2 model: (n - 400) // 320 + 1)
+    frames_fn = staticmethod(n_frames)
+
     def __getitem__(self, i):
         from finetune_whisper import augment
 
+        # i, or (i, seconds) from a sampler that picks each batch's window length
+        i, window_s = i if isinstance(i, tuple) else (i, self.window_s)
         s, k = self.items[i]
         rows, a, bank = self._lazy()[s]
         rng = random.Random((self.seed << 32) ^ (i * 2654435761) ^ (int(time.time() * 1e6) if self.train else 0))
         y = bank.window(rows[k])
-        W = int(self.window_s * SR)
+        # a seat in a hall: the whole window is reverberated before the crop, so the crop starts in
+        # the tail of what came before, as a live window does
+        hall = bool(self.train and self.hall_p and rng.random() < self.hall_p)
+        if hall:
+            from halls import hall_aug
+
+            y = hall_aug(y, rng, self.hall_voices)
+        W = int(window_s * SR)
         tf = a["frames"][a["offsets"][k] : a["offsets"][k + 1]].astype(np.float32)  # teacher [Tt, C]
         T = tf.shape[0]
         lo, hi = a["loff"][k], a["loff"][k + 1]
@@ -163,16 +181,16 @@ class Crops(torch.utils.data.Dataset):
         seg = y[src0 : end_f * FRAME]
         x[W - seg.size :] = seg  # silence before the recording's start
         if self.train:
-            x = augment(x, rng, self.room_p) if np.abs(x).max() > 0 else x
+            x = augment(x, rng, self.room_p) if np.abs(x).max() > 0 and not hall else x
             if self.phone_p and rng.random() < self.phone_p:
                 x = phone_channel(x, rng)
             if self.gate_p and rng.random() < self.gate_p:
                 x = noise_gate(x, rng)
         # Teacher frames for student frames 0..F-1 (blank where the crop is before the start).
-        F = n_frames(W)
+        F = self.frames_fn(W)
         tgt = np.full((F, N_COLS), -30.0, dtype=np.float32)
         tgt[:, 0] = 0.0
-        idx = np.arange(F) + start_f
+        idx = np.arange(F) + start_f + self.shift
         ok = (idx >= 0) & (idx < T)
         tgt[ok] = tf[idx[ok]]
         # Letters emitted inside the crop. The window's label leaves out words cut at its
@@ -188,12 +206,12 @@ class Crops(torch.utils.data.Dataset):
                 j0, j1 = int(heard[0]), int(heard[-1])
                 lo_f, hi_f = int(first[j0]), int(first[j1])
                 letterish = np.exp(tf[:, 1:]).max(1) > 0.5
-                s0, e0 = max(0, start_f), min(T, end_f)
+                s0, e0 = max(0, start_f + self.shift), min(T, end_f + self.shift)
                 outside = letterish[s0 : max(s0, lo_f - 2)].any() or letterish[min(e0, hi_f + 6) : e0].any()
                 if not outside:
                     keep = np.zeros(letters.size, dtype=bool)
                     keep[j0 : j1 + 1] = True
-                    inside = keep & (first >= s0) & (first < end_f)
+                    inside = keep & (first >= s0) & (first < end_f + self.shift)
                     lab = letters[inside]
                     ok_lab = True
         return torch.tensor(x), torch.tensor(tgt), torch.tensor(lab), bool(ok_lab)
@@ -245,6 +263,12 @@ def main() -> None:
     ap.add_argument("--teacher", default="", help="teacher cache under data/cache/ (default ctc_student)")
     ap.add_argument("--init", help="start from this trained student (models/<name>) instead of --base's encoder")
     ap.add_argument("--gate", type=float, default=0.0, help="share of crops through noise_gate()")
+    ap.add_argument("--hall", type=float, default=0.0,
+                    help="share of windows heard in a hall through a PA, with a crowd (halls.hall_aug)")
+    ap.add_argument("--hall-voices", type=float, default=0.0,
+                    help="share of --hall crowds that are real people talking (Common Voice, training side)")
+    ap.add_argument("--shift", type=int, default=0,
+                    help="frames of anticipation: targets this many 20 ms frames after the audio (Crops.shift)")
     args = ap.parse_args()
     teach = ROOT / "data" / "cache" / args.teacher if args.teacher else TEACH
 
@@ -286,8 +310,9 @@ def main() -> None:
         opt, lambda s: min(1.0, (s + 1) / args.warmup) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / steps))))
     ctc_loss = torch.nn.CTCLoss(blank=0, reduction="sum", zero_infinity=True)
 
-    ds = Crops(items, args.window, True, args.room, args.seed, phone_p=args.phone, teach=teach, gate_p=args.gate)
-    vds = Crops(val_items, args.window, False, 0.0, teach=teach)
+    ds = Crops(items, args.window, True, args.room, args.seed, phone_p=args.phone, teach=teach, gate_p=args.gate,
+               hall_p=args.hall, hall_voices=args.hall_voices, shift=args.shift)
+    vds = Crops(val_items, args.window, False, 0.0, teach=teach, shift=args.shift)  # judged on its own targets
     # Val: whole 6 s windows too (the window's own text), for a CER comparable with the teacher's.
     from finetune_whisper import AudioBank, load_rows
 

@@ -25,6 +25,9 @@ with `popularity` 0.5; the CTC student `ctc-student-base-v6-w2` (2 s windows, 0.
 chunks; `ctc-student-tiny-v6-w2` on slow phones); the stream decoder with the next-line rule
 (`StreamConfig.next_margin` 3.0, `next_hold` 0.3). `?follower=rules` brings back `follower.js`,
 `?sc=k:v` and `?tc=k:v` set stream-decoder and tracker options by their JavaScript names.
+The server engine runs its own: `whisper-turbo-srv2` (when present, with a GPU), the student on 3 s
+windows every 0.05 s, and `SERVER_PROFILE` in app/server.py, which the page takes from `/api/mode`
+(docs/results/server_profile.md; the new decoder rules are off by default on the phone).
 
 ## Tests
 

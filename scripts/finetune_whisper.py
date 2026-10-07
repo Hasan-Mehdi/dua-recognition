@@ -148,6 +148,60 @@ def cer(refs: list[str], hyps: list[str]) -> float:
     return jiwer.cer(refs, hyps)
 
 
+def whisper_processor(base: str, context: float):
+    """The processor for --base, its feature extractor cut to --context seconds as main() cuts the model."""
+    from transformers import WhisperFeatureExtractor, WhisperProcessor
+
+    proc = WhisperProcessor.from_pretrained(base, language="arabic", task="transcribe")
+    proc.tokenizer.set_prefix_tokens(language="arabic", task="transcribe", predict_timestamps=False)
+    if context < 30:
+        fe = proc.feature_extractor
+        proc.feature_extractor = WhisperFeatureExtractor(feature_size=fe.feature_size, sampling_rate=SR,
+                                                         hop_length=fe.hop_length, chunk_length=int(context),
+                                                         n_fft=fe.n_fft)
+    return proc
+
+
+def make_batch(rows, train_mode, args, bank, proc, rng, start_id):
+    """Audio (augmented when training), log-mel features and label ids for one batch, on the CPU."""
+    from halls import hall_aug
+
+    wav = [bank.window(r) for r in rows]
+    if train_mode:
+        wav = [speed_perturb(x, rng) if rng.random() < args.speed else x for x in wav]
+        wav = [hall_aug(x, rng, args.hall_voices) if args.hall and rng.random() < args.hall else
+               augment(x, rng, args.room, args.room_rt60) for x in wav]
+    feats = proc.feature_extractor(wav, sampling_rate=SR, return_tensors="pt").input_features
+    if train_mode and args.vtlp:
+        feats = vtlp(feats, rng, args.vtlp)
+    if train_mode and args.specaug:
+        feats = spec_augment(feats, rng)
+    labels = proc.tokenizer([r["text"] for r in rows], padding=True, return_tensors="pt")
+    ids = labels.input_ids.masked_fill(labels.attention_mask == 0, -100)
+    if (ids[:, 0] == start_id).all():
+        ids = ids[:, 1:]  # the model prepends decoder_start itself
+    return feats, ids
+
+
+class _Batches(torch.utils.data.Dataset):
+    """Training batches made in worker processes (--workers): each opens the audio and processor itself."""
+
+    def __init__(self, chunks, args, start_id, seed):
+        self.chunks, self.args, self.start_id, self.seed = chunks, args, start_id, seed
+        self._open = None
+
+    def __len__(self):
+        return len(self.chunks)
+
+    def __getitem__(self, b):
+        if self._open is None:
+            paths = sorted({r.get("audio") for c in self.chunks for r in c if r.get("audio")})
+            self._open = (AudioBank(paths), whisper_processor(self.args.base, self.args.context))
+        bank, proc = self._open
+        rng = random.Random((self.seed << 20) ^ b)
+        return make_batch(self.chunks[b], True, self.args, bank, proc, rng, self.start_id)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", default="openai/whisper-small")
@@ -160,6 +214,11 @@ def main() -> None:
     ap.add_argument("--room", type=float, default=0.0, help="share of training windows given room reverb + noise")
     ap.add_argument("--room-rt60", type=lambda v: tuple(float(x) for x in v.split(",")), default=(0.5, 0.5),
                     metavar="LO,HI", help="the room's reverberation time, uniform in [LO, HI] s (halls: 0.3,1.5)")
+    ap.add_argument("--hall", type=float, default=0.0,
+                    help="share of training windows heard from a seat in a hall through a PA, with a crowd "
+                         "(halls.hall_aug: RT60 0.4-3 s, 1-4 loudspeakers) instead of --room")
+    ap.add_argument("--hall-voices", type=float, default=0.0,
+                    help="share of --hall crowds that are real people talking (Common Voice, training side)")
     ap.add_argument("--data", default="", help="training set version suffix, e.g. v2 -> train_v2.jsonl / val_v2.jsonl")
     ap.add_argument("--speed", type=float, default=0.0, help="share of windows speed-perturbed (0.9-1.1x)")
     ap.add_argument("--vtlp", type=float, default=0.0, help="share of windows given vocal tract length perturbation")
@@ -178,9 +237,16 @@ def main() -> None:
                     help="audio context: Whisper pads every input to 30 s, so a 6 s window costs the encoder "
                          "five times its length. Shorter = a smaller Whisper (max_source_positions = 50 per "
                          "second, the feature extractor's chunk_length to match) that the phone runs faster")
+    ap.add_argument("--optim", choices=["adamw", "adamw8bit"], default="adamw",
+                    help="adamw8bit (bitsandbytes): a quarter of AdamW's state, so turbo trains in full on 16 GB")
+    ap.add_argument("--workers", type=int, default=0, help="processes preparing batches (0: in the training loop)")
+    ap.add_argument("--eval-every", type=int, default=0, help="also evaluate (and keep the best) every N steps")
+    ap.add_argument("--max-steps", type=int, default=0, help="stop after this many steps (the schedule still spans --epochs)")
     args = ap.parse_args()
 
     from transformers import WhisperForConditionalGeneration, WhisperProcessor, get_linear_schedule_with_warmup
+
+    from halls import hall_aug
 
     name = args.name or f"{args.base.split('/')[-1]}-dua"
     out = ROOT / "models" / name
@@ -218,7 +284,8 @@ def main() -> None:
     proc = WhisperProcessor.from_pretrained(args.base, language="arabic", task="transcribe")
     tok = proc.tokenizer
     tok.set_prefix_tokens(language="arabic", task="transcribe", predict_timestamps=False)
-    model = WhisperForConditionalGeneration.from_pretrained(args.base)
+    # float32 master weights whatever the checkpoint was saved in (whisper-turbo-dua is float16)
+    model = WhisperForConditionalGeneration.from_pretrained(args.base, dtype=torch.float32)
     n_pos = int(round(args.context * 50))  # encoder frames: 2 mel frames (10 ms each) per position
     if n_pos < model.config.max_source_positions:
         # The encoder's positional embeddings are fixed sinusoids, so the first n_pos rows
@@ -264,19 +331,7 @@ def main() -> None:
         model.print_trainable_parameters()
 
     def batch_of(rows, train_mode):
-        wav = [bank.window(r) for r in rows]
-        if train_mode:
-            wav = [speed_perturb(x, rng) if rng.random() < args.speed else x for x in wav]
-            wav = [augment(x, rng, args.room, args.room_rt60) for x in wav]
-        feats = proc.feature_extractor(wav, sampling_rate=SR, return_tensors="pt").input_features
-        if train_mode and args.vtlp:
-            feats = vtlp(feats, rng, args.vtlp)
-        if train_mode and args.specaug:
-            feats = spec_augment(feats, rng)
-        labels = tok([r["text"] for r in rows], padding=True, return_tensors="pt")
-        ids = labels.input_ids.masked_fill(labels.attention_mask == 0, -100)
-        if (ids[:, 0] == start_id).all():
-            ids = ids[:, 1:]  # the model prepends decoder_start itself
+        feats, ids = make_batch(rows, train_mode, args, bank, proc, rng, start_id)
         return feats.cuda(), ids.cuda()
 
     @torch.no_grad()
@@ -299,15 +354,41 @@ def main() -> None:
     loss0, cer0 = evaluate(val)
     print(f"before: val loss {loss0:.3f}  val CER {cer0:.1%}", flush=True)
 
-    opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=0.01)
+    params = [p for p in model.parameters() if p.requires_grad]
+    if args.optim == "adamw8bit":
+        import bitsandbytes as bnb
+
+        opt = bnb.optim.AdamW8bit(params, lr=args.lr, weight_decay=0.01)
+    else:
+        opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.01)
     steps = args.epochs * math.ceil(len(train) / args.batch)
     sched = get_linear_schedule_with_warmup(opt, args.warmup, steps)
     model.train()
     step, t0, best = 0, time.time(), None
+
+    def keep_if_best(tag):
+        nonlocal best
+        vloss, vcer = evaluate(val)
+        print(f"{tag}: val loss {vloss:.3f}  val CER {vcer:.1%}", flush=True)
+        if best is None or vcer < best:
+            best = vcer
+            model.save_pretrained(out / "adapter" if args.lora else out)
+            proc.save_pretrained(out)
+            proc.feature_extractor.to_json_file(out / "preprocessor_config.json")  # for export_onnx.py
+            print(f"  saved -> {out.relative_to(ROOT)}", flush=True)
+
+    stop = False
     for epoch in range(args.epochs):
         rng.shuffle(train)
-        for i in range(0, len(train), args.batch):
-            feats, ids = batch_of(train[i : i + args.batch], True)
+        chunks = [train[i : i + args.batch] for i in range(0, len(train), args.batch)]
+        if args.workers:
+            loader = torch.utils.data.DataLoader(
+                _Batches(chunks, args, start_id, args.seed * 1000 + epoch), batch_size=None, shuffle=False,
+                num_workers=args.workers, prefetch_factor=2)
+        else:
+            loader = (make_batch(c, True, args, bank, proc, rng, start_id) for c in chunks)
+        for feats, ids in loader:
+            feats, ids = feats.cuda(non_blocking=True), ids.cuda(non_blocking=True)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 loss = model(input_features=feats, labels=ids).loss
             loss.backward()
@@ -319,20 +400,21 @@ def main() -> None:
             if step % 50 == 0:
                 print(f"epoch {epoch + 1} step {step}/{steps}  loss {loss.item():.3f}  "
                       f"{(time.time() - t0) / step:.2f} s/step", flush=True)
-        vloss, vcer = evaluate(val)
-        print(f"epoch {epoch + 1}: val loss {vloss:.3f}  val CER {vcer:.1%}", flush=True)
-        if best is None or vcer < best:
-            best = vcer
-            model.save_pretrained(out / "adapter" if args.lora else out)
-            proc.save_pretrained(out)
-            proc.feature_extractor.to_json_file(out / "preprocessor_config.json")  # for export_onnx.py
+            if args.eval_every and step % args.eval_every == 0:
+                keep_if_best(f"step {step}")
+            if args.max_steps and step >= args.max_steps:
+                stop = True
+                break
+        keep_if_best(f"epoch {epoch + 1}")
+        if stop:
+            break
 
     if args.lora:
         # Merge the best adapter into full weights so the export below is an
         # ordinary Whisper checkpoint.
         from peft import PeftModel
 
-        base = WhisperForConditionalGeneration.from_pretrained(args.base)
+        base = WhisperForConditionalGeneration.from_pretrained(args.base, dtype=torch.float32)
         merged = PeftModel.from_pretrained(base, out / "adapter").merge_and_unload()
         merged.generation_config = model.generation_config
         merged.save_pretrained(out)

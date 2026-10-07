@@ -58,8 +58,9 @@ many du'as open with words other texts have too.
   which are often shown as one it does ([known limits](docs/evaluation.md#known-limits)).
 - **Practice mode:** catches 93% of lines left out and 97% of forgotten endings; marks 0.12 read
   lines per 10 minutes as left out ([practice_bench.md](docs/results/practice_bench.md)).
-- **Server engine:** on 20 test items played through the real page, 89% on the line and 78% on
-  the word, against 86% and 65% for a phone ([server_engine.md](docs/results/server_engine.md)).
+- **Server engine:** on 20 test items played through the real page, 91% on the line and 82% on
+  the word, against 86% and 65% for a phone; in a simulated masjid (a PA, a measured hall, people
+  talking) 81% on the line, against 57% with the phone's models ([server_profile.md](docs/results/server_profile.md)).
 
 ## Quick start
 
@@ -104,9 +105,10 @@ flowchart LR
   stopping to talk.
 - **Both run on the phone.** The models are a fine-tuned whisper-base cut to an 8 s context and
   a CTC student distilled from wav2vec2, both trained with synthetic ordinary voices. The server
-  engine is the same page with the two models on a server.
+  engine is the same page with larger models on a server: a fully fine-tuned large-v3-turbo and
+  the student on longer, more frequent windows.
 
-More: [how it works](docs/how-it-works.md), and the [narrated explainer](docs/explainer.mp4) (7:41).
+More: [how it works](docs/how-it-works.md), and the [narrated explainer](docs/explainer.mp4) (7:07).
 
 ## Documentation
 

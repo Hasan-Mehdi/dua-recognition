@@ -46,20 +46,40 @@ from dua_recognition.corpus import load_all, load_recordings, web_json  # noqa: 
 WEB = ROOT / "web"  # the one front end; it detects this server via /api/mode
 # The page's Whisper (web/app.js), as a CTranslate2 conversion: the tracker was tuned on its transcripts.
 PAGE_MODEL = ROOT / "models" / "whisper-base-syn-v5-ctx8ft-ct2"
-MODEL = os.environ.get("DUA_ASR_MODEL") or (str(PAGE_MODEL) if PAGE_MODEL.is_dir() else DEFAULT_MODEL)
+# The server's own Whisper: large-v3-turbo fine-tuned in full at an 8 s context, in two rounds (finetune_whisper.py;
+# docs/results/server_profile.md), used when it's here and there's a GPU (on a CPU it takes seconds a window).
+SERVER_ASR = ROOT / "models" / "whisper-turbo-srv2-ct2"
+
+
+def _gpu() -> bool:
+    if os.environ.get("DUA_ASR_DEVICE", "").lower() == "cpu":
+        return False
+    try:
+        import ctranslate2
+
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        return False
+
+
 # The page's own models (web/app.js: the Whisper default and CTC_MODEL): with them exported the
 # browser runs speech recognition itself ("device"); otherwise this server does ("server").
 PHONE_MODELS = [WEB / "models" / "whisper-base-syn-v5-ctx8ft" / "onnx", WEB / "models" / "ctc-student-base-v6-w2"]
 ENGINE = os.environ.get("DUA_ENGINE") or ("device" if all(p.is_dir() for p in PHONE_MODELS) else "server")
+MODEL = os.environ.get("DUA_ASR_MODEL") or (
+    str(SERVER_ASR) if ENGINE == "server" and SERVER_ASR.is_dir() and _gpu()
+    else str(PAGE_MODEL) if PAGE_MODEL.is_dir() else DEFAULT_MODEL)
 SESSIONS = Path(os.environ.get("DUA_SESSIONS") or ROOT / "data" / "sessions")  # (replays: elsewhere)
 MAX_SESSION_BYTES = 256 << 20  # 16 kHz int16 mono: over two hours
 CTC_MODEL = os.environ.get("DUA_CTC_MODEL", str(ROOT / "models" / "ctc-student-base-v6"))
 _ctc_lock = threading.Lock()
 
 
-# The page's CTC windows: 2 s, as web/models/ctc-student-base-v6-w2 (the same weights exported with
-# --window 2) sees them. The student itself was trained on 3 s and would pad 2 s with silence.
-EAR_CTC_WINDOW = 2.0
+# The CTC windows: 3 s, the length the student was trained on. The phone sends it 2 s to save compute
+# (web/models/ctc-student-base-v6-w2); on the server 3 s placed the word better and entered lines that
+# open alike sooner (docs/results/server_profile.md). The page's decoder reads the frames that end 0.2 s
+# before the window's end, whatever its length. DUA_CTC_WINDOW: another length (4 s broke the student).
+EAR_CTC_WINDOW = float(os.environ.get("DUA_CTC_WINDOW", "3.0"))
 _ear_ctc = None
 
 
@@ -100,12 +120,31 @@ def _warm() -> None:
             print(f"no CTC model ({CTC_MODEL}: {e}): no word-by-word following", file=sys.stderr)
 
 
+def server_profile() -> dict:
+    """The server engine's profile for the page (web/app.js DeviceEngine): the CTC step (s) and the
+    stream decoder (`sc`) and tracker (`tc`) settings by their JavaScript names, as tuned for the
+    server's models and delays. DUA_SERVER_PROFILE: a JSON file in its place ({} = the phone's)."""
+    f = os.environ.get("DUA_SERVER_PROFILE")
+    return json.loads(Path(f).read_text(encoding="utf-8")) if f else dict(SERVER_PROFILE)
+
+
+# Tuned on the scenario bench for the server's models and delays (docs/results/server_profile.md): CTC
+# steps every 0.05 s, the stream decoder's rules for repeated lines, salawat, far jumps and shared
+# passages; the tracker's settings only with the turbo transcripts they were tuned on.
+SERVER_PROFILE: dict = {
+    "ctcHop": 0.05,
+    "sc": {"hop": 0.05, "lineSteps": 3, "nextSteps": 2, "nextP": 0.7, "copies": True, "lapseIntj": 0.5,
+           "ctcEvery": 10, "ctcPushP": 0.2, "ctcSure": 4.0, "cFar": -8, "sharedWords": 4, "sharedAfter": 10},
+    **({"tc": {"kappa": 0.2, "nullRate": 0.35}} if Path(MODEL).resolve() == SERVER_ASR.resolve() else {}),
+}
+
+
 @app.get("/api/mode")
 def mode():
     if ENGINE != "server":
         return {"mode": ENGINE, "model": None, "sessions": True}
     return {"mode": ENGINE, "model": Path(MODEL).name.removesuffix("-ct2"), "sessions": True,
-            "ctc": f"{Path(CTC_MODEL).name}-w{EAR_CTC_WINDOW:g}"}
+            "ctc": f"{Path(CTC_MODEL).name}-w{EAR_CTC_WINDOW:g}", "profile": server_profile()}
 
 
 @app.post("/api/sessions/{name}")

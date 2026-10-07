@@ -152,8 +152,10 @@ const CTC_SLOW_MS = 400;
 class DeviceEngine {
   kind = "device";
   // remote: a RemoteEar, the server's models in place of the workers (the server engine), with the
-  // name of the server's CTC model.
-  constructor(corpus, model, remote = null, remoteCtc = null) {
+  // name of the server's CTC model and its profile: the stream decoder and tracker settings and the
+  // CTC step the server's models were tuned for (/api/mode; ?sc=, ?tc= and ?ctchop= still win).
+  constructor(corpus, model, remote = null, remoteCtc = null, profile = null) {
+    this.profile = profile || {};
     this.corpus = corpus;
     this.tracker = new Tracker(new CorpusIndex(corpus));
     this.model = model;
@@ -174,7 +176,7 @@ class DeviceEngine {
     this.ctcModel = remoteCtc || params.get("ctc") || ([CTC_MODEL, CTC_FALLBACK].includes(kept) ? kept : null) || CTC_MODEL;
     // A step as soon as the last is done and 0.1 s of audio has come in: the step's wait is part of
     // the delay too (0.2 s until 2026-10-01).
-    this.ctcHop = Number(params.get("ctchop") || 0.1) * SR;
+    this.ctcHop = Number(params.get("ctchop") || this.profile.ctcHop || 0.1) * SR;
     // While the follower places the words, Whisper only anchors it: every 2 s leaves the phone's
     // CPU to the CTC model. A server has the time for every second, as on the bench.
     this.anchorHop = Number(params.get("anchorhop") || (remote ? 1 : 2)) * SR;
@@ -182,7 +184,7 @@ class DeviceEngine {
     // The stream decoder (stream-follower.js: one belief over the whole du'a, reading moves as its
     // transitions; docs/results/bench.md) since 2026-10-03; ?follower=rules: the rule-based follower.js.
     this.followerKind = params.get("follower") === "rules" ? "rules" : "stream";
-    this.streamCfg = urlCfg("sc");
+    this.streamCfg = { ...this.profile.sc, ...urlCfg("sc") };
   }
   // The follower is placing the words (its last result under a second old).
   get following() {
@@ -237,7 +239,7 @@ class DeviceEngine {
     this.onUpdate = onUpdate;
     this.remote?.restart();
     this.tracker = new Tracker(new CorpusIndex(this.corpus), followConfig());
-    this.streamCfg = urlCfg("sc");
+    this.streamCfg = { ...this.profile.sc, ...urlCfg("sc") };
     this.practice = null;
     Object.assign(this, { filled: 0, total: 0, lastSent: 0, lastUpdate: 0, busy: false, live: true, marks: [],
       firstText: true, voiceDb: null });
@@ -485,7 +487,7 @@ async function init() {
   state.engine = mode?.mode !== "server"
     // Trained with synthetic ordinary voices, at an 8 s context (docs/results/synthetic_voices.md, phone_speed.md).
     ? new DeviceEngine(corpus, params.get("model") || "whisper-base-syn-v5-ctx8ft")
-    : new DeviceEngine(corpus, mode.model, new RemoteEar(), mode.ctc);
+    : new DeviceEngine(corpus, mode.model, new RemoteEar(), mode.ctc, mode.profile);
   log.upload = log.enabled && !!mode?.sessions;
   $("footnote").textContent = state.engine.kind === "device"
     ? (log.upload ? "Runs on this device. Debug sessions go to this server." : "Runs entirely on this device. No audio leaves it.")
@@ -652,7 +654,7 @@ function following() {
 }
 
 function followConfig() {
-  return { ...(following() === "reciter" ? RECITER : {}), ...urlCfg("tc") };
+  return { ...(following() === "reciter" ? RECITER : {}), ...(state.engine?.profile?.tc ?? {}), ...urlCfg("tc") };
 }
 
 // ?sc=nextMargin:0 / ?tc=switchConfirm:3,switchSure:0.9 (a;b;c for lists): stream decoder and

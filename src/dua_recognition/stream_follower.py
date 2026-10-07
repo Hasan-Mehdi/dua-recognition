@@ -108,10 +108,27 @@ class StreamConfig:
     # recitation the tracker can't place is likely a text it doesn't know, not a lull.
     lapse_voice: float = 4.0
     lapse_quiet: float = 1.0
+    # ...counting only the steps the frames themselves put at least this share off the text (talk,
+    # salawat, something else; 0 = every step with voice). A reader the CTC model still hears in
+    # the du'a while Whisper's transcripts fail (a drawn-out last line, session 5o18) keeps the
+    # du'a until lapse_s.
+    lapse_off: float = 0.0
+    # ...and not the steps the frames put at least this share in the salawat chain (2 = every step):
+    # a long salawat between lines lost the tracker's du'a and, after lapse_voice, the reader's place
+    # (Baha, after a 10 s salawat: back to its first line).
+    lapse_intj: float = 2.0
     # A du'a change counts once the tracker has held the new du'a this long (0 = at once). Texts that
     # share a passage (Ayat al-Kursi in Namaz-e-Wahshat and Eid-e-Mubahila) flip the tracker's du'a for a
     # moment, and starting over there showed a line of the other text.
     switch_s: float = 2.0
+    # ...and none of it counts while the tracker's last `shared_words` words in the other du'a are the
+    # letters ending at a word within `shared_near` words of the shown one (0 = off): the two texts read
+    # the same passage here (Ayat al-Kursi in Namaz-e-Wahshat and an Eid al-Mubahila text), and the
+    # display stays where it was until they part.
+    shared_words: int = 0
+    shared_near: int = 8
+    shared_after: float = 10.0  # ...once the shown du'a has been on screen this long (s): a reader starting
+    # inside a passage (mid-Iftitah) can't have found the right text yet, and holding the first one kept it
     # A beam (0 = off: every line every frame, too slow for Kumayl on a phone): after each step only
     # lines holding at least `beam` of the belief, `beam_margin` lines either side (back and skip
     # moves land there), the shown word's line and every line the tracker puts `propose_mass` on
@@ -127,6 +144,13 @@ class StreamConfig:
     ctc_window: float = 1.5
     ctc_lines: int = 3
     ctc_margin: float = 4.0
+    # ...and when one line beats every other but its neighbours by `ctc_sure` nats and isn't the shown
+    # line or next to it, `ctc_push_p` of the belief moves to just after its best word (0 = off). After
+    # a far jump the frames name the reader's new line within a second, but entering it costs c_far
+    # (-17 nats and more spread over the lines) and the belief never got there before the tracker
+    # did, ~6 s later. Lines with copies never pass the test (their copies score the same).
+    ctc_push_p: float = 0.0
+    ctc_sure: float = 4.0
     # The tracker's push: the shown word unchanged `stuck_s` s while the reader makes sound (stop
     # detector under quiet_s), and the tracker `push_words` or more words ahead in the du'a (or on
     # another line): `push_p` of the belief moves to just before the tracker's word. In echo (a hall,
@@ -136,6 +160,16 @@ class StreamConfig:
     stuck_s: float = 1.5
     push_words: int = 3
     push_p: float = 0.0  # off: more false jumps when readers go back, no gain in echo (docs/results/bench.md)
+    # Copies: lines with the same letters (Tawassul's "anā tawajjahnā ..." block comes back after each of
+    # its 14 names) are one line for the display. A reader who starts inside such a block can't be
+    # placed until a line that differs (the next name); the belief then sits equally on every copy,
+    # none reaches show_p / line_p, and the highlight froze for tens of seconds. With this on, the
+    # display weighs each word by the belief summed over its copies (same words, same letters) and shows
+    # the copy nearest the word on screen, so the highlight follows the words until the block is told
+    # apart. The next-line gate still weighs each line by its own belief: pooled, a refrain's copies
+    # made "start the refrain again" look likelier and held the next line back (Mujeer).
+    copies: bool = False
+    copy_split: float = 0.5  # ...the nearest copy only while no copy holds this share of their summed belief
 
 
 @dataclass
@@ -155,6 +189,8 @@ class _Dua:
     line_lo: np.ndarray = field(default=None)  # per line: first letter
     line_hi: np.ndarray = field(default=None)  # ...and one past its last
     start_word: np.ndarray = field(default=None)  # per letter: the word it starts, -1 inside a word
+    word_copy: np.ndarray = field(default=None)  # per word: the same word of the first line with its letters
+    has_copies: bool = False
 
 
 def _lse(a: np.ndarray) -> float:
@@ -537,10 +573,13 @@ class StreamFollower:
         self._cand_n = 0
         self._gate_s = 0.0  # audio (s) a move into the next line has leant on the frames, steps in a row
         self._t_step: float | None = None  # the last step's time
-        self._t_stream = None  # end time of the last committed frame
+        self._f_stream = None  # the last committed frame, counted from the session's start
         self._last_anchor_t = None
         self._lapse_since = None
         self._lapse_voice = 0.0
+        self._off = 1.0  # the last step's share off the text (posterior)
+        self._intj = 0.0  # ...and in the salawat chain (with lapse_intj < 1)
+        self._dua_t = None  # when the decoder started on its du'a
         self._switch_to = None  # a du'a the tracker moved to, and since when
         self._switch_since = None
 
@@ -571,6 +610,15 @@ class StreamFollower:
             dd.line_hi = (dd.word_last[dd.line_last_word] + 1).astype(np.int64)
             dd.start_word = np.full(r.size, -1, dtype=np.int64)
             dd.start_word[dd.word_first] = np.arange(nw)
+            dd.word_copy = np.arange(nw, dtype=np.int64)
+            first_of: dict = {}
+            for li in range(dd.line_first_word.size):
+                a, b = int(dd.line_first_word[li]), int(dd.line_last_word[li]) + 1
+                key = (r[dd.line_lo[li] : dd.line_hi[li]].tobytes(), (dd.word_first[a:b] - dd.line_lo[li]).tobytes())
+                f = first_of.setdefault(key, li)
+                if f != li:
+                    dd.word_copy[a:b] = np.arange(b - a) + int(dd.line_first_word[f])
+            dd.has_copies = bool((dd.word_copy != np.arange(nw)).any())
             self._duas[d] = dd
         return self._duas[d]
 
@@ -735,6 +783,33 @@ class StreamFollower:
         best = float(per_line.max())
         order = np.argsort(-per_line, kind="stable")
         self._ctc_prop = [int(li) for li in order[: cfg.ctc_lines] if per_line[li] >= best - cfg.ctc_margin]
+        if cfg.ctc_push_p > 0:
+            self._frame_push(dd, per_word, per_line)
+
+    def _frame_push(self, dd: _Dua, per_word: np.ndarray, per_line: np.ndarray) -> None:
+        """StreamConfig.ctc_push_p: the frames' sure line gets that share of the belief."""
+        cfg, nl = self.cfg, per_line.size
+        if not np.isfinite(per_line).all():  # a broken window (float16 overflow): no push
+            return
+        bl = int(np.argmax(per_line))
+        near = np.zeros(nl, dtype=bool)
+        near[max(0, bl - 1) : bl + 2] = True
+        if (~near).any() and per_line[bl] - float(per_line[~near].max()) < cfg.ctc_sure:
+            return
+        if (self.word is not None and self.ix.word_dua[self.word] == self.dua
+                and abs(bl - int(dd.line_of_word[self.word - dd.lo])) <= 1):
+            return
+        a, b = int(dd.line_first_word[bl]), int(dd.line_last_word[bl]) + 1
+        j = int(dd.word_last[a + int(np.argmax(per_word[a:b]))])
+        parts = [self.L, self.B, self.F] + ([self.IL, self.IB] if self.IL.size else [])
+        m = max(float(np.max(x)) for x in parts)
+        logz = m + float(np.log(sum(float(np.exp(x - m).sum()) for x in parts)))
+        p = cfg.ctc_push_p
+        for x in parts:
+            x += np.log(1 - p)
+        self.B[j] = np.logaddexp(self.B[j], np.log(p) + logz)
+        if self.active is not None:
+            self.active[max(0, bl - 1) : bl + 2] = 1
 
     def _push(self, w: int) -> None:
         """Move push_p of the belief to the blank before word w (its line made active)."""
@@ -784,6 +859,32 @@ class StreamFollower:
         z = pw.sum() + pf
         return pw / z, pf / z
 
+    def _shared_here(self, cur: int, other: int) -> bool:
+        """StreamConfig.shared_words: the letters of the words ending at `other` (another du'a) also end at a
+        word near `cur` in the shown du'a."""
+        ix, cfg, wl = self.ix, self.cfg, self._word_letter
+        db = int(ix.word_dua[other])
+        k, near = int(cfg.shared_words), int(cfg.shared_near)
+        if other - k + 1 < int(ix.dua_word_span[db][0]):
+            return False
+        a, b = int(wl[other - k + 1]), int(wl[other + 1])
+        tail = ix.letters[a:b]
+        lo, hi = (int(x) for x in ix.dua_word_span[self.dua])
+        for w in range(max(lo, cur - near), min(hi, cur + near + 1)):
+            e = int(wl[w + 1])
+            if e - (b - a) >= int(wl[lo]) and np.array_equal(ix.letters[e - (b - a) : e], tail):
+                return True
+        return False
+
+    def _interj_share(self, L, B, F, IL, IB) -> float:
+        """The share of the belief in the interjection chain (the salawat between lines)."""
+        if IL is None or not IL.size:
+            return 0.0
+        allv = np.concatenate([np.logaddexp(L, B).ravel(), np.ravel(F), IL.ravel(), IB.ravel()])
+        m = float(np.max(allv))
+        z = float(np.exp(allv - m).sum())
+        return float((np.exp(IL - m).sum() + np.exp(IB - m).sum()) / z) if z > 0 else 0.0
+
     def _quiet(self, frames: np.ndarray, quiet: bool) -> np.ndarray:
         if not quiet or not len(frames) or self.cfg.quiet_pen <= 0:
             return frames
@@ -812,7 +913,8 @@ class StreamFollower:
             if self._lapse_since is None:
                 self._lapse_since = t
                 self._lapse_voice = 0.0
-            if quiet_now is not None and quiet_now < cfg.lapse_quiet:
+            if (quiet_now is not None and quiet_now < cfg.lapse_quiet and self._off >= cfg.lapse_off
+                    and self._intj < cfg.lapse_intj):
                 self._lapse_voice += cfg.hop
             if t - self._lapse_since > cfg.lapse_s or self._lapse_voice > cfg.lapse_voice:
                 self.reset()
@@ -823,6 +925,11 @@ class StreamFollower:
         d = int(ix.word_dua[hmm_word])
         if d == self.dua:
             self._switch_to = self._switch_since = None
+        elif (self.dua is not None and cfg.switch_s > 0 and cfg.shared_words and self.word is not None
+              and self._dua_t is not None and t - self._dua_t >= cfg.shared_after
+              and self._shared_here(self.word, hmm_word)):
+            self._switch_to = self._switch_since = None
+            hmm_word, line_mass, d = self.word, None, self.dua
         elif self.dua is not None and cfg.switch_s > 0:
             if self._switch_to != d:
                 self._switch_to, self._switch_since = d, t
@@ -830,7 +937,8 @@ class StreamFollower:
                 hmm_word, line_mass, d = self.word, None, self.dua  # not yet: on in the du'a it was in
         if d != self.dua:
             self._start(d, hmm_word, line_mass)
-            self._t_stream = None
+            self._f_stream = None
+            self._dua_t = t
         if self.dua is None:
             return None
         if anchor_t is not None and anchor_t != self._last_anchor_t:
@@ -838,15 +946,18 @@ class StreamFollower:
             if d == self.dua:
                 self._tracker_evidence(line_mass)
         n = lp.shape[0]
-        la = int(round(cfg.lookahead / cfg.frame_s))
-        hop = int(round(cfg.hop / cfg.frame_s))
+        la = int(np.floor(cfg.lookahead / cfg.frame_s + 0.5))
+        hop = int(np.floor(cfg.hop / cfg.frame_s + 0.5))
         commit_end = n - la  # frames [.., commit_end) are committed
-        if self._t_stream is None:
+        # Committed frames are counted from the session's start: a step of 0.05 s is 2.5 frames, and
+        # rounding each step's share dropped (or, in JavaScript, doubled) a frame every other step.
+        f_now = int(np.floor((t - cfg.lookahead) / cfg.frame_s + 1e-6))
+        if self._f_stream is None:
             new = lp[max(0, commit_end - hop) : commit_end]
         else:
-            k = int(round((t - cfg.lookahead - self._t_stream) / cfg.frame_s))
+            k = f_now - self._f_stream
             new = lp[max(0, commit_end - k) : commit_end] if k > 0 else lp[0:0]
-        self._t_stream = t - cfg.lookahead
+        self._f_stream = f_now
         if quiet_then is None and quiet_now is not None:
             quiet_then = quiet_now - cfg.lookahead
         q_then = quiet_then is not None and quiet_then >= cfg.quiet_s
@@ -873,13 +984,31 @@ class StreamFollower:
         # the newest frames, tentatively
         L, B, F, IL, IB = self._advance(self.L, self.B, self.F, self.IL, self.IB, self._quiet(lp[commit_end:], q_now))
         pw, pf = self.posterior(L, B, F, IL, IB)
+        self._off = pf
+        if cfg.lapse_intj < 1:
+            self._intj = self._interj_share(L, B, F, IL, IB)
         dd = self._dua(self.dua)
         if pf > 0.5:  # talking, or something else: hold
             self._cand, self._cand_n, self._gate_s = None, 0, 0.0
             return self.word
-        best = int(np.argmax(pw))
-        w = dd.lo + best
         cur = self.word
+        pw_raw = pw  # (the next-line gate compares particular lines: no pooling there)
+        if cfg.copies and dd.has_copies:
+            pw = self._pool_copies(dd, pw)
+            c = dd.word_copy[int(np.argmax(pw))]
+            cands = np.flatnonzero(dd.word_copy == c)
+            raw = pw_raw[cands]
+            bi = int(np.argmax(raw))
+            best = int(cands[bi])  # the copy with the most belief...
+            if cur is not None and ix.word_dua[cur] == self.dua and cands.size > 1 and raw[bi] < cfg.copy_split * pw[best]:
+                # ...unless none holds copy_split of it (split, as through a repeated block): of the copies
+                # holding at least half the best's, the nearest the word on screen (ties: ahead)
+                ok = cands[raw >= 0.5 * raw[bi]]
+                dist = np.abs(ok - (cur - dd.lo))
+                best = int(ok[int(np.argmin(dist * 2 + (ok < cur - dd.lo)))])
+        else:
+            best = int(np.argmax(pw))
+        w = dd.lo + best
         if cur is None or ix.word_dua[cur] != self.dua:
             self.word = w
             return w
@@ -903,7 +1032,7 @@ class StreamFollower:
         self._cand = w
         gate = True
         if into_next and cfg.next_margin > 0:
-            pg = pw if cfg.gate_tentative else self.posterior(self.L, self.B, self.F, self.IL, self.IB)[0]
+            pg = pw_raw if cfg.gate_tentative else self.posterior(self.L, self.B, self.F, self.IL, self.IB)[0]
             m = self._next_margin(dd, k, pg, best)
             self._gate_s = self._gate_s + dt if m >= -cfg.next_slack else 0.0
             gate = m >= cfg.next_margin or self._gate_s >= cfg.next_hold - 1e-3
@@ -912,6 +1041,11 @@ class StreamFollower:
         if self._cand_n >= need_n and gate:
             self.word, self._cand, self._cand_n, self._gate_s = w, None, 0, 0.0
         return self.word
+
+    @staticmethod
+    def _pool_copies(dd: _Dua, pw: np.ndarray) -> np.ndarray:
+        """Each word's belief summed over its copies (StreamConfig.copies), summed in word order."""
+        return np.bincount(dd.word_copy, weights=pw, minlength=pw.size)[dd.word_copy]  # (sequential, as in JS)
 
     def _next_margin(self, dd: _Dua, k: int, pw: np.ndarray, best: int) -> float:
         """Nats by which the frames prefer the words of line k+1 read so far (to `best`) over the

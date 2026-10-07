@@ -110,5 +110,13 @@ ordinary voices) and `DUA_CTC_MODEL=models/wav2vec2-quran-dua-voices` (the teach
 learned from). Each needs a `bench.py asr` pass and a scored run before it could be the server's
 default; the stream decoder and the tracker were tuned on the phone models' outputs.
 
+Done 2026-10-06 (server_models.md): neither passed on dev. The wav2vec2 model places words worse
+at the window's edge (line lag +0.26 s, right word -8 pts); turbo finds the du'a far better in a
+hall (65% -> 92% within 10 s) but misses every gain bar and fails five guards.
+
+Since 2026-10-07 the server engine has its own Whisper (`whisper-turbo-srv`, large-v3-turbo fine-tuned
+in full at an 8 s context), the CTC student on 3 s windows every 0.05 s, and a profile of stream
+decoder and tracker settings it hands the page (server_profile.md).
+
 Code: `app/server.py` (`EarAudio`, `_gate`, `_hear`, `/ws/ear`), `web/app.js` (`RemoteEar`,
 `DeviceEngine`), `scripts/page_replay.mjs --server`, `scripts/bench_page.py --server`.
