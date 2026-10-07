@@ -40,6 +40,7 @@ import torch  # noqa: E402
 from dua_recognition.align import _ALPHABET  # noqa: E402
 from dua_recognition.ctc import N_COLS  # noqa: E402
 from dua_recognition.ctc_student import SR, LogMel, WhisperCTC, n_frames, save  # noqa: E402
+from dua_recognition.stream_ctc import CausalLogMel, StreamCTC, frames_ready  # noqa: E402
 
 TEACH = ROOT / "data" / "cache" / "ctc_student"
 FRAME = 320  # samples per 20 ms frame (teacher and student)
@@ -109,15 +110,38 @@ def noise_gate(x: np.ndarray, rng: random.Random) -> np.ndarray:
     return (x * gain).astype(np.float32)
 
 
+def talk_clip(n: int, rng: random.Random, before: np.ndarray) -> np.ndarray:
+    """n samples of one person talking (a Common Voice clip, training side, tiled if short), at the level of
+    the voice `before` it (-6..+3 dB), faded in over 8 ms."""
+    from halls import _VOICES, crowd_voices
+
+    if not _VOICES:
+        crowd_voices(10, np.random.default_rng(0), voices=1)  # (fills the list of clips)
+    t = np.load(_VOICES[rng.randrange(len(_VOICES))]).astype(np.float32)
+    if t.size < n:
+        t = np.tile(t, n // max(1, t.size) + 1)
+    s = rng.randrange(max(1, t.size - n + 1))
+    t = t[s : s + n]
+    voiced = before[np.abs(before) > 0.02 * (np.abs(before).max() + 1e-9)]
+    level = np.sqrt(np.mean(voiced**2)) if voiced.size else 0.05
+    t = t / (np.sqrt(np.mean(t**2)) + 1e-9) * level * 10 ** (rng.uniform(-6, 3) / 20)
+    fade = min(n, 128)
+    t[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
+    return np.clip(t, -1, 1).astype(np.float32)
+
+
 class Crops(torch.utils.data.Dataset):
     """(set, row) -> a crop of `window_s` seconds: audio, teacher frames, letters inside."""
 
     def __init__(self, items: list[tuple[str, int]], window_s: float, train: bool, room_p: float, seed: int = 0,
                  phone_p: float = 0.0, teach: Path = TEACH, gate_p: float = 0.0, hall_p: float = 0.0,
-                 hall_voices: float = 0.0, shift: int = 0):
+                 hall_voices: float = 0.0, shift: int = 0, talk_p: float = 0.0):
         self.items, self.window_s, self.train, self.room_p, self.seed = items, window_s, train, room_p, seed
         self.phone_p, self.teach, self.gate_p, self.hall_p = phone_p, teach, gate_p, hall_p
         self.hall_voices = hall_voices
+        # the reciter stops and someone talks: the crop's last 0.3-2 s replaced by a person speaking (Common
+        # Voice, training side), its targets blank, so speech at the live edge isn't taken for the next line
+        self.talk_p = talk_p
         # targets `shift` frames later than the audio (the teacher's frame f + shift at the model's frame
         # f, the letters up to `shift` frames past the crop's end): a model that says each letter that
         # much sooner, so the display waits less for it (peak-first distillation)
@@ -180,6 +204,11 @@ class Crops(torch.utils.data.Dataset):
         src0 = max(0, a0)
         seg = y[src0 : end_f * FRAME]
         x[W - seg.size :] = seg  # silence before the recording's start
+        cut_f = end_f  # the reciter's audio ends here (earlier with talk)
+        if self.train and self.talk_p and rng.random() < self.talk_p:
+            cut_f = end_f - rng.randint(15, max(16, min(100, end_f - start_f - 10)))
+            cx = W - (end_f - cut_f) * FRAME
+            x[cx:] = talk_clip(W - cx, rng, x[:cx])
         if self.train:
             x = augment(x, rng, self.room_p) if np.abs(x).max() > 0 and not hall else x
             if self.phone_p and rng.random() < self.phone_p:
@@ -191,7 +220,7 @@ class Crops(torch.utils.data.Dataset):
         tgt = np.full((F, N_COLS), -30.0, dtype=np.float32)
         tgt[:, 0] = 0.0
         idx = np.arange(F) + start_f + self.shift
-        ok = (idx >= 0) & (idx < T)
+        ok = (idx >= 0) & (idx < T) & (idx < cut_f + self.shift)
         tgt[ok] = tf[idx[ok]]
         # Letters emitted inside the crop. The window's label leaves out words cut at its
         # edges and sometimes adds one the audio never reaches (forced onto the last frames):
@@ -206,12 +235,12 @@ class Crops(torch.utils.data.Dataset):
                 j0, j1 = int(heard[0]), int(heard[-1])
                 lo_f, hi_f = int(first[j0]), int(first[j1])
                 letterish = np.exp(tf[:, 1:]).max(1) > 0.5
-                s0, e0 = max(0, start_f + self.shift), min(T, end_f + self.shift)
+                s0, e0 = max(0, start_f + self.shift), min(T, cut_f + self.shift)
                 outside = letterish[s0 : max(s0, lo_f - 2)].any() or letterish[min(e0, hi_f + 6) : e0].any()
                 if not outside:
                     keep = np.zeros(letters.size, dtype=bool)
                     keep[j0 : j1 + 1] = True
-                    inside = keep & (first >= s0) & (first < end_f + self.shift)
+                    inside = keep & (first >= s0) & (first < cut_f + self.shift)
                     lab = letters[inside]
                     ok_lab = True
         return torch.tensor(x), torch.tensor(tgt), torch.tensor(lab), bool(ok_lab)
@@ -269,6 +298,12 @@ def main() -> None:
                     help="share of --hall crowds that are real people talking (Common Voice, training side)")
     ap.add_argument("--shift", type=int, default=0,
                     help="frames of anticipation: targets this many 20 ms frames after the audio (Crops.shift)")
+    ap.add_argument("--arch", choices=["window", "stream"], default="window",
+                    help="stream: stream_ctc.StreamCTC (cached causal layers, layer-0 lookahead), on longer crops")
+    ap.add_argument("--lookahead", type=int, default=10, help="stream: frames layer 0 sees ahead (20 ms each)")
+    ap.add_argument("--left", type=int, default=150, help="stream: frames layers 1+ see back")
+    ap.add_argument("--left0", type=int, default=150, help="stream: frames layer 0 sees back")
+    ap.add_argument("--talk", type=float, default=0.0, help="share of crops ending in someone talking (Crops.talk_p)")
     args = ap.parse_args()
     teach = ROOT / "data" / "cache" / args.teacher if args.teacher else TEACH
 
@@ -294,14 +329,22 @@ def main() -> None:
     print(f"{len(items)} training items, {len(val_items)} val windows", flush=True)
 
     model = WhisperCTC.from_whisper(args.base)
+    stream = args.arch == "stream"
+    ready = None  # stream: frames the stream would have at the crop's end (the last reads padding)
     if args.init:
         ck = torch.load(Path(args.init) / "student.pt", map_location="cpu", weights_only=False)
         if ck["meta"].get("base") != args.base:
             raise SystemExit(f"--init {args.init} was trained from {ck['meta'].get('base')}, not --base {args.base}")
-        model.load_state_dict(ck["state"])
+        if stream and ck["meta"].get("arch") == "stream":
+            model = StreamCTC(model, lookahead=args.lookahead, left=args.left, left0=args.left0)
+        model.load_state_dict(ck["state"], strict=not stream)  # a window student has positions, no slopes
         print(f"from {args.init} (step {ck['meta'].get('step')})", flush=True)
+    if stream and not isinstance(model, StreamCTC):
+        model = StreamCTC(model, lookahead=args.lookahead, left=args.left, left0=args.left0)
+    if stream:
+        ready = frames_ready(int(round(args.window * SR)))
     model = model.cuda()
-    mel = LogMel().cuda()
+    mel = (CausalLogMel() if stream else LogMel()).cuda()
     head = list(model.head.parameters())
     body = [p for n, p in model.named_parameters() if not n.startswith("head.") and p.requires_grad]
     opt = torch.optim.AdamW([{"params": body, "lr": args.lr}, {"params": head, "lr": args.head_lr}], weight_decay=0.01)
@@ -311,7 +354,7 @@ def main() -> None:
     ctc_loss = torch.nn.CTCLoss(blank=0, reduction="sum", zero_infinity=True)
 
     ds = Crops(items, args.window, True, args.room, args.seed, phone_p=args.phone, teach=teach, gate_p=args.gate,
-               hall_p=args.hall, hall_voices=args.hall_voices, shift=args.shift)
+               hall_p=args.hall, hall_voices=args.hall_voices, shift=args.shift, talk_p=args.talk)
     vds = Crops(val_items, args.window, False, 0.0, teach=teach, shift=args.shift)  # judged on its own targets
     # Val: whole 6 s windows too (the window's own text), for a CER comparable with the teacher's.
     from finetune_whisper import AudioBank, load_rows
@@ -329,6 +372,8 @@ def main() -> None:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 lp = model(mel(x.cuda())).float()
             tp = t.cuda()
+            if ready is not None:
+                lp, tp = lp[:, :ready], tp[:, :ready]
             kls.append(((tp.exp() * (tp - lp)).sum(-1)).mean().item())
             for k in range(lp.shape[0]):
                 refs.append("".join(INV[int(c)] for c in labs[k]))
@@ -356,6 +401,9 @@ def main() -> None:
     run = {"ctc": 0.0, "kl": 0.0}
     meta = {"teacher": str(teach.name), "base": args.base, "max_positions": None, "window_s": args.window,
             "args": vars(args)}
+    if stream:  # the bench and the page read this model as a stream, shown as 2 s windows
+        meta.update(arch="stream", window_s=2.0, stream={"lookahead": args.lookahead, "left": args.left,
+                                                          "left0": args.left0})
     eval_every = max(500, steps // 12)
     done = False
     while not done:
@@ -370,6 +418,8 @@ def main() -> None:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 lp = model(feats)
             lp = lp.float()
+            if ready is not None:
+                lp, t = lp[:, :ready], t[:, :ready]
             F = lp.shape[1]
             kl = (t.exp() * (t - lp)).sum(-1).sum(-1)  # per crop
             lens = torch.tensor([len(l) for l in labs])

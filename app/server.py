@@ -45,7 +45,7 @@ from dua_recognition.corpus import load_all, load_recordings, web_json  # noqa: 
 
 WEB = ROOT / "web"  # the one front end; it detects this server via /api/mode
 # The page's Whisper (web/app.js), as a CTranslate2 conversion: the tracker was tuned on its transcripts.
-PAGE_MODEL = ROOT / "models" / "whisper-base-syn-v5-ctx8ft-ct2"
+PAGE_MODEL = ROOT / "models" / "whisper-base-ph-kd2-ct2"
 # The server's own Whisper: large-v3-turbo fine-tuned in full at an 8 s context, in two rounds (finetune_whisper.py;
 # docs/results/server_profile.md), used when it's here and there's a GPU (on a CPU it takes seconds a window).
 SERVER_ASR = ROOT / "models" / "whisper-turbo-srv2-ct2"
@@ -64,7 +64,7 @@ def _gpu() -> bool:
 
 # The page's own models (web/app.js: the Whisper default and CTC_MODEL): with them exported the
 # browser runs speech recognition itself ("device"); otherwise this server does ("server").
-PHONE_MODELS = [WEB / "models" / "whisper-base-syn-v5-ctx8ft" / "onnx", WEB / "models" / "ctc-student-base-v6-w2"]
+PHONE_MODELS = [WEB / "models" / "whisper-base-ph-kd2" / "onnx", WEB / "models" / "ctc-stream-base-v1"]
 ENGINE = os.environ.get("DUA_ENGINE") or ("device" if all(p.is_dir() for p in PHONE_MODELS) else "server")
 MODEL = os.environ.get("DUA_ASR_MODEL") or (
     str(SERVER_ASR) if ENGINE == "server" and SERVER_ASR.is_dir() and _gpu()
@@ -94,6 +94,9 @@ def ear_ctc():
             device = os.environ.get("DUA_CTC_DEVICE")
             student = (Path(CTC_MODEL) / "student.pt").exists()
             m = StudentCtc(CTC_MODEL, device) if device and student else load_ctc(CTC_MODEL)
+            if not hasattr(m, "window"):  # a streaming student (stream_ctc.py) keeps state per listener
+                raise RuntimeError(f"DUA_CTC_MODEL {CTC_MODEL}: a streaming model runs in the page; the server "
+                                   "serves window models (ctc-student-base-v6)")
             m.window_s = EAR_CTC_WINDOW
             m.window(np.zeros(int(EAR_CTC_WINDOW * SAMPLE_RATE), np.float32))  # the first run is the slow one
             _ear_ctc = m
@@ -134,7 +137,10 @@ def server_profile() -> dict:
 SERVER_PROFILE: dict = {
     "ctcHop": 0.05,
     "sc": {"hop": 0.05, "lineSteps": 3, "nextSteps": 2, "nextP": 0.7, "copies": True, "lapseIntj": 0.5,
-           "ctcEvery": 10, "ctcPushP": 0.2, "ctcSure": 4.0, "cFar": -8, "sharedWords": 4, "sharedAfter": 10},
+           "ctcEvery": 10, "ctcPushP": 0.2, "ctcSure": 4.0, "cFar": -8, "sharedWords": 4, "sharedAfter": 10,
+           # the server's values of the rules the phone took up on 2026-10-07 (phone_engine.md), not yet
+           # scored with the server's models
+           "sharedNear": 8, "sharedEdits": 0, "cFillNext": -1, "nextIntj": False},
     **({"tc": {"kappa": 0.2, "nullRate": 0.35}} if Path(MODEL).resolve() == SERVER_ASR.resolve() else {}),
 }
 

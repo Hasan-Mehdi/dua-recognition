@@ -63,12 +63,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 BENCH = ROOT / "data" / "testbed"  # junction to D:\dua-data\testbed (C: is nearly full)
 SR = 16000
 WINDOW = 6.0  # Whisper window, s (the page's)
-ASR_TAG = "whisper-base-syn-v5-ctx8ft"
-CTC_TAG = "ctc-student-base-v6"
+ASR_TAG = "whisper-base-ph-kd2"  # the page's models (whisper-base-syn-v5-ctx8ft and the window student until 2026-10-07)
+CTC_TAG = "ctc-stream-base-v1"
 # CTC window (s) and hop: the page's 2 s every 0.1 s; DUA_BENCH_CTC_WINDOW / _HOP score a server model on others
 # (its own cache, ctc/<model>_w<window>_h<hop>; spawned scorers inherit the variables)
 CTC_WINDOW = float(os.environ.get("DUA_BENCH_CTC_WINDOW", "2.0"))
 CTC_HOP = float(os.environ.get("DUA_BENCH_CTC_HOP", "0.1"))  # (the stream decoder: --sc hop=... to match)
+# A phone slower than the cache's cadence: score every Nth CTC step (a step every 0.2 s from the 0.1 s
+# cache) and every Nth Whisper window (every 2 s, as the page runs it while following; a throttled phone
+# takes ~1.8 s a window). Both 1: the caches as they are.
+CTC_STRIDE = int(os.environ.get("DUA_BENCH_CTC_STRIDE", "1"))
+ASR_EVERY = int(os.environ.get("DUA_BENCH_ASR_EVERY", "1"))
 MIN_LINES = 6  # a source is a run of at least this many consecutive, fully timed lines
 MORE_OOC = 40  # out-of-corpus readings from uploaders outside the held-out side (sources_harvest)
 MAFATIH_MIN = 3  # voices per added text in lane mafatih, from other uploaders where the held-out side is short
@@ -1167,8 +1172,12 @@ def cmd_asr(args) -> None:
             ctc = ctc or load_ctc(args.ctc_model)
             end = len(y) / SR
             times = [round((j + 1) * CTC_HOP, 3) for j in range(int((end + 1e-6) // CTC_HOP))]
-            arr, lens, _, _ = ctc.windows(y, times, CTC_WINDOW, 32)
-            _save(fc, lambda f: np.savez(f, lp=arr, n_frames=lens, t=np.array(times)))
+            if hasattr(ctc, "compact"):  # a streaming model: its frames once, each step's tentative ones
+                c = ctc.compact(y, times)
+                _save(fc, lambda f: np.savez(f, t=np.array(times), **c))
+            else:
+                arr, lens, _, _ = ctc.windows(y, times, CTC_WINDOW, 32)
+                _save(fc, lambda f: np.savez(f, lp=arr, n_frames=lens, t=np.array(times)))
         done_s += len(y) / SR
         el = time.time() - t_start
         print(f"[{k + 1}/{len(todo)}] {it['id']:28s} {len(y) / SR:6.0f} s audio  "
@@ -1295,7 +1304,8 @@ def replay(it: dict) -> list[tuple] | None:
         if cfg.popularity:
             corpus += repr([d.recordings for d in ix.duas])
         ref = hashlib.sha1(corpus.encode("utf-8")).hexdigest()
-        _W["tkey"] = hashlib.sha1(repr((_ConfigKey(cfg), _W["asr_tag"], _W["delay"], ref)).encode()).hexdigest()[:12]
+        key = (_ConfigKey(cfg), _W["asr_tag"], _W["delay"], ref) + ((ASR_EVERY,) if ASR_EVERY != 1 else ())
+        _W["tkey"] = hashlib.sha1(repr(key).encode()).hexdigest()[:12]
     tc = BENCH / "tracker_cache" / _W["tkey"] / f"{it['id']}.pkl"
     if tc.exists() and tc.stat().st_mtime >= fa.stat().st_mtime:
         import pickle
@@ -1305,11 +1315,13 @@ def replay(it: dict) -> list[tuple] | None:
         import pickle
 
         a = json.loads(fa.read_text(encoding="utf-8"))
-        rows = a["rows"]
+        rows, quiet = a["rows"], a["quiet"]
+        if ASR_EVERY > 1:
+            rows, quiet = rows[ASR_EVERY - 1 :: ASR_EVERY], quiet[ASR_EVERY - 1 :: ASR_EVERY]
         costs = ev.LazyCosts(ix, [x for _, x in rows])
         letters = [len(encode(x)) if x else 0 for _, x in rows]
         anchors = []
-        ups = we.hmm_updates(ix, rows, costs, a["quiet"], cfg, _W["delay"], "fixed", None, still=True,
+        ups = we.hmm_updates(ix, rows, costs, quiet, cfg, _W["delay"], "fixed", None, still=True, real_gaps=True,
                              anchors=anchors, letters=letters)
         anchors = [(t, w, None if m is None else np.asarray(m, dtype=np.float32)) for t, w, m in anchors]
         tc.parent.mkdir(parents=True, exist_ok=True)
@@ -1353,7 +1365,17 @@ def stream_updates(ix, fit: dict) -> list[tuple]:
     from dua_recognition.stream_follower import StreamConfig, StreamFollower
 
     z = np.load(fit["ctc"])
-    lp, nf, ts = z["lp"], z["n_frames"], z["t"]
+    if "final" in z.files:  # a streaming model's compact cache (stream_ctc.StreamStudent.compact)
+        from dua_recognition.stream_ctc import window_rows
+
+        fin, ten, ends = z["final"], z["tent"], z["ends"]
+        rows = int(round(CTC_WINDOW / 0.02))
+        window_at = lambda k: window_rows(fin, ten[k], int(ends[k]), rows)  # noqa: E731
+    else:
+        lp, nf = z["lp"], z["n_frames"]
+        window_at = lambda k: lp[k, : nf[k]].astype(np.float32)  # noqa: E731
+    ts = z["t"]
+    steps = range(CTC_STRIDE - 1, len(ts), CTC_STRIDE)
     cfg = _W.get("scfg") or StreamConfig()
     if fit.get("pin") is not None and _W.get("practice_cfar") is not None:
         from dataclasses import replace
@@ -1371,7 +1393,8 @@ def stream_updates(ix, fit: dict) -> list[tuple]:
     at = [a[0] + _W["delay"] for a in anchors]
     pin = fit.get("pin")  # practice mode: (du'a, first word) the reader chose; the tracker's other du'as unheard
     ups = []
-    for k, t in enumerate(ts):
+    for k in steps:
+        t = ts[k]
         j = bisect.bisect_right(at, t) - 1
         w_anchor = anchors[j][1] if j >= 0 else None
         a_t = at[j] if j >= 0 else None
@@ -1383,7 +1406,7 @@ def stream_updates(ix, fit: dict) -> list[tuple]:
             lm = lambda w, m=masses, f=line0: float(m[int(_line_no(ix)[w]) - f])  # noqa: E731
         if pin is not None and (w_anchor is None or int(ix.word_dua[w_anchor]) != pin[0]):
             w_anchor, lm, a_t = (pin[1] if sf.dua is None else sf.word), None, None
-        w = sf.step(lp[k, : nf[k]].astype(np.float32), float(t), w_anchor, quiet_now=quiet_at(t), line_mass=lm,
+        w = sf.step(window_at(k), float(t), w_anchor, quiet_now=quiet_at(t), line_mass=lm,
                     anchor_t=a_t, quiet_then=quiet_at(t - sf.cfg.lookahead))
         if w is None:
             ups.append((t + _W["f_delay"], None, None, None, None, 0.0))
@@ -1781,11 +1804,11 @@ def practice_v1(it: dict, ix, target: tuple[int, int, int], fups: list, ctc_path
     kind if left out, t the reader went on past the gap (for skipped lines)]. Thresholds are
     applied later (practice_v1_agg), so they can be swept without replaying anything."""
     from dua_recognition.practice import PracticeConfig, committed_frames, judge_lines
+    from dua_recognition.stream_ctc import load_frames
 
     d, lo_li, hi_li = target
     _, li_of, _ = _dua_lines(ix, d)
-    z = np.load(ctc_path)
-    frames, ftimes = committed_frames(z["lp"], z["n_frames"], z["t"])
+    frames, ftimes = committed_frames(*load_frames(ctc_path, int(round(CTC_WINDOW / 0.02))))
     steps = [(float(u[0]), None if u[3] is None or int(ix.word_dua[u[3]]) != d else li_of[int(u[2])]) for u in fups]
     letters = _line_letters(ix, d)
     recs = judge_lines(frames, ftimes, steps, letters, lo_li, hi_li, cfg or PracticeConfig(),
@@ -2017,7 +2040,7 @@ def cmd_score(args) -> None:
             sc_kw[k] = tuple(float(x) for x in v.split(";"))
         else:
             sc_kw[k] = int(v) if k in ("line_steps", "next_steps", "gate_words", "ctc_every", "shared_words", "shared_near",
-                                       "beam_margin", "ctc_lines") else float(v)
+                                       "shared_edits", "beam_margin", "ctc_lines") else float(v)
     if getattr(args, "same_within", False):
         os.environ["DUA_SAME_WITHIN"] = "1"
     init = (cfg_kw, fw_kw, asr_tag, ctc_tag, args.delay, args.follow_delay, args.display, sc_kw, args.same_text,
@@ -2031,7 +2054,8 @@ def cmd_score(args) -> None:
           f"(tracker {cfg_kw or 'defaults'}, follower {fw_kw or 'defaults'})", flush=True)
     out = BENCH / "results" / f"{args.name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"args": vars(args), "items": results}, ensure_ascii=False), encoding="utf-8")
+    env = {"asr_every": ASR_EVERY, "ctc_stride": CTC_STRIDE, "ctc_window": CTC_WINDOW, "ctc_hop": CTC_HOP}
+    out.write_text(json.dumps({"args": vars(args), "env": env, "items": results}, ensure_ascii=False), encoding="utf-8")
     report(results, args.compare)
     if args.practice:
         print()
@@ -2280,8 +2304,8 @@ def main() -> None:
     b.add_argument("--rebuild", action="store_true")
     a = sub.add_parser("asr")
     a.add_argument("scenarios", nargs="*")
-    a.add_argument("--model", default="models/whisper-base-syn-v5-ctx8ft-ct2")
-    a.add_argument("--ctc-model", default="models/ctc-student-base-v6")
+    a.add_argument("--model", default="models/whisper-base-ph-kd2-ct2")
+    a.add_argument("--ctc-model", default="models/ctc-stream-base-v1")
     a.add_argument("--device", default="cuda")
     a.add_argument("--limit", type=int, default=0)
     a.add_argument("--split", choices=["dev", "test", "all"], default="all")

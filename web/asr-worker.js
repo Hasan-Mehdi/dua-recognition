@@ -39,11 +39,14 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ type: "stage", text: "Loading the tokenizer…" });
       tokenizer = await AutoTokenizer.from_pretrained(data.model);
       self.postMessage({ type: "stage", text: "Downloading the speech model (about 100 MB, once)…" });
-      model = await WhisperForConditionalGeneration.from_pretrained(data.model, {
-        dtype: "q8",
-        device: data.webgpu ? "webgpu" : "wasm",
+      // ?webgpu: the encoder (most of the arithmetic, one call a window) on the GPU in fp16
+      // (scripts/export_onnx.py --gpu-encoder); the decoder's ~40 small steps a window stay int8
+      // on the CPU, where they cost less than the GPU's per-call overhead.
+      model = await WhisperForConditionalGeneration.from_pretrained(data.model, data.webgpu ? {
+        dtype: { encoder_model: "fp16", decoder_model_merged: "q8" },
+        device: { encoder_model: "webgpu", decoder_model_merged: "wasm" },
         progress_callback,
-      });
+      } : { dtype: "q8", device: "wasm", progress_callback });
       self.postMessage({ type: "ready" });
     } catch (e) {
       self.postMessage({ type: "error", message: String(e) });

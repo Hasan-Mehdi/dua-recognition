@@ -173,11 +173,30 @@ on, for 0.6 points at equal delay, and on a phone the compute is most of the del
 
 ```bash
 python scripts/export_web.py                                     # web/corpus.json
-python scripts/export_onnx.py models/whisper-base-syn-v5-ctx8ft   # web/models/ (see its docstring)
-python scripts/export_ctc_student.py models/ctc-student-base-v6 --window 2 --name ctc-student-base-v6-w2   # web/models/ (the word model)
-python scripts/export_ctc_student.py models/ctc-student-tiny-v6 --window 2 --name ctc-student-tiny-v6-w2   # its slow-phone fallback
+python scripts/export_onnx.py models/whisper-base-ph-kd2 --gpu-encoder   # web/models/ (see its docstring)
+python scripts/export_stream_ctc.py models/ctc-stream-base-v1    # web/models/ (the word model, streaming)
+python scripts/export_ctc_student.py models/ctc-student-base-v6 --window 2 --name ctc-student-base-v6-w2   # ?ctc=: the window model
 python -m http.server -d web                                     # any static host works
 ```
+
+Since 2026-10-07 the page runs a Whisper-base distilled from the server's turbo and a streaming
+CTC student, whose steps encode only the new audio ([phone_engine.md](results/phone_engine.md)):
+
+```bash
+python scripts/finetune_whisper.py --base models/whisper-base-syn-v5-ctx8ft --name whisper-base-ph-kd \
+    --data h3c --synth 0.15 --context 8 --epochs 1 --lr 1.5e-5 --batch 32 --room 0.5 --room-rt60 0.3,1.5 \
+    --hall 0.3 --hall-voices 0.5 --speed 0.5 --vtlp 0.5 --specaug --workers 5 \
+    --teacher models/whisper-turbo-srv2 --kd 0.5            # then one more epoch from it at --lr 7e-6: -kd2
+python scripts/train_ctc_student.py --arch stream --window 5 --name ctc-stream-base-v1 \
+    --init models/ctc-student-base-v6 --synth synth_v5,synth_v6,cv_ar,cv_ar_test \
+    --teacher ctc_student_voices --epochs 8 --hall 0.3 --hall-voices 0.5 --phone 0.3
+```
+
+A phone runs slower than the bench's defaults assume: score it at its cadence with
+`DUA_BENCH_ASR_EVERY=2` (every 2nd Whisper window) and `--delay 1.8 --follow-delay 0.1`;
+`DUA_BENCH_CTC_STRIDE=2` keeps every 2nd CTC step (a window model on a slow phone).
+`?webgpu` runs Whisper's encoder on the GPU in fp16 (exported with `--gpu-encoder`), its decoder
+staying int8 on the CPU.
 
 ## Majlis mode
 

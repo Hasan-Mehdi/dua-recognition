@@ -17,6 +17,8 @@ import { encode, normalize } from "./tracker.js";
 
 const NEG = -1e30;
 
+// The phone's settings (docs/results/phone_engine.md): since 2026-10-07 the rules for repeated lines, salawat,
+// far jumps, shared passages and talk are on; the server engine sends its own profile (app/server.py).
 export const STREAM_DEFAULTS = {
   temp: 1.0,
   lookahead: 0.2,
@@ -27,11 +29,11 @@ export const STREAM_DEFAULTS = {
   cSkip: [-8.0, -9.0, -10.0],
   cMid: -3.0,
   cRest: -3.0,
-  cFar: -13.0,
+  cFar: -8.0, // (-13 until 2026-10-07; the frame push needs the cheaper entry)
   cFillIn: -8.0,
   fillCost: 1.0,
   cFillWord: -2.0,
-  cFillNext: -1.0,
+  cFillNext: -2.0, // (-1 until 2026-10-07: talk taken for the next line)
   interjection: "اللهم صل على محمد وآل محمد|وعجل فرجهم",
   cIntIn: -4.0,
   cIntNext: -1.0,
@@ -48,6 +50,9 @@ export const STREAM_DEFAULTS = {
   nextSteps: 2,
   // Into the next line on evidence (nextMargin 0 = off): see StreamConfig.next_margin.
   nextMargin: 3,
+  // ...and the salawat chain is one more alternative (its belief, its entry cost cIntIn taken back off):
+  // a line opening as the salawat does ("allāhumma ...") waits for the word where they part
+  nextIntj: true,
   nextHold: 0.3,
   nextSlack: 1.0,
   gateWords: 2,
@@ -64,14 +69,17 @@ export const STREAM_DEFAULTS = {
   lapseOff: 0.0,
   // ...and not the steps the frames put at least this share in the salawat chain (2 = every step): a long
   // salawat between lines lost the tracker's du'a and, after lapseVoice, the reader's place.
-  lapseIntj: 2.0,
+  lapseIntj: 0.5,
   // A du'a change counts once the tracker has held the new du'a this long (0 = at once): texts that
   // share a passage flip the tracker's du'a for a moment.
   switchS: 2.0,
   // ...and none of it counts while the tracker's last sharedWords words in the other du'a are the letters
   // ending at a word within sharedNear words of the shown one (0 = off): the two read the same passage here.
-  sharedWords: 0,
-  sharedNear: 8,
+  sharedWords: 4,
+  sharedNear: 400,
+  // ...the letters equal but for this many edits (texts spell a word of the same passage differently:
+  // Namaz-e-Wahshat's "yaʾūduhu" is ييوده, Eid al-Mubahila's يوده); the last 3 letters must agree
+  sharedEdits: 2,
   sharedAfter: 10.0, // ...once the shown du'a has been on screen this long (s)
   // The beam (0 = off): only lines holding beam of the belief, beamMargin lines either side, the shown
   // word's line and the tracker's proposals (proposeMass, +-1) are updated (stream_follower.py _prune).
@@ -88,7 +96,7 @@ export const STREAM_DEFAULTS = {
   // ...and when one line beats every other but its neighbours by ctcSure nats and isn't the shown line or
   // next to it, ctcPushP of the belief moves to just after its best word (0 = off): after a far jump the
   // frames name the new line within a second, but the belief never got there before the tracker did.
-  ctcPushP: 0.0,
+  ctcPushP: 0.2,
   ctcSure: 4.0,
   // The tracker's push (stream_follower.py): the shown word unchanged stuckS s while the reader makes
   // sound, the tracker pushWords or more words ahead (or on a later line): pushP of the belief moves
@@ -99,7 +107,7 @@ export const STREAM_DEFAULTS = {
   // Copies (stream_follower.py): lines with the same words are one line for the display, which weighs
   // each word by the belief summed over its copies and shows the copy nearest the word on screen (the
   // next-line gate still weighs each line by its own belief).
-  copies: false,
+  copies: true,
   copySplit: 0.5, // ...the nearest copy only while no copy holds this share of their summed belief
 };
 
@@ -113,6 +121,21 @@ function lae(a, b) {
   }
   if (b <= NEG / 2) return a;
   return a + Math.log1p(Math.exp(b - a));
+}
+
+// Fewest edits that turn letters[a, b) into a suffix of letters[s, e) (its start is free; its end is e).
+function suffixEdits(letters, a, b, s, e) {
+  const m = e - s;
+  let prev = new Array(m + 1).fill(0);
+  for (let i = 1; i <= b - a; i++) {
+    const cur = [i];
+    const ti = letters[a + i - 1];
+    for (let j = 1; j <= m; j++) {
+      cur.push(Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ti !== letters[s + j - 1] ? 1 : 0)));
+    }
+    prev = cur;
+  }
+  return prev[m];
 }
 
 export class StreamFollower {
@@ -612,12 +635,17 @@ export class StreamFollower {
     const b = fl[other + 1];
     const n = b - a;
     const [lo, hi] = ix.duaWordSpan[this.dua];
+    const ed = cfg.sharedEdits;
     for (let w = Math.max(lo, cur - cfg.sharedNear); w < Math.min(hi, cur + cfg.sharedNear + 1); w++) {
       const e = fl[w + 1];
-      if (e - n < fl[lo]) continue;
-      let same = true;
-      for (let i = 0; i < n && same; i++) same = ix.letters[e - n + i] === ix.letters[a + i];
-      if (same) return true;
+      if (!ed) {
+        if (e - n < fl[lo]) continue;
+        let same = true;
+        for (let i = 0; i < n && same; i++) same = ix.letters[e - n + i] === ix.letters[a + i];
+        if (same) return true;
+      } else if (n >= 3 && e - 3 >= fl[lo] && ix.letters[e - 1] === ix.letters[b - 1] && ix.letters[e - 2] === ix.letters[b - 2]
+        && ix.letters[e - 3] === ix.letters[b - 3]
+        && suffixEdits(ix.letters, a, b, Math.max(fl[lo], e - n - ed), e) <= ed) return true;
     }
     return false;
   }
@@ -697,7 +725,7 @@ export class StreamFollower {
         this.lapseVoice = 0;
       }
       if (quietNow != null && quietNow < cfg.lapseQuiet && this.off >= cfg.lapseOff && this.intj < cfg.lapseIntj) {
-        this.lapseVoice += cfg.hop;
+        this.lapseVoice += dt; // seconds of voice, however far apart the steps come
       }
       if (t - this.lapseSince > cfg.lapseS || this.lapseVoice > cfg.lapseVoice) {
         this.reset();
@@ -851,7 +879,8 @@ export class StreamFollower {
     let gate = true;
     if (intoNext && cfg.nextMargin > 0) {
       const pg = cfg.gateTentative ? pw : this.posterior(this.st).pw; // each line by its own belief (copies)
-      const m = this._nextMargin(dd, lineC, pg, best);
+      const ish = cfg.nextIntj ? this._interjShare(cfg.gateTentative ? tent : this.st) : null;
+      const m = this._nextMargin(dd, lineC, pg, best, ish);
       this.gateS = m >= -cfg.nextSlack ? this.gateS + dt : 0;
       gate = m >= cfg.nextMargin || this.gateS >= cfg.nextHold - 1e-3;
     } else {
@@ -878,7 +907,7 @@ export class StreamFollower {
   // Nats by which the frames prefer the words of line k+1 read so far (to upTo) over the same
   // words of the lines they could be instead (stream_follower.py _next_margin): Infinity when they
   // all read the same words, 0 when none that differs is in the beam.
-  _nextMargin(dd, k, pw, upTo) {
+  _nextMargin(dd, k, pw, upTo, intj = null) {
     const cfg = this.cfg;
     const seen = upTo - dd.lineFirstWord[k + 1] + 1; // words of k+1 reached
     const span = Math.max(cfg.gateWords, seen);
@@ -911,6 +940,10 @@ export class StreamFollower {
         const mass = start(li);
         if (mass > 1e-300) best = Math.max(best, Math.log(mass) - c);
       }
+    }
+    if (intj != null && intj > 1e-300) { // cfg.nextIntj: the salawat chain
+      differ = true;
+      best = Math.max(best, Math.log(intj) - cfg.cIntIn);
     }
     if (!differ) return Infinity; // every alternative reads the same words: no gate
     if (best === -Infinity) return 0;

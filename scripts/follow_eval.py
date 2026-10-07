@@ -46,6 +46,7 @@ import pause_eval as pe  # noqa: E402
 import word_eval as we  # noqa: E402
 from dua_recognition.align import encode  # noqa: E402
 from dua_recognition.follower import FollowerConfig, LocalFollower  # noqa: E402
+from dua_recognition.stream_ctc import load_frames  # noqa: E402
 from dua_recognition.tracker import TrackerConfig  # noqa: E402
 
 CTC = ROOT / "data" / "cache" / "ctc"
@@ -226,7 +227,7 @@ def follow_updates(ix, it: dict, fcfg: FollowerConfig, hmm_delay: float, f_delay
     `oracle_anchor` anchors on the true word at t instead of the tracker; `steps`
     (a list) collects (t, word) per step, before the compute delay."""
     z = np.load(it["ctc"])
-    lp, nf, ts = z["lp"], z["n_frames"], z["t"]
+    lp, nf, ts = load_frames(it["ctc"]) if "final" in z.files else (z["lp"], z["n_frames"], z["t"])
     fol = LocalFollower(ix, fcfg)
     if "cols" in z.files:  # a token-CTC dump (scripts/small_ctc.py): the model's own pieces and hop
         from dua_recognition.ctc_adapter import TokenFollower, expand
@@ -419,7 +420,7 @@ def evidence_gaps(ix, it: dict, steps: list) -> list[float]:
     step whose window has the word's first letter beating blank in a frame at or after the
     word's aligned start. Both in step time (before the compute delay)."""
     z = np.load(it["ctc"])
-    lp, nf, ts = z["lp"], z["n_frames"], z["t"]
+    lp, nf, ts = load_frames(it["ctc"]) if "final" in z.files else (z["lp"], z["n_frames"], z["t"])
     first_letter = LocalFollower(ix, FollowerConfig())._word_letter
     out = []
     for w, a, _, _ in it["good"]:

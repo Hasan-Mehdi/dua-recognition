@@ -162,11 +162,13 @@ def whisper_processor(base: str, context: float):
     return proc
 
 
-def make_batch(rows, train_mode, args, bank, proc, rng, start_id):
-    """Audio (augmented when training), log-mel features and label ids for one batch, on the CPU."""
+def make_batch(rows, train_mode, args, bank, proc, rng, start_id, tproc=None):
+    """Audio (augmented when training), log-mel features and label ids for one batch, on the CPU.
+    With `tproc` (the --teacher's processor), also the teacher's features of the clean audio."""
     from halls import hall_aug
 
     wav = [bank.window(r) for r in rows]
+    tfeats = tproc.feature_extractor(wav, sampling_rate=SR, return_tensors="pt").input_features if tproc else None
     if train_mode:
         wav = [speed_perturb(x, rng) if rng.random() < args.speed else x for x in wav]
         wav = [hall_aug(x, rng, args.hall_voices) if args.hall and rng.random() < args.hall else
@@ -180,7 +182,7 @@ def make_batch(rows, train_mode, args, bank, proc, rng, start_id):
     ids = labels.input_ids.masked_fill(labels.attention_mask == 0, -100)
     if (ids[:, 0] == start_id).all():
         ids = ids[:, 1:]  # the model prepends decoder_start itself
-    return feats, ids
+    return (feats, ids) if tproc is None else (feats, ids, tfeats)
 
 
 class _Batches(torch.utils.data.Dataset):
@@ -196,10 +198,37 @@ class _Batches(torch.utils.data.Dataset):
     def __getitem__(self, b):
         if self._open is None:
             paths = sorted({r.get("audio") for c in self.chunks for r in c if r.get("audio")})
-            self._open = (AudioBank(paths), whisper_processor(self.args.base, self.args.context))
-        bank, proc = self._open
+            tproc = teacher_processor(self.args.teacher) if self.args.teacher else None
+            self._open = (AudioBank(paths), whisper_processor(self.args.base, self.args.context), tproc)
+        bank, proc, tproc = self._open
         rng = random.Random((self.seed << 20) ^ b)
-        return make_batch(self.chunks[b], True, self.args, bank, proc, rng, self.start_id)
+        return make_batch(self.chunks[b], True, self.args, bank, proc, rng, self.start_id, tproc)
+
+
+def teacher_processor(path: str):
+    """The --teacher's processor, its feature extractor as saved (a cut model saves its own context)."""
+    from transformers import WhisperProcessor
+
+    proc = WhisperProcessor.from_pretrained(path, language="arabic", task="transcribe")
+    proc.tokenizer.set_prefix_tokens(language="arabic", task="transcribe", predict_timestamps=False)
+    return proc
+
+
+# Whisper large-v3 added <|yue|> at 50358: its special tokens from there on sit one id above
+# those of the earlier models; text tokens and <|endoftext|> (50257) are the same.
+V3_SHIFT_FROM = 50358
+N_TEXT = 50258  # ids 0..50257: text and <|endoftext|>, the tokens the distillation compares
+
+
+def kd_loss(student_logits, teacher_logits, ids, temp: float = 1.0):
+    """KL(teacher || student) per label token that is text or the end, over the shared ids,
+    at temperature `temp` (times temp**2, as Hinton et al.)."""
+    keep = (ids >= 0) & (ids < N_TEXT)
+    if not keep.any():
+        return student_logits.sum() * 0.0
+    s = (student_logits[keep].float() / temp).log_softmax(-1)[:, :N_TEXT]
+    t = (teacher_logits[keep].float() / temp).log_softmax(-1)[:, :N_TEXT]
+    return (t.exp() * (t - s)).sum(-1).mean() * temp**2
 
 
 def main() -> None:
@@ -242,6 +271,10 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=0, help="processes preparing batches (0: in the training loop)")
     ap.add_argument("--eval-every", type=int, default=0, help="also evaluate (and keep the best) every N steps")
     ap.add_argument("--max-steps", type=int, default=0, help="stop after this many steps (the schedule still spans --epochs)")
+    ap.add_argument("--teacher", default="", help="distil from this Whisper (models/whisper-turbo-srv2): it hears the "
+                                                   "clean window, the student the augmented one")
+    ap.add_argument("--kd", type=float, default=0.5, help="weight of the teacher's token distributions (--teacher)")
+    ap.add_argument("--kd-temp", type=float, default=1.0, help="temperature of the distillation")
     args = ap.parse_args()
 
     from transformers import WhisperForConditionalGeneration, WhisperProcessor, get_linear_schedule_with_warmup
@@ -330,6 +363,21 @@ def main() -> None:
             target_modules=["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]))
         model.print_trainable_parameters()
 
+    teacher, tproc = None, None
+    if args.teacher:
+        tproc = teacher_processor(args.teacher)
+        teacher = WhisperForConditionalGeneration.from_pretrained(args.teacher, dtype=torch.bfloat16).cuda().eval()
+        teacher.requires_grad_(False)
+        print(f"teacher {args.teacher}: kd {args.kd} at temperature {args.kd_temp}", flush=True)
+
+    def teacher_logits(tfeats, ids):
+        from transformers.models.whisper.modeling_whisper import shift_tokens_right
+
+        dec = shift_tokens_right(ids, model.config.pad_token_id, start_id)
+        dec = torch.where(dec >= V3_SHIFT_FROM, dec + 1, dec)
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+            return teacher(input_features=tfeats.to(torch.bfloat16), decoder_input_ids=dec).logits
+
     def batch_of(rows, train_mode):
         feats, ids = make_batch(rows, train_mode, args, bank, proc, rng, start_id)
         return feats.cuda(), ids.cuda()
@@ -384,13 +432,18 @@ def main() -> None:
         if args.workers:
             loader = torch.utils.data.DataLoader(
                 _Batches(chunks, args, start_id, args.seed * 1000 + epoch), batch_size=None, shuffle=False,
-                num_workers=args.workers, prefetch_factor=2)
+                num_workers=args.workers, prefetch_factor=2,
+                timeout=900)  # a worker that never starts: an error, not a hang
         else:
-            loader = (make_batch(c, True, args, bank, proc, rng, start_id) for c in chunks)
-        for feats, ids in loader:
-            feats, ids = feats.cuda(non_blocking=True), ids.cuda(non_blocking=True)
+            loader = (make_batch(c, True, args, bank, proc, rng, start_id, tproc) for c in chunks)
+        for batch in loader:
+            feats, ids = batch[0].cuda(non_blocking=True), batch[1].cuda(non_blocking=True)
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = model(input_features=feats, labels=ids).loss
+                res = model(input_features=feats, labels=ids)
+            loss = res.loss
+            if teacher is not None:
+                kd = kd_loss(res.logits, teacher_logits(batch[2].cuda(non_blocking=True), ids), ids, args.kd_temp)
+                loss = (1 - args.kd) * loss + args.kd * kd
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
@@ -398,7 +451,8 @@ def main() -> None:
             opt.zero_grad(set_to_none=True)
             step += 1
             if step % 50 == 0:
-                print(f"epoch {epoch + 1} step {step}/{steps}  loss {loss.item():.3f}  "
+                kd_txt = f" (ce {res.loss.item():.3f}, kd {kd.item():.3f})" if teacher is not None else ""
+                print(f"epoch {epoch + 1} step {step}/{steps}  loss {loss.item():.3f}{kd_txt}  "
                       f"{(time.time() - t0) / step:.2f} s/step", flush=True)
             if args.eval_every and step % args.eval_every == 0:
                 keep_if_best(f"step {step}")

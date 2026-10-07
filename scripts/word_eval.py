@@ -52,7 +52,7 @@ def load(tag: str, split: str = "test"):
 
 
 def hmm_updates(ix, rows, costs, quiet, cfg, delay, lead_mode="fixed", stale=None, still=False, anchors=None,
-                letters=None):
+                letters=None, real_gaps: bool = False):
     """Replay one recording's windows through the tracker: one entry per window,
     (display time, dua, seg, word, line word range, speed). With `anchors` (a
     list), also append each window's evidence position (no lead), for the
@@ -61,6 +61,9 @@ def hmm_updates(ix, rows, costs, quiet, cfg, delay, lead_mode="fixed", stale=Non
     ups = []
     stale = stale or [None] * len(rows)
     letters = letters or [None] * len(rows)
+    # seconds since the last window: 1 a window, or with real_gaps the rows' own (bench.py, scoring a phone that
+    # runs Whisper every 2 s)
+    prev = rows[0][0] - (rows[1][0] - rows[0][0] if len(rows) > 1 else 1.0) if rows else 0.0
     for (t, _), c, st, q, n in zip(rows, costs, stale, quiet, letters):
         q = q if still else 0.0
         if lead_mode == "none":
@@ -69,7 +72,8 @@ def hmm_updates(ix, rows, costs, quiet, cfg, delay, lead_mode="fixed", stale=Non
             lead = delay + cfg.display_lead
         else:  # "stale:<extra>"
             lead = delay + (st or 0.0) + float(lead_mode.split(":")[1])
-        p = tr.update_costs(c, 1.0, lead, n_letters=n, quiet=q)
+        p = tr.update_costs(c, float(t - prev) if real_gaps else 1.0, lead, n_letters=n, quiet=q)
+        prev = t
         rng = None
         if p.word is not None:
             d = ix.word_dua[p.word]

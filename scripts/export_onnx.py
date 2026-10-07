@@ -32,6 +32,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("model", help="fine-tuned Hugging Face checkpoint directory")
     ap.add_argument("--name", help="output name under web/models/ (default: the model's)")
+    ap.add_argument("--gpu-encoder", action="store_true",
+                    help="also write onnx/encoder_model_fp16.onnx: the encoder for the page's ?webgpu (the GPU runs "
+                         "it; the int8 decoder stays on the CPU, where its many small steps are cheaper)")
     args = ap.parse_args()
 
     from onnxruntime.quantization import QuantType, quantize_dynamic
@@ -53,6 +56,12 @@ def main() -> None:
             # EnableSubgraph they stay fp32 and the download triples.
             quantize_dynamic(tmp / f"{name}.onnx", out / "onnx" / f"{name}_quantized.onnx",
                              weight_type=QuantType.QUInt8, extra_options={"EnableSubgraph": True})
+        if args.gpu_encoder:
+            import onnx
+            from onnxconverter_common import float16
+
+            enc = float16.convert_float_to_float16(onnx.load(str(tmp / "encoder_model.onnx")), keep_io_types=True)
+            onnx.save(enc, str(out / "onnx" / "encoder_model_fp16.onnx"))
         for f in KEEP:
             for base in (tmp, src):
                 if (base / f).exists():

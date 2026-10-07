@@ -41,7 +41,7 @@ mic ─┬─▶ 6 s window, every 1-2 s ─▶ Whisper ─▶ align against eve
      │                                 │         distance, vectorized)      du'a priors)
      │                                 └─ fine-tuned whisper-base:             │ du'a, line
      │                                    CPU or in the browser                ▼ probabilities
-     └─▶ 2 s window, every 0.1 s ─▶ small CTC model ─▶ letters, every 20 ms ─▶ stream decoder ─▶ word
+     └─▶ new audio, every 0.1 s ───▶ small CTC model ─▶ letters, every 20 ms ─▶ stream decoder ─▶ word
                                                                               (reading moves over
                                                                                the whole du'a)
 ```
@@ -193,10 +193,14 @@ A transcript once a second has no timing inside it, and reaches the screen a sec
 after its audio. So on the phone a second, small model listens too: the encoder of the phone's
 Whisper with one layer onto the alphabet, trained from a 300 M-parameter wav2vec2 (itself
 tuned on ordinary voices), giving letter probabilities every 20 ms
-([`ctc_student.py`](../src/dua_recognition/ctc_student.py)). The page runs it on the latest
-2 s every 0.1 s, with audio in 50 ms chunks (`ctc-student-base-v6-w2`; a phone whose steps take
-over 400 ms switches to a whisper-tiny version, `ctc-student-tiny-v6-w2`). On a phone the
-model's own compute is most of the delay ([phone_latency.md](results/phone_latency.md)).
+([`ctc_student.py`](../src/dua_recognition/ctc_student.py)). On a phone the model's own compute
+is most of the delay ([phone_latency.md](results/phone_latency.md)), so since 2026-10-07 the page
+runs it streaming ([`stream_ctc.py`](../src/dua_recognition/stream_ctc.py), `ctc-stream-base-v1`):
+every 0.1 s it encodes only the audio that is new, its first layer looking 0.2 s ahead and the
+others only back, against keys and values it keeps from earlier steps (`web/ctc-stream.js`). A step
+costs about a quarter of re-encoding a 2 s window (7 ms against 28 ms in Chrome on a desktop), and
+the page still hands the decoder the latest 2 s of frames ([phone_engine.md](results/phone_engine.md)).
+The phone's Whisper is distilled from the server's turbo, with halls and crowds in its training.
 
 ### The stream decoder
 

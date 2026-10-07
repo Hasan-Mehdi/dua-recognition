@@ -142,11 +142,13 @@ function halfToFloat(h) {
 // word waits ~25 ms for its chunk instead of ~125 ms (250 ms chunks until 2026-10-01). ?chunk=4000: as before.
 const CHUNK = Number(params.get("chunk") || 800);
 
-// 2 s windows since 2026-10-01 (the same students exported with --window 2): a third less compute
-// per step than 3 s, and on the phone compute time is most of the follower's delay
-// (docs/results/phone_latency.md).
-const CTC_MODEL = "ctc-student-base-v6-w2";
+// The streaming student since 2026-10-07 (stream_ctc.py, ctc-stream.js; docs/results/phone_engine.md):
+// each 0.1 s step encodes only the new audio, a quarter of the 2 s window model's work (on a phone the
+// compute is most of the follower's delay), so no phone needs the small fallback for it. The window
+// students (?ctc=ctc-student-base-v6-w2) keep their slow-phone fallback.
+const CTC_MODEL = "ctc-stream-base-v1";
 const CTC_FALLBACK = "ctc-student-tiny-v6-w2";
+const CTC_STORED = "ctc-model-2"; // (a fallback stored under "ctc-model" chose between window models)
 const CTC_SLOW_MS = 400;
 
 class DeviceEngine {
@@ -172,7 +174,7 @@ class DeviceEngine {
     this.words = params.get("words") !== "off";
     // A phone too slow for it (the model's step over 400 ms) gets the whisper-tiny one from its next
     // session on: fewer, later steps cost more than a weaker ear (docs/results/phone_follower.md).
-    const kept = stored("ctc-model"); // a fallback chosen in an earlier session (older names don't count)
+    const kept = stored(CTC_STORED); // a fallback chosen in an earlier session (older names don't count)
     this.ctcModel = remoteCtc || params.get("ctc") || ([CTC_MODEL, CTC_FALLBACK].includes(kept) ? kept : null) || CTC_MODEL;
     // A step as soon as the last is done and 0.1 s of audio has come in: the step's wait is part of
     // the delay too (0.2 s until 2026-10-01).
@@ -217,6 +219,7 @@ class DeviceEngine {
       if (data.type === "ready") {
         this.ctcReady = true;
         this.ctcWindow = Math.round(data.meta.window_s * SR);
+        this.ctcStream = data.meta.arch === "stream"; // a streaming model: each step encodes only new audio
       } else if (data.type === "error") {
         log.event("error", { where: "ctc", message: data.message });
         this.ctcBusy = false;
@@ -270,10 +273,17 @@ class DeviceEngine {
     this._maybeSend();
     this._maybeCtc();
   }
+  get _ctcIdle() {
+    return this.anchor == null && this.follower?.word == null;
+  }
   _maybeCtc() {
-    if (!this.live || !this.ctcReady || this.ctcBusy || this.total - this.ctcSent < this.ctcHop) return;
     // Nothing to follow until the tracker has found the du'a (through a lapse, the follower's own word).
-    if (this.anchor == null && this.follower?.word == null) return;
+    // A streaming model keeps listening meanwhile, in bigger, cheaper steps, so its 3 s of context are
+    // there when the du'a is found (and the frames match the bench's, which stream from the start).
+    const idle = this._ctcIdle;
+    if (idle && !this.ctcStream) return;
+    const hop = idle ? Math.max(this.ctcHop, 0.3 * SR) : this.ctcHop;
+    if (!this.live || !this.ctcReady || this.ctcBusy || this.total - this.ctcSent < hop) return;
     this.ctcBusy = true;
     this.ctcSent = this.total;
     // The latest window, silence before the session's start (buf starts zeroed).
@@ -283,15 +293,16 @@ class DeviceEngine {
   _onFrames(data) {
     this.ctcBusy = false;
     if (!this.live) return;
+    if (this._ctcIdle) return this._maybeCtc(); // (a streaming model listening ahead: nothing to place yet)
     this.ctcTimes.push(data.ms);
-    if (this.ctcTimes.length === 20 && !params.get("ctc") && !this.remote) {
+    if (this.ctcTimes.length === 20 && !params.get("ctc") && !this.remote && !this.ctcStream) {
       // Too slow for the full model: the small one from the next session. Fast on the small one
       // (the full one takes ~2.5x as long): back to the full one.
       const p50 = [...this.ctcTimes].sort((a, b) => a - b)[10];
       const next = this.ctcModel === CTC_MODEL && p50 > CTC_SLOW_MS ? CTC_FALLBACK
         : this.ctcModel === CTC_FALLBACK && p50 < CTC_SLOW_MS * 0.3 ? CTC_MODEL : null;
       if (next) {
-        stored("ctc-model", next);
+        stored(CTC_STORED, next);
         log.event("ctc_model_next", { p50, next });
       }
     }
@@ -486,7 +497,7 @@ async function init() {
   state.mode = mode;
   state.engine = mode?.mode !== "server"
     // Trained with synthetic ordinary voices, at an 8 s context (docs/results/synthetic_voices.md, phone_speed.md).
-    ? new DeviceEngine(corpus, params.get("model") || "whisper-base-syn-v5-ctx8ft")
+    ? new DeviceEngine(corpus, params.get("model") || "whisper-base-ph-kd2")
     : new DeviceEngine(corpus, mode.model, new RemoteEar(), mode.ctc, mode.profile);
   log.upload = log.enabled && !!mode?.sessions;
   $("footnote").textContent = state.engine.kind === "device"

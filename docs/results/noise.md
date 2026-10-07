@@ -208,3 +208,12 @@ Sources: `noise_{Wc,Sc,WcSc}_dev.json`.
 `finetune_whisper.py` and `train_ctc_student.py` (0 = unchanged). Measured responses:
 `data/testbed/rirs/real` (OpenSLR 28, Apache 2.0). Queues and logs: `data/cache/run/noise_queue*.sh`,
 `data/testbed/logs/noise/`. Pre-registration: `data/cache/noise/prereg.md`.
+
+## Since (2026-10-07)
+
+The phone now runs a Whisper-base distilled from the server's turbo with halls, PA and real crowds in
+its training (`whisper-base-ph-kd2`), and a streaming CTC student trained with the hall augmentation
+([phone_engine.md](phone_engine.md)). At the phone's measured cadence, against the phone as it ran
+before: masjid on line 65% -> 78%, right word 42% -> 67%, found ≤10 s* 48% -> 70% (dev, 40 items;
+test, 16 items: 55% -> 67%, 37% -> 57%, 38% -> 56%); measured halls 88% -> 91%, 57% -> 76%,
+63% -> 85% (dev). The server engine on test: masjid 81% / 74% / 81%.

@@ -9,10 +9,12 @@ one write-up per experiment in docs/results/ (negative results included).
 
 - `src/dua_recognition/`: `align.py` (Myers alignment against the whole corpus), `tracker.py`
   (HMM over every word: du'a and line), `stream_follower.py` (the page's word follower),
-  `follower.py` (the rule-based word follower), `ctc_student.py` (the small CTC model),
+  `follower.py` (the rule-based word follower), `ctc_student.py` (the small CTC model, on windows),
+  `stream_ctc.py` (the same model streaming: the page's),
   `asr.py`, `pipeline.py` (the terminal demo's streaming recognizer), `display.py`.
-- `web/`: the app. `tracker.js`, `stream-follower.js`, `follower.js`, `display.js` and `gate.js`
-  mirror the Python; `app.js` wires them; `corpus.json` comes from `scripts/export_web.py`.
+- `web/`: the app. `tracker.js`, `stream-follower.js`, `follower.js`, `display.js`, `gate.js` and
+  `ctc-stream.js` mirror the Python; `app.js` wires them; `corpus.json` comes from
+  `scripts/export_web.py`.
 - `app/server.py`: FastAPI server: the page, majlis rooms, debug sessions; in the server engine
   (`DUA_ENGINE=server`) also Whisper and the CTC model, which the page asks for over `/ws/ear`
   (`RemoteEar` in app.js). Either engine runs the same page code (`DeviceEngine`).
@@ -20,14 +22,17 @@ one write-up per experiment in docs/results/ (negative results included).
 - `data/duas/`: the 522 texts (17 `mafatih-*` added 2026-10-03 by `scripts/mafatih_corpus.py`).
   `data/dua_popularity.json`: harvest recordings per text, the tracker's prior over du'as.
 
-What the page runs by default: Whisper `whisper-base-syn-v5-ctx8ft` on 6 s windows; the tracker
-with `popularity` 0.5; the CTC student `ctc-student-base-v6-w2` (2 s windows, 0.1 s steps, 50 ms
-chunks; `ctc-student-tiny-v6-w2` on slow phones); the stream decoder with the next-line rule
-(`StreamConfig.next_margin` 3.0, `next_hold` 0.3). `?follower=rules` brings back `follower.js`,
-`?sc=k:v` and `?tc=k:v` set stream-decoder and tracker options by their JavaScript names.
-The server engine runs its own: `whisper-turbo-srv2` (when present, with a GPU), the student on 3 s
-windows every 0.05 s, and `SERVER_PROFILE` in app/server.py, which the page takes from `/api/mode`
-(docs/results/server_profile.md; the new decoder rules are off by default on the phone).
+What the page runs by default (since 2026-10-07, docs/results/phone_engine.md): Whisper
+`whisper-base-ph-kd2` (the phone's Whisper-base distilled from the server's turbo) on 6 s windows;
+the tracker with `popularity` 0.5; the streaming CTC student `ctc-stream-base-v1`
+(`stream_ctc.py`: each 0.1 s step encodes only the new audio, `web/ctc-stream.js` keeps its
+caches; 50 ms chunks); the stream decoder with the phone profile as `StreamConfig`'s defaults
+(copies, salawat lapse, frame push, shared-passage hold with edits, salawat-aware next-line gate).
+`?follower=rules` brings back `follower.js`, `?ctc=ctc-student-base-v6-w2` the window student,
+`?sc=k:v` and `?tc=k:v` set stream-decoder and tracker options by their JavaScript names, `?webgpu`
+runs Whisper's encoder on the GPU (fp16). The server engine runs its own: `whisper-turbo-srv2`
+(when present, with a GPU), the window student on 3 s windows every 0.05 s, and `SERVER_PROFILE`
+in app/server.py, which the page takes from `/api/mode` (docs/results/server_profile.md).
 
 ## Tests
 
@@ -56,7 +61,9 @@ Hasan asked for every scenario to be tested, not one problem at a time).
 1. Tune on dev: `python scripts/bench.py score --name X --display stream --split dev --same-text 8
    [--sc k=v] [--tracker k=v] --compare BASE`. `--display stream` is the page; the default
    `follower` is the rule-based one. Score a fresh baseline with today's defaults first
-   (`base_dev_sp`/`base_test_sp` predate the next-line rule).
+   (`base_dev_sp`/`base_test_sp` predate the next-line rule). The default delays (Whisper every 1 s,
+   1.2 s late) flatter a phone: Hasan's runs Whisper every 2 s, 1.8 s late, so score the phone with
+   `DUA_BENCH_ASR_EVERY=2 ... --delay 1.8 --follow-delay 0.1` (phone_engine.md; `full_ph_G1_dev`).
 2. `python scripts/bench.py guard --name X --compare BASE`: every pre-registered bar, PASS/FAIL,
    per lane, with Hasan's sessions per recording. `scripts/jump_diag.py` sorts what moves remain.
 3. Report on test (`--split test`). The test voices were looked at in the jump work, so say so.

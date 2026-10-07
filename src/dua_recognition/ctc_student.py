@@ -94,8 +94,11 @@ def n_frames(n_samples: int) -> int:
 
 
 def save(model: WhisperCTC, out: Path, meta: dict) -> None:
+    import json
+
     out.mkdir(parents=True, exist_ok=True)
     torch.save({"state": model.state_dict(), "meta": meta}, out / "student.pt")
+    (out / "meta.json").write_text(json.dumps(meta, indent=1, default=str))
 
 
 class StudentCtc:
@@ -192,6 +195,13 @@ def load_ctc(name: str):
     """A student folder (student.pt), a server model (server_ctc.pt) or a Hugging Face CTC model, behind the
     same window interface."""
     if (Path(name) / "student.pt").exists():
+        import json
+
+        meta = Path(name) / "meta.json"
+        if meta.exists() and json.loads(meta.read_text()).get("arch") == "stream":  # stream_ctc.py
+            from .stream_ctc import StreamStudent
+
+            return StreamStudent(name)
         return StudentCtc(name)
     if (Path(name) / "server_ctc.pt").exists():  # a bigger model for the server engine (server_ctc.py)
         from .server_ctc import ServerCtc

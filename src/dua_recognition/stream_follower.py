@@ -36,6 +36,19 @@ from .align import CorpusIndex
 
 NEG = -1e30
 
+
+def _suffix_edits(tail, seg) -> int:
+    """Fewest edits that turn `tail` into a suffix of `seg` (its start is free; its end is seg's)."""
+    m = len(seg)
+    prev = [0] * (m + 1)
+    for i in range(1, len(tail) + 1):
+        cur = [i] + [0] * m
+        ti = int(tail[i - 1])
+        for j in range(1, m + 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ti != int(seg[j - 1])))
+        prev = cur
+    return prev[m]
+
 try:  # numba makes the per-frame pass ~50x faster; the numpy fallback is the reference
     from numba import njit
 except ImportError:  # pragma: no cover
@@ -44,6 +57,8 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class StreamConfig:
+    # The defaults are the phone's (docs/results/phone_engine.md): since 2026-10-07 the rules for repeated
+    # lines, salawat, far jumps, shared passages and talk are on; the server engine sends its own profile.
     temp: float = 1.0  # divides the CTC log posteriors
     lookahead: float = 0.2  # s: committed frames end this long before the window's end
     hop: float = 0.1  # s between windows
@@ -53,13 +68,13 @@ class StreamConfig:
     c_skip: tuple = (-8.0, -9.0, -10.0)
     c_mid: float = -3.0  # leaving a line before its last word
     c_rest: float = -3.0  # ...for the next line's start (on top of c_mid)
-    c_far: float = -13.0  # all other line starts together
+    c_far: float = -8.0  # all other line starts together (-13 until 2026-10-07; the frame push needs the cheaper entry)
     c_fill_in: float = -8.0
     fill_cost: float = 1.0  # nats per letter frame below the frame's best letter (a blank frame is free:
     # most frames of any speech are blanks, and a flat cost per frame let the du'a's own blank states win
     # over the filler all through someone else's talk)
     c_fill_word: float = -2.0  # filler back to a word of its line (spread over the line's words)
-    c_fill_next: float = -1.0  # filler to the next line's start
+    c_fill_next: float = -2.0  # filler to the next line's start (-1 until 2026-10-07: talk taken for the next line)
     # Interjections: the salawat said between lines or after the Prophet's name (optionally with
     # "wa-ajjil farajahum"), entered from any word end at c_int_in and left for the next line's
     # start (c_int_next) or a word of the line it was said in (c_int_word). Without it the decoder
@@ -99,6 +114,9 @@ class StreamConfig:
     # On since 2026-10-04 (margin 3, hold 0.3; next_margin 0 = off): on held-out voices jumps -23%,
     # early moves -26%, lines entered 0.06 s later (docs/results/jumps.md).
     next_margin: float = 3.0
+    # ...and the salawat chain is one more alternative (its belief, its entry cost c_int_in taken back off):
+    # a line opening as the salawat does ("allāhumma ...") waits for the word where they part
+    next_intj: bool = True
     next_hold: float = 0.3
     next_slack: float = 1.0
     gate_words: int = 2
@@ -116,7 +134,7 @@ class StreamConfig:
     # ...and not the steps the frames put at least this share in the salawat chain (2 = every step):
     # a long salawat between lines lost the tracker's du'a and, after lapse_voice, the reader's place
     # (Baha, after a 10 s salawat: back to its first line).
-    lapse_intj: float = 2.0
+    lapse_intj: float = 0.5
     # A du'a change counts once the tracker has held the new du'a this long (0 = at once). Texts that
     # share a passage (Ayat al-Kursi in Namaz-e-Wahshat and Eid-e-Mubahila) flip the tracker's du'a for a
     # moment, and starting over there showed a line of the other text.
@@ -125,8 +143,11 @@ class StreamConfig:
     # letters ending at a word within `shared_near` words of the shown one (0 = off): the two texts read
     # the same passage here (Ayat al-Kursi in Namaz-e-Wahshat and an Eid al-Mubahila text), and the
     # display stays where it was until they part.
-    shared_words: int = 0
-    shared_near: int = 8
+    shared_words: int = 4
+    shared_near: int = 400
+    # ...the letters equal but for this many edits (texts spell a word of the same passage differently:
+    # Namaz-e-Wahshat's "yaʾūduhu" is ييوده, Eid al-Mubahila's يوده); the last 3 letters must agree
+    shared_edits: int = 2
     shared_after: float = 10.0  # ...once the shown du'a has been on screen this long (s): a reader starting
     # inside a passage (mid-Iftitah) can't have found the right text yet, and holding the first one kept it
     # A beam (0 = off: every line every frame, too slow for Kumayl on a phone): after each step only
@@ -149,7 +170,7 @@ class StreamConfig:
     # a far jump the frames name the reader's new line within a second, but entering it costs c_far
     # (-17 nats and more spread over the lines) and the belief never got there before the tracker
     # did, ~6 s later. Lines with copies never pass the test (their copies score the same).
-    ctc_push_p: float = 0.0
+    ctc_push_p: float = 0.2
     ctc_sure: float = 4.0
     # The tracker's push: the shown word unchanged `stuck_s` s while the reader makes sound (stop
     # detector under quiet_s), and the tracker `push_words` or more words ahead in the du'a (or on
@@ -168,7 +189,7 @@ class StreamConfig:
     # the copy nearest the word on screen, so the highlight follows the words until the block is told
     # apart. The next-line gate still weighs each line by its own belief: pooled, a refrain's copies
     # made "start the refrain again" look likelier and held the next line back (Mujeer).
-    copies: bool = False
+    copies: bool = True
     copy_split: float = 0.5  # ...the nearest copy only while no copy holds this share of their summed belief
 
 
@@ -869,10 +890,16 @@ class StreamFollower:
             return False
         a, b = int(wl[other - k + 1]), int(wl[other + 1])
         tail = ix.letters[a:b]
+        n, ed = b - a, int(cfg.shared_edits)
         lo, hi = (int(x) for x in ix.dua_word_span[self.dua])
+        first = int(wl[lo])
         for w in range(max(lo, cur - near), min(hi, cur + near + 1)):
             e = int(wl[w + 1])
-            if e - (b - a) >= int(wl[lo]) and np.array_equal(ix.letters[e - (b - a) : e], tail):
+            if not ed:
+                if e - n >= first and np.array_equal(ix.letters[e - n : e], tail):
+                    return True
+            elif (n >= 3 and e - 3 >= first and np.array_equal(ix.letters[e - 3 : e], tail[-3:])
+                  and _suffix_edits(tail, ix.letters[max(first, e - n - ed) : e]) <= ed):
                 return True
         return False
 
@@ -915,7 +942,7 @@ class StreamFollower:
                 self._lapse_voice = 0.0
             if (quiet_now is not None and quiet_now < cfg.lapse_quiet and self._off >= cfg.lapse_off
                     and self._intj < cfg.lapse_intj):
-                self._lapse_voice += cfg.hop
+                self._lapse_voice += dt  # seconds of voice, however far apart the steps come
             if t - self._lapse_since > cfg.lapse_s or self._lapse_voice > cfg.lapse_voice:
                 self.reset()
                 return None
@@ -1033,7 +1060,11 @@ class StreamFollower:
         gate = True
         if into_next and cfg.next_margin > 0:
             pg = pw_raw if cfg.gate_tentative else self.posterior(self.L, self.B, self.F, self.IL, self.IB)[0]
-            m = self._next_margin(dd, k, pg, best)
+            ish = None
+            if cfg.next_intj:
+                ish = (self._interj_share(L, B, F, IL, IB) if cfg.gate_tentative
+                       else self._interj_share(self.L, self.B, self.F, self.IL, self.IB))
+            m = self._next_margin(dd, k, pg, best, ish)
             self._gate_s = self._gate_s + dt if m >= -cfg.next_slack else 0.0
             gate = m >= cfg.next_margin or self._gate_s >= cfg.next_hold - 1e-3
         else:
@@ -1047,7 +1078,7 @@ class StreamFollower:
         """Each word's belief summed over its copies (StreamConfig.copies), summed in word order."""
         return np.bincount(dd.word_copy, weights=pw, minlength=pw.size)[dd.word_copy]  # (sequential, as in JS)
 
-    def _next_margin(self, dd: _Dua, k: int, pw: np.ndarray, best: int) -> float:
+    def _next_margin(self, dd: _Dua, k: int, pw: np.ndarray, best: int, intj: float | None = None) -> float:
         """Nats by which the frames prefer the words of line k+1 read so far (to `best`) over the
         same words of line k again, k-1..k-3 or k+2..k+4 (each alternative's belief with its
         transition cost taken back off). inf when every alternative reads the same words (the
@@ -1082,6 +1113,9 @@ class StreamFollower:
                 mass = start(li)
                 if mass > 1e-300:
                     best = max(best, float(np.log(mass)) - c)
+        if intj is not None and intj > 1e-300:  # StreamConfig.next_intj: the salawat chain
+            differ = True
+            best = max(best, float(np.log(intj)) - cfg.c_int_in)
         if not differ:
             return np.inf
         if best == -np.inf:

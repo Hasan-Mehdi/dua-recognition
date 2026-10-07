@@ -61,6 +61,11 @@ many du'as open with words other texts have too.
 - **Server engine:** on 20 test items played through the real page, 91% on the line and 82% on
   the word, against 86% and 65% for a phone; in a simulated masjid (a PA, a measured hall, people
   talking) 81% on the line, against 57% with the phone's models ([server_profile.md](docs/results/server_profile.md)).
+- **The phone, at its real speed** (2026-10-07): a phone runs Whisper every 2 s, not every second,
+  and its old word model took a quarter of a second a step. With a streaming word model and a
+  Whisper distilled from the server's, at that speed on test: 91% on the line (89% before), 76% on
+  the word (60%), named within 10 s\* 94% of the time (83%); in the simulated masjid 67% on the line
+  (55%) ([phone_engine.md](docs/results/phone_engine.md)).
 
 ## Quick start
 
@@ -91,7 +96,7 @@ flowchart LR
     B --> C["<b>Align</b><br/>against all 522 texts<br/>140,803 words in ~3 ms"]
     C --> D["<b>HMM tracker</b><br/>which du'a,<br/>which line"]
     D --> E(["du'a · line · word"])
-    A -- "last 2 s,<br/>every 0.1 s" --> F["<b>CTC model</b><br/>letters every 20 ms"]
+    A -- "new audio,<br/>every 0.1 s" --> F["<b>CTC model</b><br/>letters every 20 ms"]
     F --> G["<b>Stream decoder</b><br/>reading moves<br/>over the whole du'a"]
     D -- "du'a, line<br/>probabilities" --> G
     G --> E
@@ -103,8 +108,9 @@ flowchart LR
 - **Letters place the word.** A small CTC model hears letters as they are said. The stream
   decoder follows them through the du'a, allowing for going back, repeating, skipping and
   stopping to talk.
-- **Both run on the phone.** The models are a fine-tuned whisper-base cut to an 8 s context and
-  a CTC student distilled from wav2vec2, both trained with synthetic ordinary voices. The server
+- **Both run on the phone.** The models are a whisper-base cut to an 8 s context, distilled from
+  the server's Whisper, and a streaming CTC student distilled from wav2vec2 that encodes only the
+  new audio at each step, both trained with synthetic ordinary voices and halls. The server
   engine is the same page with larger models on a server: a fully fine-tuned large-v3-turbo and
   the student on longer, more frequent windows.
 

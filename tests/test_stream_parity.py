@@ -92,7 +92,10 @@ def test_numba_equals_numpy():
                                    {"ctcPushP": 0.2, "ctcSure": 4.0, "copies": True, "_dua": 2},
                                    {"_flip": True, "sharedWords": 2}, {"_flip": True, "sharedWords": 1, "sharedNear": 40},
                                    {"_flip": True, "sharedWords": 1, "sharedNear": 40, "sharedAfter": 0.0},
-                                   {"hop": 0.05, "_steps": (2, 3), "lineSteps": 3, "nextSteps": 3}])
+                                   {"_flip": True, "sharedWords": 2, "sharedNear": 40, "sharedAfter": 0.0,
+                                    "sharedEdits": 2},
+                                   {"hop": 0.05, "_steps": (2, 3), "lineSteps": 3, "nextSteps": 3},
+                                   {"nextIntj": True, "nextMargin": 3.0}, {"nextIntj": True, "gateTentative": False}])
 def test_js_stream_matches_python(tmp_path, extra):
     extra = dict(extra)
     flip = extra.pop("_flip", False)  # the tracker reports another du'a for a while (a shared passage)
@@ -130,17 +133,20 @@ def test_js_stream_matches_python(tmp_path, extra):
     lines = sorted({int(seg[w]) for w in range(lo, hi)})
     js_cfg = {"trackerWeight": 0.3, "nextSteps": 2, "quietPen": 4.0,
               "interjection": "اللهم صل على محمد وآل محمد|وعجل فرجهم", **extra}
+    D = StreamConfig()  # (the fallbacks: the defaults, which must match web/stream-follower.js)
     py_cfg = StreamConfig(tracker_weight=js_cfg["trackerWeight"], next_steps=js_cfg["nextSteps"],
                           quiet_pen=js_cfg["quietPen"],
                           interjections=(js_cfg["interjection"],) if js_cfg["interjection"] else (),
                           next_margin=js_cfg.get("nextMargin", 3.0), next_hold=js_cfg.get("nextHold", 0.3),
-                          next_slack=js_cfg.get("nextSlack", 1.0),
+                          next_slack=js_cfg.get("nextSlack", 1.0), next_intj=js_cfg.get("nextIntj", D.next_intj),
                           gate_words=js_cfg.get("gateWords", 2), gate_tentative=js_cfg.get("gateTentative", True),
                           lapse_voice=js_cfg.get("lapseVoice", 4.0), lapse_off=js_cfg.get("lapseOff", 0.0),
-                          copies=js_cfg.get("copies", False), lapse_intj=js_cfg.get("lapseIntj", 2.0),
-                          ctc_push_p=js_cfg.get("ctcPushP", 0.0), ctc_sure=js_cfg.get("ctcSure", 4.0),
-                          shared_words=js_cfg.get("sharedWords", 0), shared_near=js_cfg.get("sharedNear", 8),
+                          copies=js_cfg.get("copies", D.copies), lapse_intj=js_cfg.get("lapseIntj", D.lapse_intj),
+                          ctc_push_p=js_cfg.get("ctcPushP", D.ctc_push_p), ctc_sure=js_cfg.get("ctcSure", 4.0),
+                          shared_words=js_cfg.get("sharedWords", D.shared_words),
+                          shared_near=js_cfg.get("sharedNear", D.shared_near),
                           shared_after=js_cfg.get("sharedAfter", 10.0),
+                          shared_edits=js_cfg.get("sharedEdits", D.shared_edits),
                           hop=js_cfg.get("hop", 0.1), line_steps=js_cfg.get("lineSteps", 2))
 
     def mass_fn(anchor):
@@ -187,3 +193,12 @@ console.log(JSON.stringify(steps.map((end, i) => {{
     assert len(set(expected)) > 30  # it really moved
     mismatches = [(i, e, g) for i, (e, g) in enumerate(zip(expected, got)) if e != g]
     assert not mismatches, mismatches[:5]
+
+
+def test_suffix_edits():
+    from dua_recognition.stream_follower import _suffix_edits
+
+    assert _suffix_edits([1, 2, 3], [9, 9, 1, 2, 3]) == 0  # a suffix as it is
+    assert _suffix_edits([1, 2, 3], [9, 1, 7, 3]) == 1  # one letter different
+    assert _suffix_edits([1, 2, 2, 3], [5, 1, 2, 3]) == 1  # one letter doubled (ييوده / يوده)
+    assert _suffix_edits([1, 2, 3], [1, 2, 3, 4]) == 1  # it must end where the segment ends
