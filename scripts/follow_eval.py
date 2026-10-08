@@ -46,7 +46,6 @@ import pause_eval as pe  # noqa: E402
 import word_eval as we  # noqa: E402
 from dua_recognition.align import encode  # noqa: E402
 from dua_recognition.follower import FollowerConfig, LocalFollower  # noqa: E402
-from dua_recognition.stream_ctc import load_frames  # noqa: E402
 from dua_recognition.tracker import TrackerConfig  # noqa: E402
 
 CTC = ROOT / "data" / "cache" / "ctc"
@@ -226,6 +225,8 @@ def follow_updates(ix, it: dict, fcfg: FollowerConfig, hmm_delay: float, f_delay
     k+n minus its last n*10 frames: the same audio, no frame later than t);
     `oracle_anchor` anchors on the true word at t instead of the tracker; `steps`
     (a list) collects (t, word) per step, before the compute delay."""
+    from dua_recognition.stream_ctc import load_frames  # torch: not at import time (CI has none)
+
     z = np.load(it["ctc"])
     lp, nf, ts = load_frames(it["ctc"]) if "final" in z.files else (z["lp"], z["n_frames"], z["t"])
     fol = LocalFollower(ix, fcfg)
@@ -419,6 +420,8 @@ def evidence_gaps(ix, it: dict, steps: list) -> list[float]:
     """A3. Per line-first truth word: the step where the follower reaches it, minus the first
     step whose window has the word's first letter beating blank in a frame at or after the
     word's aligned start. Both in step time (before the compute delay)."""
+    from dua_recognition.stream_ctc import load_frames  # torch: not at import time (CI has none)
+
     z = np.load(it["ctc"])
     lp, nf, ts = load_frames(it["ctc"]) if "final" in z.files else (z["lp"], z["n_frames"], z["t"])
     first_letter = LocalFollower(ix, FollowerConfig())._word_letter
