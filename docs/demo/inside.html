@@ -5,11 +5,12 @@
      as they were heard:
        - Whisper's window, gold: the 6 s it last read, with what it heard above it (it names the
          du'a and anchors the follower; every 2 s while following, as on a phone);
-       - the CTC model's window, pale: the last 2 s, read every 0.1 s, its letters written out
-         under the sound as they come back (the stream decoder places the word from them).
+       - the CTC model, pale: the newest tenth of a second, heard every 0.1 s, inside a faint box for
+         the 3 s it remembers (the streaming student keeps what it worked out), its letters written
+         out under the sound as they come back (the stream decoder places the word from them).
      No words of its own: what each part is goes in the README's caption.
 
-       node docs/demo/capture.mjs --seconds 40 --out docs/demo/inside-runs/1-tawassul.json
+       node docs/demo/capture.mjs --seconds 40 --asr-ms 1730 --ctc-ms 60 --out docs/demo/inside-runs/1-tawassul.json
        node docs/demo/film.mjs --stage inside.html --runs docs/demo/inside-runs --fps 30 --samples 1
        # -> data/cache/media/inside.mp4 (with the recording's sound: stays local); docs/demo.gif from it -->
 <html lang="en">
@@ -80,7 +81,7 @@ const RIGHT = 1868; // the oldest still shown
 const PX = 124; // per second of sound
 const MID = 560, AMP = 92; // the waveform
 const BAR = 0.05; // s per bar
-const WHISPER_S = 6, CTC_S = 2;
+const WHISPER_S = 6, CTC_S = 3, CTC_NEW = 0.1; // the stream student's memory, and what each step hears
 const GOLD = [217, 180, 106], INK = [239, 230, 208], DIM = [151, 143, 124];
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(3)})`;
 
@@ -146,7 +147,7 @@ function draw(t) {
   g.clearRect(0, 0, 1920, 1080);
   const c = demo.t0 != null ? (performance.now() - demo.t0) / 1000 : t - START; // clip seconds
   const listening = demo.t0 != null;
-  // The CTC model runs once the du'a is named (the follower needs one): from its first step back.
+  // The CTC model runs from its first step back (the streaming student starts with the microphone).
   const ctcOn = listening && CTC_FROM != null && c >= CTC_FROM;
 
   // Whisper's latest window and the one before it, fading.
@@ -168,7 +169,7 @@ function draw(t) {
     const v = bars.at(s);
     const h = Math.max(3, v * AMP);
     const edge = Math.min(ease((x - NOW_X + 4) / 36), ease((RIGHT - x) / 140));
-    const ctc = ctcOn && s >= c - CTC_S && s >= 0 ? 1 : 0;
+    const ctc = ctcOn && s + BAR >= c - CTC_NEW && s >= 0 ? 1 : 0;
     const wh = listening ? inWhisper(s) : 0;
     const col = ctc ? INK : wh ? GOLD : DIM;
     g.fillStyle = rgba(col, (ctc ? 0.85 : wh ? 0.9 : 0.42) * edge);
@@ -197,12 +198,16 @@ function draw(t) {
     g.fillText(w.h.text.trim(), cx, MID - AMP - 66);
   }
 
-  // The CTC model's window, at the newest sound.
+  // The CTC model at the newest sound: the tenth of a second it hears, inside the 3 s it remembers.
   if (ctcOn) {
     const a = ease((c - CTC_FROM) / 0.4);
     roundRect(xOf(c, c) - 8, MID - AMP - 12, xOf(c, Math.max(0, c - CTC_S)) + 8, MID + AMP + 12, 16);
-    g.lineWidth = 1.6;
-    g.strokeStyle = rgba(INK, 0.55 * a);
+    g.lineWidth = 1.4;
+    g.strokeStyle = rgba(INK, 0.22 * a);
+    g.stroke();
+    roundRect(xOf(c, c) - 8, MID - AMP - 12, xOf(c, Math.max(0, c - CTC_NEW)) + 8, MID + AMP + 12, 10);
+    g.lineWidth = 1.8;
+    g.strokeStyle = rgba(INK, 0.7 * a);
     g.stroke();
   }
 

@@ -12,8 +12,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" width="800" alt="The app on a phone names Dua Tawassul mid-recitation and follows it word by word. Beside it the recording flows out of the phone: a gold box marks the 6 seconds Whisper last read, with what it heard above; a pale box marks the 2 seconds the letter model reads every tenth of a second, with the letters it heard written out below">
-  <br><sub>Dua Tawassul recited by Hussein Ghareeb (<a href="https://www.duaplayer.org">DuaPlayer</a>), a voice held out of training, through the real page at phone speed. Gold: the last 6 s Whisper read and what it heard; it names the du'a and keeps the follower on it. White: the last 2 s the letter model reads every 0.1 s, and the letters it heard; they move the highlight.</sub>
+  <img src="docs/demo.gif" width="800" alt="The app on a phone names Dua Tawassul mid-recitation and follows it word by word. Beside it the recording flows out of the phone: a gold box marks the 6 seconds Whisper last read, with what it heard above; a pale box marks the newest tenth of a second the letter model hears, inside the 3 seconds it remembers, with the letters it heard written out below">
+  <br><sub>Dua Tawassul recited by Hussein Ghareeb (<a href="https://www.duaplayer.org">DuaPlayer</a>), a voice held out of training, through the real page at a phone's speed. Gold: the last 6 s Whisper read and what it heard; it names the du'a and keeps the follower on it. White: the tenth of a second the letter model hears at each step, inside the 3 s it remembers, and the letters it heard; they move the highlight.</sub>
 </p>
 
 <p align="center">
