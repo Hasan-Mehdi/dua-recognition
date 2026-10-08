@@ -1,0 +1,62 @@
+{
+ "asr": "whisper-base-ph-kd2",
+ "split": "test",
+ "set": "source duaplayer, tier all: 16 recordings, 4.01 h, 6 voices, 0 venues (studio 16)",
+ "summary": {
+  "matcher": {
+   "line_acc": 0.46362633321073926,
+   "line_acc_pm1": 0.729606472968003,
+   "dua_acc": 0.8942258183155571,
+   "wrong_dua_shown": 0.10327326222876057,
+   "refrain_acc": 0.061547836684948204,
+   "lag_median_s": 3.3110000000000355,
+   "lines_missed": 0.14247166756610902,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 5.141596175064362
+  },
+  "tracker": {
+   "line_acc": 0.8648767929385803,
+   "line_acc_pm1": 0.9622655388010298,
+   "dua_acc": 0.9624126517101875,
+   "wrong_dua_shown": 0.004266274365575579,
+   "refrain_acc": 0.8982327848872639,
+   "lag_median_s": 1.1525000000000318,
+   "lines_missed": 0.0124123043712898,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.026480323648400146
+  },
+  "oracle": {
+   "line_acc": 0.8774549466715704,
+   "line_acc_pm1": 0.9802133137182788,
+   "dua_acc": 0.9854358219933799,
+   "wrong_dua_shown": 0.0,
+   "refrain_acc": 0.9012797074954296,
+   "lag_median_s": 1.1470000000000482,
+   "lines_missed": 0.0021586616297895305,
+   "hours": 3.776388888888889,
+   "jumps_per_min": 0.07502758367046708
+  }
+ },
+ "identification": {
+  "3": {
+   "classifier": 0.825,
+   "tracker": 0.84375
+  },
+  "5": {
+   "classifier": 0.834375,
+   "tracker": 0.903125
+  },
+  "10": {
+   "classifier": 0.921875,
+   "tracker": 0.940625
+  },
+  "20": {
+   "classifier": 0.9625,
+   "tracker": 0.9625
+  },
+  "30": {
+   "classifier": 0.98125,
+   "tracker": 0.98125
+  }
+ }
+}

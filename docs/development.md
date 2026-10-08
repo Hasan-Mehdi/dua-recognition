@@ -28,10 +28,10 @@ python app/demo.py recitation.mp3        # terminal version (no argument = micro
 | environment variable | default | |
 |---|---|---|
 | `DUA_ENGINE` | `device` once `web/models/` has the [phone models](#on-device-no-server-nothing-leaves-the-phone), else `server` | where the speech models run. `device`: in the browser; the server only serves files, rooms and debug sessions. `server`: on the server, which the page streams its audio to ([server_engine.md](results/server_engine.md)). Either way the page runs the tracker, the stream decoder and everything else |
-| `DUA_ASR_MODEL` | `models/whisper-turbo-srv2-ct2` (large-v3-turbo fine-tuned in full at 8 s) if present and there's a GPU, else `models/whisper-base-syn-v5-ctx8ft-ct2` (the page's Whisper) if present, else `large-v3-turbo` | the server engine's Whisper: any faster-whisper model name or CTranslate2 directory ([server_profile.md](results/server_profile.md)) |
+| `DUA_ASR_MODEL` | `models/whisper-turbo-srv2-ct2` (large-v3-turbo fine-tuned in full at 8 s) if present and there's a GPU, else `models/whisper-base-ph-kd2-ct2` (the page's Whisper) if present, else `large-v3-turbo` | the server engine's Whisper: any faster-whisper model name or CTranslate2 directory ([server_profile.md](results/server_profile.md)) |
 | `DUA_ASR_DEVICE` | GPU if available | `cpu` or `cuda` |
 | `DUA_CTC_MODEL` | `models/ctc-student-base-v6` | the server engine's CTC model: a student folder, a `server_ctc.py` model, or any Hugging Face CTC model, e.g. `models/wav2vec2-quran-dua-voices` |
-| `DUA_CTC_WINDOW` | `3.0` | seconds of audio per CTC window in the server engine (the student was trained on 3 s; the phone sends 2 s) |
+| `DUA_CTC_WINDOW` | `3.0` | seconds of audio per CTC window in the server engine (the window student was trained on 3 s; on the phone it ran on 2 s until 2026-10-07) |
 | `DUA_SERVER_PROFILE` | `app/server.py` `SERVER_PROFILE` | a JSON file with the server engine's settings for the page: `ctcHop`, stream decoder `sc` and tracker `tc` by their JavaScript names (`{}` = the phone's) |
 | `DUA_CTC_DEVICE` | GPU if available | `cpu` or `cuda` for a student (on this PC one 2 s window takes 21 ms on the CPU, 29 ms on the GPU) |
 | `DUA_SESSIONS` | `data/sessions` | where uploaded debug sessions go (replays: somewhere else) |
@@ -42,12 +42,12 @@ URL options for the web app:
 |---|---|
 | `?watch=CODE` | follow another phone's room (majlis mode) |
 | `?majlis` | start in majlis mode |
-| `?model=NAME` | on-device model under `web/models/` (default `whisper-base-syn-v5-ctx8ft`: synthetic voices, 8 s context; `whisper-base-aug-v4` is the previous one) |
-| `?webgpu` | run the on-device model on WebGPU |
+| `?model=NAME` | on-device Whisper under `web/models/` (default `whisper-base-ph-kd2`: distilled from the server's turbo, with halls; `whisper-base-syn-v5-ctx8ft` is the previous one) |
+| `?webgpu` | run the on-device Whisper's encoder on WebGPU in fp16 (exported with `--gpu-encoder`), its decoder staying int8 on the CPU |
 | `?words=off` | no word follower: Whisper's lead and the gliding highlight place the word, as before 2026-10-01 |
 | `?follower=rules` | the rule-based follower (`follower.js`) instead of the stream decoder (`stream-follower.js`, the default since 2026-10-03) |
 | `?sc=k:v,...`, `?tc=k:v,...` | stream-decoder and tracker settings by their JavaScript names, lists as `a;b;c` (`?sc=nextMargin:0` turns off the next-line rule); the session log records them |
-| `?ctc=NAME` | on-device: the follower's CTC model under `web/models/` (default `ctc-student-base-v6-w2`; a phone whose steps take over 400 ms switches itself to `ctc-student-tiny-v6-w2` from its next session, and back once that one runs under 120 ms) |
+| `?ctc=NAME` | on-device: the follower's CTC model under `web/models/` (default `ctc-stream-base-v1`, the streaming student; with a window student such as `ctc-student-base-v6-w2`, a phone whose steps take over 400 ms switches itself to `ctc-student-tiny-v6-w2` from its next session, and back once that one runs under 120 ms) |
 | `?ctchop=S`, `?anchorhop=S` | the follower steps at most every S s (0.1); Whisper runs every S s while it follows (2 on the device, 1 in the server engine) |
 | `?chunk=N` | audio reaches the engine in chunks of N samples (800, 50 ms) |
 | `?ctcthreads=N` | on-device: WASM threads for the follower's model (default: onnxruntime-web's choice) |
@@ -84,9 +84,10 @@ python scripts/bench_page.py --per-scenario 1 --split test --jobs 2 \
   (`k=v,...`, tuples as `a;b;c`). `--asr truth` puts each window's true words in place of
   Whisper's transcript (a perfect ear).
 - Scenario names and `--lane` narrow the grid while working; the decision is on all of it.
-  Results go to `data/testbed/results/NAME.json`. `base_dev_sp` and `base_test_sp` are the
-  baselines of the jump work (before the next-line rule went on), so score a fresh baseline
-  with today's defaults to compare against.
+  Results go to `data/testbed/results/NAME.json`. `full_ph_G1_dev` and `full_ph_G1_test` are
+  today's page at a phone's pace (below), `full_pF2_dev`/`_test` the server engine's; older ones
+  (`base_dev_sp`, `base_test_sp`: the jump work's) predate today's defaults, so score a fresh
+  baseline with today's defaults to compare against.
 - `bench_page.py` plays the items through the page in headless Chrome in real time
   (`page_replay.mjs`), with Whisper held to at least 1.2 s an update and the CTC model to 150 ms
   a step (`--asr-ms`, `--ctc-ms`). With `--jobs` equal to the number of variants, an item's
@@ -164,9 +165,11 @@ python scripts/export_ctc_student.py models/ctc-student-base-v6 --window 2 --nam
 python scripts/export_ctc_student.py models/ctc-student-tiny-v6 --window 2 --name ctc-student-tiny-v6-w2
 ```
 
-The page runs them on 2 s windows: a third less compute per step than the 3 s they were trained
-on, for 0.6 points at equal delay, and on a phone the compute is most of the delay
-([phone_latency.md](results/phone_latency.md)). Repeats have their own benchmark,
+Until 2026-10-07 the page ran them on 2 s windows: a third less compute per step than the 3 s
+they were trained on, for 0.6 points at equal delay, and on a phone the compute is most of the
+delay ([phone_latency.md](results/phone_latency.md)). The page now runs a streaming student made
+from the base one (below); the window students stay for `?ctc=` and the server engine, which runs
+`ctc-student-base-v6` on 3 s windows. Repeats have their own benchmark,
 `scripts/repeat_eval.py` (`follow_eval.py --repeats`).
 
 ### On-device: no server, nothing leaves the phone

@@ -6,6 +6,14 @@ every pre-registered bar on dev and on its one test run. On test it marks 0.12 r
 decides 1.7 s after the reader goes on (median). See Phase 1 below. The page doesn't use it yet,
 and on Hasan's own voice most lines come back not sure.
 
+**With the page's models of 2026-10-07** (the distilled Whisper, the streaming CTC student, the
+phone's decoder rules), at a phone's real pace (Whisper every 2 s, 1.8 s late; [phone_engine.md](phone_engine.md)),
+the same checker, unchanged, on the same 636 test items: 0.13 read lines per 10 minutes marked left
+out, 91% of left-out lines and every forgotten ending caught, 1-4 lines left out at once caught 91%,
+decided 1.6 s after the reader goes on (median; p90 3.5 s). Every bar still passes
+(`practice_ph_G1_test`: `DUA_BENCH_ASR_EVERY=2 bench.py score --display stream --practice --split
+test --same-text 8 --delay 1.8 --follow-delay 0.1`, then `bench.py practice --v1 --split test`).
+
 ## Phase 0: can today's display already check a reading?
 
 Phase 0 of [the practice-mode plan](../research/practice-mode-plan-2026-10-04.md): measure before

@@ -54,24 +54,34 @@ The commands are in [development.md](development.md#judging-a-change).
 
 ### Where things stand
 
-The page as it runs since 2026-10-04 (the phone's Whisper, the tracker with the popularity
-prior, the stream decoder with the next-line rule), on the test voices with `--same-text 8`:
-617 items, 22 h, 55 voices. The `user` lane hashes to dev, so it has no test row.
+The page as it runs since 2026-10-07 (the distilled phone Whisper, the streaming CTC student,
+the tracker with the popularity prior, the stream decoder with the phone's rules), on the test
+voices with `--same-text 8`, at a phone's real pace: Whisper every 2 s and shown 1.8 s late, a
+CTC step every 0.1 s shown 0.1 s late, as Hasan's Galaxy Z Flip 6 runs once it has warmed up
+(`DUA_BENCH_ASR_EVERY=2 ... --delay 1.8 --follow-delay 0.1`, `full_ph_G1_test`). 617 items, 22 h,
+55 voices. The `user` lane hashes to dev, so it has no test row.
 
 | lane | on line | right word | jumps /10 min | early /10 min | lost /10 min | follows ≤3 s | stays put | found ≤10 s | found ≤10 s\* | wrong du'a | line lag |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| studio | 89% | 75% | 1.24 | 1.02 | 1.95 | 59% | 89% | 75% | 99% | 0.3% | +0.46 s |
-| majlis | 93% | 68% | 2.51 | 3.72 | 1.12 | 87% | 94% | 100% | 100% | 0.6% | +0.45 s |
-| harvest | 88% | 64% | 2.29 | 1.96 | 2.13 | 74% | 89% | 90% | 92% | 0.7% | +0.47 s |
-| mafatih | 94% | 77% | 0.59 | 1.41 | 0.75 | 87% | 93% | 96% | 96% | 0.1% | +0.50 s |
-| **all** | **91%** | **71%** | **1.49** | **1.75** | **1.49** | **79%** | **92%** | **91%** | **95%** | **0.4%** | **+0.48 s** |
+| studio | 89% | 78% | 1.33 | 1.19 | 1.68 | 63% | 88% | 75% | 99% | 0.5% | +0.41 s |
+| majlis | 90% | 72% | 3.46 | 3.98 | 2.34 | 85% | 90% | 100% | 100% | 2.2% | +0.40 s |
+| harvest | 89% | 71% | 2.13 | 1.80 | 1.03 | 84% | 90% | 92% | 91% | 0.9% | +0.41 s |
+| mafatih | 93% | 80% | 0.48 | 1.78 | 0.36 | 89% | 93% | 93% | 93% | 0.0% | +0.43 s |
+| **all** | **91%** | **76%** | **1.49** | **1.88** | **1.01** | **84%** | **91%** | **90%** | **94%** | **0.6%** | **+0.41 s** |
+| server engine, all | 94% | 83% | 1.70 | 1.84 | 0.82 | 84% | 91% | 95% | 99% | 0.5% | +0.31 s |
 
-By scenario, reading as recorded is 96% on line with 0.22 jumps per 10 minutes; the weakest
-cells are jumping around the du'a (62% on line, 21.8 jumps per 10 minutes), far from the phone
-(77% on line, found within 10 s 53% of the time), the big hall (82%, 75%), and early moves when
-a reader repeats a line (6.2 per 10 minutes) or someone talks between lines (3.9). The test
-voices were looked at while diagnosing jumps, so they are no longer untouched; the settings
-were chosen on dev ([jumps.md](results/jumps.md)).
+The server engine row is its own models and settings at the server's delays (`full_pF2_test`,
+[server_profile.md](results/server_profile.md)). The majlis lane's wrong du'a is one recording, an
+Iftitah that starts inside a passage duas.org's Ramadan Day 16 text reads word for word (see
+[known limits](#known-limits)).
+
+By scenario, reading as recorded is 94% on line and 81% on the word with 0.15 jumps per 10
+minutes; the weakest cells are jumping around the du'a (76% on line, 21.0 jumps per 10 minutes),
+switching du'a (81%), far from the phone (85% on line, found within 10 s\* 73% of the time), the
+big hall (88%, 88%), and early moves when a reader repeats a line (6.4 per 10 minutes) or someone
+talks between lines (3.8). The test voices were looked at while diagnosing jumps and in the two
+pushes of 2026-10-07, so they are no longer untouched; the settings were chosen on dev
+([jumps.md](results/jumps.md), [phone_engine.md](results/phone_engine.md)).
 
 How it got here, each step on the held-out voices:
 
@@ -87,6 +97,16 @@ How it got here, each step on the held-out voices:
   minutes, line lag median 0.42 → 0.48 s; in the majlis and harvest lanes 0.1-0.25 more lost
   episodes per 10 minutes and about a point fewer exact words. It missed three of its
   pre-registered bars by a little and was adopted anyway ([jumps.md](results/jumps.md)).
+- **The phone's real pace, and models for it** (2026-10-07). Until then the bench scored the
+  phone with Whisper every second, shown 1.2 s late, and the CTC model every 0.1 s on 2 s windows
+  padded to 3 s. Hasan's phone runs Whisper every 2 s, 1.8 s late, and took 0.23 s for each CTC
+  step. At that pace the page of that morning was on line 89%, on the right word 60% and found the
+  du'a within 10 s\* 83% of the time (`full_ph_r2_test`; 91%, 71% and 95% at the old pace). A
+  streaming CTC student (each step encodes only the new audio: 7 ms against 28 ms in Chrome), a
+  phone Whisper distilled from the server's and the decoder rules the server engine had shown
+  (repeated lines, salawat, far jumps, shared passages): on line 91%, right word 76%, found 94%,
+  line lag 0.69 → 0.41 s, for 0.27 more jumps and 0.23 more early moves per 10 minutes and unknown
+  du'as shown 29% → 36% ([phone_engine.md](results/phone_engine.md)).
 
 With the true words of each window in place of Whisper's transcript (`score --asr truth`, a
 perfect ear), the du'a is found within 10 s 91% of the time instead of 86%, and 25-30 points
@@ -97,25 +117,35 @@ finding the du'a in bad rooms is mostly hearing, and wrong moves are the display
 ## Known limits
 
 - **Du'as the app doesn't have** are often shown as one it does. On the bench's unknown
-  texts, some du'a is on screen 35% (dev) to 49% (test) of the time; on an earlier, narrower
-  set it was 14-28%. These are mostly ziyarat that share whole lines with texts the app has,
-  and some recordings run into a text it does have, so part of it is fair
-  ([bench.md](results/bench.md), [unknown_dua.md](results/unknown_dua.md)).
+  texts, some du'a is on screen 25% (dev) to 36% (test) of the time on the phone, 37% (test) on
+  the server engine; on an earlier, narrower set it was 14-28%. These are mostly ziyarat that
+  share whole lines with texts the app has, and some recordings run into a text it does have,
+  so part of it is fair ([bench.md](results/bench.md), [unknown_dua.md](results/unknown_dua.md)).
 - **Shared passages.** Ayat al-Kursi is read word for word in three texts (Sahifa 54,
-  Namaz-e-Wahshat and an Eid al-Mubahila text), and the shown du'a can flip between them while
-  the passage lasts. The bench counts those screens as right, but the reader sees the title
-  change. A rule that waits before switching is off: it held Ramadan day 16 over Iftitah
-  through their long shared opening on a test recording ([jumps.md](results/jumps.md)).
-- **Echo and distance.** In a big hall or far from the phone both models hear little (see the
-  perfect-ear result above). A phone Whisper retrained with heavier synthetic reverb gained in
-  those synthetic cells but not on real majlis audio, and was not adopted
-  ([finding.md](results/finding.md)).
+  Namaz-e-Wahshat and an Eid al-Mubahila text). Since 2026-10-07 the display doesn't change du'a
+  inside a passage the shown du'a shares with the new one, allowing for a letter or two of
+  spelling (Wahshat and Eid al-Mubahila spell one word of Ayat al-Kursi differently). With it
+  and the other changes of that day, Hasan's sessions, where Namaz-e-Wahshat used to flip,
+  show the wrong du'a 0.6% of the time instead of 2.8%. The cost is a reading that starts
+  inside such a passage: it keeps the first text shown until the passage ends. A test Iftitah
+  from KSIJ Dar es Salaam starts inside a passage duas.org's Ramadan Day 16 text reads word for
+  word, and is shown as Day 16 for it, on the phone and the server engine alike (majlis wrong
+  du'a on test: phone 0.3% → 2.2%, server engine 0.7% → 1.5%;
+  [phone_engine.md](results/phone_engine.md), [server_profile.md](results/server_profile.md)).
+- **Echo and distance.** In a big hall or far from the phone both models hear less (see the
+  perfect-ear result above). In a simulated masjid (a PA in a measured hall, people talking in
+  it), the phone is on the reader's line 67% of the time and on the word 57%, and names the du'a
+  within 10 s\* 56% of the time; the server engine 81%, 74% and 81% (test). The phone Whisper
+  distilled with halls and crowds brought most of the phone's gain there (55% → 67% on line);
+  dereverberation in front of the models helped offline but its real-time form broke plain
+  reading ([noise.md](results/noise.md), [phone_engine.md](results/phone_engine.md)).
 - **Hasan's own voice is identified more slowly than reciters'.** In a screening of real-page
   runs from a cold start mid-du'a, 14 of 21 recordings by reciters and congregations named the
   du'a in 6-7 s, while his own phone readings took 16 and 27 s; two of his Kumayl sessions were
   never identified on the phone ([phone_latency.md](results/phone_latency.md)). On the bench
   his lane is a single voice, so how far this holds for other ordinary readers isn't measured.
-- **Readers who jump around the du'a** are followed within 3 s about half the time.
+- **Readers who jump around the du'a** are followed within 3 s about three times in four, and
+  the highlight is on their line 76% of the time.
 - **Word-level labels are automatic** (see [reliability checks](#reliability-checks)).
 
 ## The studio test
@@ -149,15 +179,18 @@ evaluation replays each recording exactly as the live system hears it (6 s windo
 | whisper-small, fine-tuned | 84.4% | 96.3% | 88.4% | 0.3% | 1.3 s | 76% | 92% |
 | whisper-base (Quran), fine-tuned, earlier | 85.2% | 96.2% | 89.1% | 0.3% | 1.2 s | 75% | 92% |
 | whisper-base (Quran), fine-tuned on more voices | 84.8% | 96.2% | 87.8% | 0.5% | 1.3 s | 72% | 92% |
-| **whisper-base (Quran), + synthetic voices, 8 s context (phone)** | **85.4%** | **96.3%** | **88.6%** | 0.5% | 1.2 s | 76% | 93% |
+| whisper-base (Quran), + synthetic voices, 8 s context (phone until 2026-10-07) | 85.4% | 96.3% | 88.6% | 0.5% | 1.2 s | 76% | 93% |
+| **the same, distilled from the server's turbo with halls and harvest windows (phone)** | **86.5%** | **96.2%** | **89.8%** | 0.4% | 1.2 s | 84% | 94% |
 
 The baseline matches each window's transcript against the corpus on its own, with no
-tracker. The last row uses the tracker settings of 2026-09-30
-([display_stability.md](results/display_stability.md)). The rows above it predate them;
+tracker. The last row uses today's tracker defaults, so it also has the popularity prior of
+2026-10-03: the gain over the row above it is the model and the prior together. The row above
+it uses the tracker settings of 2026-09-30
+([display_stability.md](results/display_stability.md)); the rows above that predate them;
 at this replay, with no display lead, the only one that matters is `null_rate_locked`,
 worth +0.2 points on train. *Refrain lines* are lines that recur word for word, so text
 alone can't place them. From a cold start mid-recitation, the phone model names the du'a
-within 5 s 88% of the time and within 10 s 93%.
+within 5 s 90% of the time and within 10 s 94% (the one before it: 88% and 93%).
 
 The fine-tunes all follow professional reciters about equally well; where they differ is
 everyday voices ([how-it-works.md](how-it-works.md#4-run-on-a-cpu-or-a-phone)), which is
@@ -198,14 +231,17 @@ exact on test. Since the evening of 2026-10-01 the phone runs the model on 2 s w
 with audio in 50 ms chunks: **75.5%** at its own delay, words within a line lit 0.29 s after they
 start instead of 0.44 s, the next line shown in 0.8% of pause time instead of 1.5%, and a reader
 who says a line again followed back to its start two times in three instead of one in three
-([phone_latency.md](results/phone_latency.md)).
+([phone_latency.md](results/phone_latency.md)). Hasan's phone, once warm, took 0.23 s a step on
+those windows; since 2026-10-07 the page runs a streaming student that encodes only the new audio
+at each step, so a step every 0.1 s fits on a phone ([phone_engine.md](results/phone_engine.md)).
 
 ## Results and research notes
 
 Per-model tables with per-du'a breakdowns are the `test_*.md` files in
 [results/](results/) (the phone model is
-[test_whisper-base-syn-v5-ctx8ft.md](results/test_whisper-base-syn-v5-ctx8ft.md); the one
-before it, [test_whisper-base-aug-v4.md](results/test_whisper-base-aug-v4.md)).
+[test_whisper-base-ph-kd2.md](results/test_whisper-base-ph-kd2.md); the ones before it,
+[test_whisper-base-syn-v5-ctx8ft.md](results/test_whisper-base-syn-v5-ctx8ft.md) and
+[test_whisper-base-aug-v4.md](results/test_whisper-base-aug-v4.md)).
 
 | topic | write-up |
 |---|---|
@@ -231,6 +267,10 @@ before it, [test_whisper-base-aug-v4.md](results/test_whisper-base-aug-v4.md)).
 | One bench for every way people read; the stream decoder; texts added from Mafatih | [bench.md](results/bench.md) |
 | Finding the du'a: a perfect ear, same-text scoring, the popularity prior, retrains on the harvest | [finding.md](results/finding.md) |
 | Fewer jumps and early moves: the next line on evidence; shared passages (not shipped) | [jumps.md](results/jumps.md) |
+| A phone in a masjid hall: measured halls, a PA, a crowd; dereverberation | [noise.md](results/noise.md) |
+| Bigger models for the server engine (not adopted) | [server_models.md](results/server_models.md) |
+| The server engine's own models and settings: a fully fine-tuned turbo, 3 s CTC windows every 0.05 s | [server_profile.md](results/server_profile.md) |
+| The phone at its real pace: a streaming CTC student, a distilled Whisper, the phone's decoder rules | [phone_engine.md](results/phone_engine.md) |
 | Noha (Urdu, Arabic, Farsi, English): language ID and identification | [noha_lid.md](results/noha_lid.md), [noha_match.md](results/noha_match.md) |
 
 ## Reliability checks

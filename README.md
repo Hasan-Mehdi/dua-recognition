@@ -26,7 +26,7 @@
 
 ## What it does
 
-- **Names the du'a** from anywhere in a recitation: 522 du'as, ziyarat and munajat; 95% within 10 s of the first words no other text shares
+- **Names the du'a** from anywhere in a recitation: 522 du'as, ziyarat and munajat; 94% within 10 s of the first words no other text shares
 - **Follows the line and the word**, with Arabic, transliteration and English side by side
 - **Keeps up with real reading:** pauses, repeated lines, going back, skipping, talk or a salawat between lines
 - **Practice mode:** checks a reading line by line and marks the lines left out; the text can stay hidden until you say it
@@ -38,34 +38,37 @@
 
 The [scenario bench](docs/evaluation.md#the-scenario-bench) plays voices held out of training
 through 24 ways people read (pauses, repeats, going back, talk between lines, a big hall, a
-distant phone…) and scores what the page shows. Test voices, the page as of 2026-10-05:
-617 items, 22 h, 55 voices.
+distant phone…) and scores what the page shows. Test voices, the page as of 2026-10-07, at a
+phone's real pace (Whisper every 2 s and shown 1.8 s late, as on a Galaxy Z Flip 6): 617 items,
+22 h, 55 voices.
 
 | voices | on the line | on the word | du'a named ≤10 s\* | jumps per 10 min | wrong du'a shown |
 |---|---:|---:|---:|---:|---:|
-| studio reciters | 89% | 75% | 99% | 1.24 | 0.3% |
-| du'a nights (crowd, PA echo) | 93% | 68% | 100% | 2.51 | 0.6% |
-| uploaded recitations | 88% | 64% | 92% | 2.29 | 0.7% |
-| Mafatih texts | 94% | 77% | 96% | 0.59 | 0.1% |
-| **all** | **91%** | **71%** | **95%** | **1.49** | **0.4%** |
+| studio reciters | 89% | 78% | 99% | 1.33 | 0.5% |
+| du'a nights (crowd, PA echo) | 90% | 72% | 100% | 3.46 | 2.2% |
+| uploaded recitations | 89% | 71% | 91% | 2.13 | 0.9% |
+| Mafatih texts | 93% | 80% | 93% | 0.48 | 0.0% |
+| **all** | **91%** | **76%** | **94%** | **1.49** | **0.6%** |
+| server engine, all | 94% | 83% | 99% | 1.70 | 0.5% |
 
-\* Timed from the first words no other text shares. From the start of reading it's 91% (studio 75%):
+\* Timed from the first words no other text shares. From the start of reading it's 90% (studio 75%):
 many du'as open with words other texts have too.
 
-- **Read straight through:** 96% on the line, 0.22 jumps per 10 minutes.
-- **Weakest:** a phone far from the reader (77% on the line, named within 10 s\* 60% of the time),
-  a big hall (82%), readers who jump around the du'a (62%), and du'as the app doesn't have,
-  which are often shown as one it does ([known limits](docs/evaluation.md#known-limits)).
-- **Practice mode:** catches 93% of lines left out and 97% of forgotten endings; marks 0.12 read
+- **Before 2026-10-07**, at the same pace, the phone was on the line 89% of the time and on the
+  word 60%, and named the du'a within 10 s\* 83% of the time. A streaming word model, cheap enough
+  to run every 0.1 s on a phone, and a Whisper distilled from the server's made the difference
+  ([phone_engine.md](docs/results/phone_engine.md)).
+- **Read straight through:** 94% on the line, 81% on the word, 0.15 jumps per 10 minutes.
+- **Weakest:** a phone far from the reader (85% on the line, named within 10 s\* 73% of the time),
+  a big hall (88%), readers who jump around the du'a (76%), and du'as the app doesn't have, which
+  are shown as one it does about a third of the time ([known limits](docs/evaluation.md#known-limits)).
+- **In a simulated masjid** (a PA, a measured hall, people talking): 67% on the line and 57% on
+  the word on the phone, 81% and 74% on the server engine.
+- **Through the real page,** on the same 20 test items: a phone at its real speed 86% on the line
+  and 72% on the word, the server engine 91% and 82%
+  ([server_profile.md](docs/results/server_profile.md)).
+- **Practice mode:** catches 91% of lines left out and every forgotten ending; marks 0.13 read
   lines per 10 minutes as left out ([practice_bench.md](docs/results/practice_bench.md)).
-- **Server engine:** on 20 test items played through the real page, 91% on the line and 82% on
-  the word, against 86% and 65% for a phone; in a simulated masjid (a PA, a measured hall, people
-  talking) 81% on the line, against 57% with the phone's models ([server_profile.md](docs/results/server_profile.md)).
-- **The phone, at its real speed** (2026-10-07): a phone runs Whisper every 2 s, not every second,
-  and its old word model took a quarter of a second a step. With a streaming word model and a
-  Whisper distilled from the server's, at that speed on test: 91% on the line (89% before), 76% on
-  the word (60%), named within 10 s\* 94% of the time (83%); in the simulated masjid 67% on the line
-  (55%) ([phone_engine.md](docs/results/phone_engine.md)).
 
 ## Quick start
 

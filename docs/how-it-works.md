@@ -127,10 +127,8 @@ probability that it's the one being recited, and nothing is shown until one du'a
 70% of it. Until then, the likeliest du'as are offered as "Is it…?" chips. Where several
 texts share a passage word for word (Ayat al-Kursi in Sahifa 54, Namaz-e-Wahshat and an Eid
 al-Mubahila text), they count as one until the recitation tells them apart
-([shared_passages.md](results/shared_passages.md)). The shown du'a can still flip between
-them while the passage lasts. A rule that waits before switching fixed that in Hasan's
-sessions but held the wrong text through the long shared opening of a test Iftitah
-recording, so it is off ([jumps.md](results/jumps.md)).
+([shared_passages.md](results/shared_passages.md)). The tracker's likeliest du'a can still
+flip between them while the passage lasts; the word display doesn't follow it there (below).
 
 ### 4. Run on a CPU or a phone
 
@@ -160,12 +158,16 @@ crowd-sourced recitations ([`voice_eval.py`](../scripts/voice_eval.py)):
 
 | model | character errors, everyday voices |
 |---|---|
-| large-v3-turbo, fine-tuned (server) | 15.4% |
+| large-v3-turbo, fine-tuned (server, until 2026-10-07) | 15.4% |
 | large-v3-turbo, stock | 22.8% |
 | whisper-small, fine-tuned | 27.2% |
-| **whisper-base, fine-tuned + synthetic voices (phone)** | **24.7%** |
+| whisper-base, fine-tuned + synthetic voices (phone, until 2026-10-07) | 24.7% |
 | whisper-base, fine-tuned, reciters only | 29.9% |
 | whisper-base, earlier fine-tune (fewer voices, no speed/VTLP/SpecAugment) | 38.7% |
+| *at an 8 s context, on the 388 clips that fit in 8 s:* | |
+| the same whisper-base + synthetic voices, cut to 8 s | 24.1% |
+| **whisper-base, distilled from the server's turbo, halls (phone, since 2026-10-07)** | **21.4%** |
+| **large-v3-turbo fine-tuned in full at 8 s (server, since 2026-10-07)** | **11.5%** |
 
 The phone model's training set includes 15 hours of synthetic speech: 312 of RetaSy's own
 volunteers (none of them in the test clips), cloned by a zero-shot TTS
@@ -181,11 +183,19 @@ per update in the browser, and 24.1% on the RetaSy clips that fit in 8 s
 
 A later harvest of uploaded recitations (YouTube, shiavoice.com, Aparat, SoundCloud) gathered
 5.8k hours, 1,405 of them labelled line by line from their audio, in about 3,558 voices
-([data_harvest.md](results/data_harvest.md)). It hasn't improved the phone's models yet: the
-small CTC model (below) and the phone's Whisper, each retrained with it, both failed the bars
-set before training, so the phone's models are unchanged ([finding.md](results/finding.md)).
-Its held-out uploaders are voices on the scenario bench, and its counts are the du'a prior
-above.
+([data_harvest.md](results/data_harvest.md)). Retrained on it alone, the small CTC model
+(below) and the phone's Whisper both failed the bars set before training
+([finding.md](results/finding.md)). What it did help train is a larger teacher: since
+2026-10-07 the server's Whisper is large-v3-turbo fine-tuned in full at an 8 s context on the
+train windows, about 200k harvest windows, the synthetic voices and simulated halls
+([server_profile.md](results/server_profile.md)), and the phone's Whisper is the whisper-base above
+trained two more epochs on the train windows and 139k harvest windows from 2,555 uploaders, with
+rooms, halls through a PA and crowds, learning half from the transcripts and half from the
+turbo's own token probabilities on the clean window (distillation;
+[phone_engine.md](results/phone_engine.md)). Its gain is in hard audio: about the same letter
+error on clean windows (13.9% against 13.5%), fewer errors on everyday voices (table above) and
+in the simulated masjid. The harvest's held-out uploaders are voices on the scenario bench, and
+its counts are the du'a prior above.
 
 ## Word by word
 
@@ -209,9 +219,10 @@ The phone's Whisper is distilled from the server's turbo, with halls and crowds 
 every letter of the du'a and updates it frame by frame, a CTC forward pass over the whole
 text, with reading itself as the transitions. The text in order is free. Starting the line
 again costs 3 nats, going back one to three lines 5-7, skipping two to four lines ahead 8-10,
-and anywhere else in the du'a 13, spread over its lines. Talk that isn't the du'a is a state of
-its own: a filler that takes blank frames free and pays only for letters, and that can come
-back wherever a finished line could, since a reader back from talking may start anywhere. The
+and anywhere else in the du'a 8 (13 until 2026-10-07), spread over its lines. Talk that isn't
+the du'a is a state of its own: a filler that takes blank frames free and pays only for letters,
+and that can come back wherever a finished line could, since a reader back from talking may
+start anywhere. The
 salawat said between lines is a short chain of its own, left for the next line or the same
 one. A pause is a blank, so the highlight stays on the last word said rather than running on
 at a predicted pace. A refrain keeps every repetition alive until the words that differ are
@@ -231,6 +242,31 @@ or two after a line ended, whatever the reader did next. On the held-out test vo
 cut jumps by 23% and early moves by 26%, for lines entered 0.06 s later (median), about a point
 fewer exact words and slightly more lost time in the majlis and harvest lanes
 ([jumps.md](results/jumps.md)). It is on since 2026-10-04; `?sc=nextMargin:0` turns it off.
+The salawat counts as one more alternative there, so a line that opens as the salawat does
+(*allāhumma …*) waits for the word where they part.
+
+Since 2026-10-07 four more rules are on, first tried on the server engine
+([server_profile.md](results/server_profile.md), [phone_engine.md](results/phone_engine.md)):
+
+- **Copies.** Lines with the same letters (the block of Dua Tawassul that comes back after each
+  of its 14 names) count as one line for the display. A reader inside such a block can't be
+  placed until a line that differs; the probability sat equally on every copy, none reached the
+  threshold, and the highlight froze for tens of seconds. Now it follows the words on the copy
+  nearest the word on screen.
+- **A salawat isn't a lapse.** Time the frames put in the salawat chain doesn't count towards
+  letting go of the du'a: a 10 s salawat in Du'a Baha used to send the reader's place back to its
+  first line.
+- **The frames can call a far jump.** Every half second the latest 1.5 s of letters are scored
+  against the whole du'a. When one line beats every other but its neighbours by 4 nats, a fifth
+  of the probability moves to just after its best word, so a reader who jumps far is followed
+  within about a second instead of when Whisper's tracker gets there, about 6 s later.
+- **No du'a change inside a shared passage.** While the tracker's last four words in the other
+  du'a are also the shown du'a's words near where the reader is (allowing two letters of
+  different spelling), the display stays where it is. Texts that share a passage (Ayat al-Kursi
+  in Namaz-e-Wahshat and an Eid al-Mubahila text) no longer switch the title back and forth. It
+  waits until the du'a has been on screen for 10 s, as a reader who starts inside a shared
+  passage may not be in the right text yet; in a long shared passage that isn't always enough
+  ([evaluation.md](evaluation.md#known-limits)).
 
 The tracker still finds the du'a. The decoder starts on the tracker's line probabilities,
 takes them in as gentle evidence at each update, changes du'a only once the tracker has held
