@@ -2,15 +2,19 @@
 //
 //   node docs/demo/capture.mjs --sid SID --line K --seconds S --out docs/demo/runs/N-name.json
 //
-// The film's five phones (film.mjs takes docs/demo/runs/ in name order), chosen for variety from
-// a screening of 21 runs (17 reciters and congregations, all held out of training): 14 named the
-// du'a in 5.9-7.2 s from a cold start mid-du'a; Iftitah (three times), Waritha and Simaat came up
-// first as a text that shares their passages; Hasan's own phone readings took 16 and 27 s.
+// (What this folder makes, and how: README.md here.)
 //
-//   1-kumayl    --sid majlis:mj-rSPgtn4Km_w-2226:0 --line 4 --into 3.4 --seconds 84
+// The film's five phones (film.mjs takes docs/demo/runs/ in name order), chosen for variety on
+// 2026-10-03 from 21 runs (17 reciters and congregations, all held out of training); Iftitah,
+// Waritha and Simaat were left out, as they came up first as a text that shares their passages.
+// Captured again on 2026-10-07 with that day's page at a phone's pace, each was named 6.3-8.1 s
+// after the tap:
+//
+//   1-kumayl    --sid majlis:mj-rSPgtn4Km_w-2226:0 --line 4 --into 2.4 --seconds 84
 //               --credit "Congregation at KSIJ, Dar es Salaam"
-//               (from 1.2 s in it was found as line 7 began, showed line 6's last word, then
-//               jumped back to its second; from 3.4 s in it lands on line 7 and only goes forward)
+//               (from 3.4 s in, at a phone's pace, it was named at 20 s, then 15 s: Whisper's
+//               windows every 2 s came back empty for a while, the old Whisper's too; seven other
+//               starts took 6.3-11.6 s; from 2.4 s in, 8.0 s, on line 7, and only forward)
 //   2-ashura    --sid harvest:web:sv-0E4Vf:0.0 --line 2 --into -2.8 --seconds 74 --credit "Kareem al-Ghurawi"
 //               (from 1.2 s in it was found during "ahla l-bayt" but placed on "ʿalaykum", then went
 //               on to the next line; from 2.8 s before the line it follows "...ʿalaykum ahla l-bayt")
@@ -19,21 +23,23 @@
 //               --credit "Sheikh Fadhil al-Maliki"
 //   5-tawassul  --line 39 --into 1.2 --seconds 32 (DuaPlayer's Hussein Ghareeb, the default recording)
 //
-// Each starts 1.2 s into a line, so the film can let the reader be heard before the tap, and
-// needs the length the film keeps it going for (stage.html's plan): the first phone is still
-// following in the last shot.
+// Each starts a little way into a line (or, for Ashura, just before one), so the film can let the
+// reader be heard before the tap, and runs as long as the film keeps it going (stage.html's plan):
+// the first phone is still following in the last shot.
 //
 // --sid takes a recording from the scenario bench's held-out sources (data/testbed/sources.jsonl,
 // scripts/bench.py: studio, majlis, harvest and user lanes) and starts the clip just before its
 // --line'th timed line.
 //
 // The clip plays through the page's own "play a recording" path in headless Chrome, with the
-// on-device engine a phone runs (Whisper and the CTC follower in their workers, tracker.js,
+// on-device engine a phone runs (Whisper and the streaming CTC model in their workers, tracker.js,
 // stream-follower.js). Each Whisper and CTC step is held to at least the time it takes on a
-// phone (--asr-ms, --ctc-ms: Hasan's Android, docs/results/phone_latency.md), as
-// scripts/bench_page.py does. Every update the engine hands the page is kept with the clip
-// position playing at that moment, with the stop detector's reading: film.mjs replays them
-// into the same page, frame by frame, beside the same audio.
+// phone, as scripts/bench_page.py does: by default Hasan's Galaxy Z Flip 6, Whisper 1.73 s a
+// window (so it updates every 2 s) and the CTC model 60 ms a step (docs/results/phone_engine.md;
+// the films before 2026-10-07 used 1.2 s and 150 ms, faster than his phone). Every update the
+// engine hands the page is kept with the clip position playing at that moment, with the stop
+// detector's reading: film.mjs replays them into the same page, frame by frame, beside the same
+// audio.
 //
 // puppeteer-core lives in data/cache/reliability/node, as for scripts/page_replay.mjs.
 import { createRequire } from "node:module";
@@ -56,8 +62,7 @@ const arg = (name, dflt) => {
   return i > 0 ? process.argv[i + 1] : dflt;
 };
 // Without --sid: Hussein Ghareeb's Dua Tawassul (DuaPlayer; a voice held out of training), from
-// line 40, "yā zayna l-ʿābidīn", in the breath before it (from line 39, 304 s, it was found
-// 7.2 s in; from here, 5.9 s).
+// line 40, "yā zayna l-ʿābidīn", in the breath before it (on 2026-10-07, named 6.3 s in).
 const SID = arg("sid", null);
 const bench = SID && readFileSync(join(ROOT, "data", "testbed", "sources.jsonl"), "utf8").split("\n")
   .filter(Boolean).map((l) => JSON.parse(l)).find((r) => r.sid === SID);
@@ -85,8 +90,10 @@ const ENTRY = LINE < 0 ? null : INTO < 0 ? Number((LINES[LINE].from + INTO - 1.5
 const START = LINE >= 0 ? Number((INTO !== 0 ? LINES[LINE].from + INTO : ENTRY).toFixed(2)) : Number(arg("start", 312.0));
 const CREDIT = arg("credit", bench ? bench.voice : "Hussein Ghareeb"); // who the film says is reciting
 const SECONDS = Number(arg("seconds", 49.2));
-const ASR_MS = Number(arg("asr-ms", 1200));
-const CTC_MS = Number(arg("ctc-ms", 150));
+const ASR_MS = Number(arg("asr-ms", 1730));
+const CTC_MS = Number(arg("ctc-ms", 60));
+// --query: the page's own options (e.g. "model=whisper-base-syn-v5-ctx8ft" for another Whisper).
+const QUERY = arg("query", "");
 if (!arg("out")) throw new Error("--out: where the run goes (docs/demo/runs/ holds the film's)");
 const OUT = resolve(arg("out"));
 const CHROME = process.env.CHROME || "C:/Program Files/Google/Chrome/Application/chrome.exe";
@@ -156,7 +163,7 @@ const page = await browser.newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => m.type() === "error" && !m.text().includes("404") && errors.push(m.text()));
-await page.goto(`http://127.0.0.1:${server.address().port}/`);
+await page.goto(`http://127.0.0.1:${server.address().port}/${QUERY ? `?${QUERY}` : ""}`);
 // coi-serviceworker.js reloads the page once (cross-origin isolation, for threads): wait for the
 // page that comes back.
 let before;
@@ -210,7 +217,7 @@ const truth = LINES.map((l) => ({ seg: l.seg, from: Number((l.from - START).toFi
 writeFileSync(OUT, JSON.stringify({
   source: { dua: DUA, name: dua?.name_en, name_ar: dua?.name_ar, credit: CREDIT, sid: SID,
     voice: bench?.voice ?? "studio:Hussein Ghareeb", audio: AUDIO, entry: ENTRY ?? START, start: START, seconds: SECONDS,
-    asr_ms: ASR_MS, ctc_ms: CTC_MS },
+    asr_ms: ASR_MS, ctc_ms: CTC_MS, ...(QUERY ? { query: QUERY } : {}) },
   updates: demo.updates.map((r) => ({ ...r, at: Number(r.at.toFixed(3)), heard: Number(r.heard.toFixed(3)) })),
   quiet: demo.quiet.filter(([, q], i, a) => i === 0 || q !== a[i - 1][1]).map(([at, q]) => [Number(at.toFixed(3)), q == null ? null : Number(q.toFixed(2))]),
   shown: events,

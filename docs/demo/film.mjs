@@ -6,6 +6,7 @@
 //   node docs/demo/film.mjs                    # -> data/cache/media/demo_with_audio.mp4 (+ _small)
 //   node docs/demo/film.mjs --fast             # quick look: 30 fps, no motion blur
 //   node docs/demo/film.mjs --stills 3,9,20    # PNGs at those film seconds, nothing else
+//   node docs/demo/film.mjs --work DIR         # masters and soundtrack in DIR (default data/cache/media/demo)
 //
 // --stage story.html films the story instead (a boy at the mosque on a Thursday night; one phone,
 // docs/demo/story-runs/), with the sounds docs/demo/story-sounds.mjs makes: --bed, a background
@@ -57,7 +58,9 @@ const RUNS = resolve(arg("runs", join(HERE, "runs"))); // one run per phone, in 
 const STAGE = arg("stage", "stage.html");
 const NAME = STAGE === "stage.html" ? "demo_with_audio" : STAGE.replace(/\.html$/, "");
 const OUT = resolve(arg("out", join(MEDIA, FAST ? `${NAME}_fast.mp4` : `${NAME}.mp4`)));
-const WORK = join(MEDIA, STAGE === "stage.html" ? "demo" : NAME); // masters, soundtracks, stills
+// Masters, soundtracks, stills. --work gives a render its own folder: two renders of one stage at
+// once would otherwise write the same master.mkv.
+const WORK = resolve(arg("work", join(MEDIA, STAGE === "stage.html" ? "demo" : NAME)));
 const BED = arg("bed", null);
 const SFX = arg("sfx", null);
 const [WIDTH, HEIGHT] = [1920, 1080]; // stage.html

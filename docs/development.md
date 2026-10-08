@@ -283,5 +283,6 @@ web/             the app, its models in the browser or on the server (transforme
                  word model; stream-follower.js, the word follower, and follower.js, the rule-based one);
                  gate.js (the phone's speech gate), session-log.js (debug sessions), kids.js (kids mode),
                  dev/ (benchmark pages)
+docs/demo/       the README's GIF and the demo films, made from the real page (docs/demo/README.md)
 data/duas/       522 Arabic reference texts, one JSON per du'a
 ```
