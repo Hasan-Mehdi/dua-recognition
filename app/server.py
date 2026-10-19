@@ -140,7 +140,8 @@ SERVER_PROFILE: dict = {
            "ctcEvery": 10, "ctcPushP": 0.2, "ctcSure": 4.0, "cFar": -8, "sharedWords": 4, "sharedAfter": 10,
            # the server's values of the rules the phone took up on 2026-10-07 (phone_engine.md), not yet
            # scored with the server's models
-           "sharedNear": 8, "sharedEdits": 0, "cFillNext": -1, "nextIntj": False},
+           "sharedNear": 8, "sharedEdits": 0, "cFillNext": -1, "nextIntj": False,
+           "stopP": 0.0},  # the catch-up at a stop (2026-10-09, stop_catchup.md): scored at the phone's cadence only
     **({"tc": {"kappa": 0.2, "nullRate": 0.35}} if Path(MODEL).resolve() == SERVER_ASR.resolve() else {}),
 }
 

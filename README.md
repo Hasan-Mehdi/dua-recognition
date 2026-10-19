@@ -26,7 +26,7 @@
 
 ## What it does
 
-- **Names the du'a** from anywhere in a recitation: 522 du'as, ziyarat and munajat; 94% within 10 s of the first words no other text shares
+- **Names the du'a** from anywhere in a recitation: 528 du'as, ziyarat and munajat; 94% within 10 s of the first words no other text shares
 - **Follows the line and the word**, with Arabic, transliteration and English side by side
 - **Keeps up with real reading:** pauses, repeated lines, going back, skipping, talk or a salawat between lines
 - **Practice mode:** checks a reading line by line and marks the lines left out; the text can stay hidden until you say it
@@ -62,6 +62,11 @@ many du'as open with words other texts have too.
 - **Weakest:** a phone far from the reader (85% on the line, named within 10 s\* 73% of the time),
   a big hall (88%), readers who jump around the du'a (76%), and du'as the app doesn't have, which
   are shown as one it does about a third of the time ([known limits](docs/evaluation.md#known-limits)).
+- **An ordinary reader** (Hasan's own recorded sessions, 35 stretches, 34 minutes, at the phone's pace):
+  73% on the line and 52% on the word. The letter model hears a reader at speaking pace, saying some
+  letters the way many non-Arab readers do, far worse than a reciter; since 2026-10-19 the decoder
+  forgives ʿayn/alif, ṭāʾ/tāʾ and ḥāʾ/hāʾ said alike (48% on the word before)
+  ([ordinary_readers.md](docs/results/ordinary_readers.md)).
 - **In a simulated masjid** (a PA, a measured hall, people talking): 67% on the line and 57% on
   the word on the phone, 81% and 74% on the server engine.
 - **Through the real page,** on the same 20 test items: a phone at its real speed 86% on the line
@@ -96,7 +101,7 @@ word-by-word following until the CTC model is trained.
 ```mermaid
 flowchart LR
     A(["recitation"]) -- "last 6 s,<br/>every 1-2 s" --> B["<b>Whisper</b><br/>fine-tuned<br/>whisper-base"]
-    B --> C["<b>Align</b><br/>against all 522 texts<br/>140,803 words in ~3 ms"]
+    B --> C["<b>Align</b><br/>against all 528 texts<br/>142,834 words in ~3 ms"]
     C --> D["<b>HMM tracker</b><br/>which du'a,<br/>which line"]
     D --> E(["du'a · line · word"])
     A -- "new audio,<br/>every 0.1 s" --> F["<b>CTC model</b><br/>letters every 20 ms"]
@@ -117,7 +122,7 @@ flowchart LR
   engine is the same page with larger models on a server: a fully fine-tuned large-v3-turbo and
   the student on longer, more frequent windows.
 
-More: [how it works](docs/how-it-works.md), and the [narrated explainer](docs/explainer.mp4) (7:07).
+More: [how it works](docs/how-it-works.md), and the [narrated explainer](docs/explainer.mp4) (7:58).
 
 ## Documentation
 
@@ -133,7 +138,7 @@ src/dua_recognition/   alignment, tracker, stream decoder, word followers, pract
 web/                   the app: everything runs in the page; the models in Web Workers or on the server
 app/                   FastAPI server (page, majlis rooms, debug sessions, server engine) and terminal demo
 scripts/               data, training, export, evaluation, the scenario bench
-data/duas/             the 522 texts, one JSON file each
+data/duas/             the 528 texts, one JSON file each
 tests/                 pytest, including Python/JavaScript parity tests (need Node)
 ```
 
@@ -151,7 +156,7 @@ heard and showed). Tests: `pip install -e ".[dev]" && pytest`.
 | **Models** | [Whisper](https://github.com/openai/whisper) · [tarteel-ai/whisper-base-ar-quran](https://huggingface.co/tarteel-ai/whisper-base-ar-quran), the base of the phone model · [wav2vec2-large-xlsr-53-arabic-quran](https://huggingface.co/rabah2026/wav2vec2-large-xlsr-53-arabic-quran-v_final), the base of the word aligner and the CTC teacher · [Silero VAD](https://github.com/snakers4/silero-vad) · [OmniVoice](https://huggingface.co/k2-fsa/OmniVoice), for synthetic voices and the explainer's narration |
 | **Runtimes** | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and [CTranslate2](https://github.com/OpenNMT/CTranslate2) on the server · [Transformers.js](https://github.com/huggingface/transformers.js) and [ONNX Runtime Web](https://onnxruntime.ai) in the browser |
 | **Evaluation** | [RetaSy's Quranic audio dataset](https://huggingface.co/datasets/RetaSy/quranic_audio_dataset), for everyday voices |
-| **Design** | [Manim Community](https://www.manim.community/) for the explainer · Amiri, Aref Ruqaa, Scheherazade New, Noto and EB Garamond typefaces |
+| **Design** | [ManimGL](https://github.com/3b1b/manim), 3Blue1Brown's Manim, for the explainer · Amiri, Aref Ruqaa, Scheherazade New, Noto and EB Garamond typefaces |
 
 ## License
 

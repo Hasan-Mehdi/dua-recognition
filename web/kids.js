@@ -118,7 +118,7 @@ export const kids = {
   duas: {},
   built: false,
 
-  // hooks: { pick(id), openPicker(), again(id), home() } from app.js.
+  // hooks: { pick(id), openPicker(), again(id), home(), changed() } from app.js.
   init(duas, hooks) {
     this.duas = duas;
     this.hooks = hooks;
@@ -133,6 +133,7 @@ export const kids = {
     document.body.classList.toggle("kids", on);
     document.body.classList.toggle("kids-night", on && night());
     if (remember) store("kids", on ? "1" : "0");
+    if (remember) this.hooks.changed?.(); // the home screen's du'as are laid out per mode
   },
 
   name(id) {
@@ -154,7 +155,7 @@ export const kids = {
   // name, which only kids.css shows.
   chip(button, id) {
     const friendly = this.name(id);
-    const text = [...button.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+    const text = [...(button.querySelector(".row-name") ?? button).childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
     if (text && friendly !== this.duas[id]?.name_en) {
       const grown = Object.assign(document.createElement("span"), { className: "grown" });
       text.replaceWith(grown);
@@ -198,7 +199,7 @@ export const kids = {
     document.querySelector(".top").append(this.garland);
 
     this.shelf = el('<div class="stickers"><div class="stickers-head"><b>My du\'as</b><span class="stickers-count"></span></div><div class="stickers-grid"></div></div>');
-    $("search").before(this.shelf);
+    $("search").closest(".search-field").before(this.shelf);
 
     this.party = el(`<div class="celebrate" hidden>
 <div class="confetti" aria-hidden="true"></div>

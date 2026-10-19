@@ -144,6 +144,14 @@ finding the du'a in bad rooms is mostly hearing, and wrong moves are the display
   du'a in 6-7 s, while his own phone readings took 16 and 27 s; two of his Kumayl sessions were
   never identified on the phone ([phone_latency.md](results/phone_latency.md)). On the bench
   his lane is a single voice, so how far this holds for other ordinary readers isn't measured.
+- **An ordinary reader is followed far worse than a reciter.** On Hasan's 35 recorded session
+  stretches (`scripts/bench_sessions.py`) the phone is on his line 73% of the time and on his word
+  52% (reciters on test: 90% and 76%). The letter model gets 49% of his letters wrong, 16% of the
+  bench reciters'; filtering or levelling the audio doesn't change that (it isn't the microphone),
+  and a thousand more reciters in training barely did (45.6%). Since 2026-10-19 the decoder forgives
+  three groups of letters he says alike (48% → 52% on the word). The bench's own user lane is 35 of
+  1,317 dev items, all his, so its guard bars on that lane rest on a few items
+  ([ordinary_readers.md](results/ordinary_readers.md)).
 - **Readers who jump around the du'a** are followed within 3 s about three times in four, and
   the highlight is on their line 76% of the time.
 - **Word-level labels are automatic** (see [reliability checks](#reliability-checks)).

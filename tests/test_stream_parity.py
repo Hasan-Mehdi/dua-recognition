@@ -95,7 +95,12 @@ def test_numba_equals_numpy():
                                    {"_flip": True, "sharedWords": 2, "sharedNear": 40, "sharedAfter": 0.0,
                                     "sharedEdits": 2},
                                    {"hop": 0.05, "_steps": (2, 3), "lineSteps": 3, "nextSteps": 3},
-                                   {"nextIntj": True, "nextMargin": 3.0}, {"nextIntj": True, "gateTentative": False}])
+                                   {"nextIntj": True, "nextMargin": 3.0}, {"nextIntj": True, "gateTentative": False},
+                                   {"stopP": 0.05, "stopS": 0.2}, {"stopP": 0.05, "stopS": 0.2, "stopLast": True}, {"stopP": 0.2, "stopS": 0.3, "stopTracker": True},
+                                   {"stopP": 0.1, "stopS": 0.2, "stopTracker": True, "stopTrackerWords": 5,
+                                    "copies": True, "_dua": 2},
+                                   {"accentFold": 0.0}, {"accentFold": 0.3},
+                                   {"accentFold": 1.0, "copies": True, "_dua": 2}])
 def test_js_stream_matches_python(tmp_path, extra):
     extra = dict(extra)
     flip = extra.pop("_flip", False)  # the tracker reports another du'a for a while (a shared passage)
@@ -147,7 +152,11 @@ def test_js_stream_matches_python(tmp_path, extra):
                           shared_near=js_cfg.get("sharedNear", D.shared_near),
                           shared_after=js_cfg.get("sharedAfter", 10.0),
                           shared_edits=js_cfg.get("sharedEdits", D.shared_edits),
-                          hop=js_cfg.get("hop", 0.1), line_steps=js_cfg.get("lineSteps", 2))
+                          hop=js_cfg.get("hop", 0.1), line_steps=js_cfg.get("lineSteps", 2),
+                          stop_p=js_cfg.get("stopP", D.stop_p), stop_s=js_cfg.get("stopS", D.stop_s),
+                          stop_tracker=js_cfg.get("stopTracker", D.stop_tracker), stop_last=js_cfg.get("stopLast", D.stop_last),
+                          stop_tracker_words=js_cfg.get("stopTrackerWords", D.stop_tracker_words),
+                          accent_fold=js_cfg.get("accentFold", D.accent_fold))
 
     def mass_fn(anchor):
         if anchor is None:

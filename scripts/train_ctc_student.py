@@ -285,6 +285,8 @@ def main() -> None:
     ap.add_argument("--synth", default="synth_v5", help="synthetic sets, comma-separated (empty: none)")
     ap.add_argument("--synth-share", type=float, default=0.15)
     ap.add_argument("--crowd", action="store_true", default=True)
+    ap.add_argument("--add", default="", help="more sets used whole, comma-separated (harvest clips, ordinary "
+                                              "voices); set*k repeats a set k times")
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0, help="steps (smoke test)")
@@ -324,7 +326,12 @@ def main() -> None:
         nc = len(np.load(unpack("crowd", teach) / "offsets.npy", mmap_mode="r")) - 1
         items += [("crowd", k) for k in range(nc)]
         print(f"+{nc} crowd clips", flush=True)
-    nv = len(np.load(unpack("val_v4", teach) / "offsets.npy", mmap_mode="r")) - 1
+    for extra in [x for x in args.add.split(",") if x]:
+        extra, _, times = extra.partition("*")  # "set*k": each clip k times (a small set among large ones)
+        ne = len(np.load(unpack(extra, teach) / "offsets.npy", mmap_mode="r")) - 1
+        items += [(extra, k) for k in range(ne)] * int(times or 1)
+        print(f"+{ne} clips ({extra}){f' x{times}' if times else ''}", flush=True)
+    nv =len(np.load(unpack("val_v4", teach) / "offsets.npy", mmap_mode="r")) - 1
     val_items = [("val_v4", k) for k in range(0, nv, max(1, nv // 600))]
     print(f"{len(items)} training items, {len(val_items)} val windows", flush=True)
 

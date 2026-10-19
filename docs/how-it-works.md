@@ -1,16 +1,16 @@
 # How it works
 
-![Animated explainer: evidence from one window matches all 14 repetitions of a refrain; multiplying by the tracker's prediction leaves only the right one](explainer.gif)
+![The two paths: Whisper every 2 s, its words matched against the 522 texts, the tracker naming the du'a; the letter model 50 times a second, the decoder placing the line and the word](explainer.png)
 
-*The tracker at one second of a held-out recording. The [full video](explainer.mp4) is a
-narrated walkthrough, with subtitles, for someone who knows nothing about it yet. It follows one
-recitation of Du'a al-Iftitah, by a reciter the models never trained on, from start to end: how a
-phone hears and what the two models are, how the du'a gets named, how the highlight follows the
-word, and what the app does when he stops, when someone talks to him and when he goes back two
-lines, with the real app shown on the same recording and his recitation heard under the narration
-(Abu Thar Al-Halawaji's recording, from [DuaPlayer](https://www.duaplayer.org)). The pictures are the page's own decisions
-on that reading, replayed ([source](anim/explainer.py), made with
-[Manim](https://www.manim.community/), voiced by [OmniVoice](https://huggingface.co/k2-fsa/OmniVoice)).*
+*The last picture of the [explainer video](explainer.mp4) (7:58, subtitled). It starts from two
+apps people know, Shazam (which matches a recording's sound) and Tarteel (which listens for the
+words), then covers the data, the two models on the phone and the server and how they were
+trained, how the du'a is named, how the highlight follows the word through pauses, talk and a
+reader going back, how it does on the scenario bench, and what it costs a phone. It follows Du'a
+Kumayl recited by Hussein Ghareeb (from [DuaPlayer](https://www.duaplayer.org), a voice the models
+never trained on): the pictures are the page's own decisions on that reading, replayed at a phone's
+pace, and the real page appears on the same recording ([source](explainer/), made with
+[ManimGL](https://github.com/3b1b/manim), voiced by [OmniVoice](https://huggingface.co/k2-fsa/OmniVoice)).*
 
 ## The problem
 
@@ -267,6 +267,15 @@ Since 2026-10-07 four more rules are on, first tried on the server engine
   waits until the du'a has been on screen for 10 s, as a reader who starts inside a shared
   passage may not be in the right text yet; in a long shared passage that isn't always enough
   ([evaluation.md](evaluation.md#known-limits)).
+
+Since 2026-10-19 the decoder also forgives the letters ordinary readers say alike. Before it reads
+a step's frames, ا, ع and ء each take half the probability of the other two, and so do ت and ط, and
+ح and ه: a reader who says ʿayn as a glottal stop or not at all, ṭāʾ as tāʾ, or ḥāʾ as hāʾ is no
+longer charged as if they had said another word. The letter model hears Hasan's own reading with
+49% of its letters wrong (16% for the bench's reciters), mostly these and letters it misses. On his
+35 recorded sessions the highlight is on his word 52.4% of the time instead of 48.3%; on the bench's
+reciters it changes the words by 0.2 points or less and holding still by about half a point
+([ordinary_readers.md](results/ordinary_readers.md)). `?sc=accentFold:0` turns it off.
 
 The tracker still finds the du'a. The decoder starts on the tracker's line probabilities,
 takes them in as gentle evidence at each update, changes du'a only once the tracker has held

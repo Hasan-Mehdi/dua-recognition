@@ -492,6 +492,7 @@ async function init() {
       begin(micSource);
     },
     home: () => end("done"),
+    changed: showToday,
   });
   const mode = await fetch("api/mode").then((r) => (r.ok ? r.json() : null)).catch(() => null);
   state.mode = mode;
@@ -501,7 +502,7 @@ async function init() {
     : new DeviceEngine(corpus, mode.model, new RemoteEar(), mode.ctc, mode.profile);
   log.upload = log.enabled && !!mode?.sessions;
   $("footnote").textContent = state.engine.kind === "device"
-    ? (log.upload ? "Runs on this device. Debug sessions go to this server." : "Runs entirely on this device. No audio leaves it.")
+    ? (log.upload ? "Recognition runs on this device; debug sessions are sent to this server." : "Recognition runs on this device; no audio leaves it.")
     : "";
   if (log.upload) log.sendPending().then(showSessions); // anything a closed tab left behind
   showSessions();
@@ -517,26 +518,33 @@ async function init() {
   $("play").onclick = showRecordings;
   $("choose").onclick = () => openPicker();
   // Practice mode checks each line against the CTC frames (the phone's own, or the server's). Chosen
-  // beneath the seal, as a camera chooses photo or video: the seal, the picker and the chips then
+  // beneath the seal, as a camera chooses photo or video: the seal, the picker and the rows then
   // practise (setPractising). Each visit starts in follow: a Thursday night's Kumayl isn't a test.
-  $("modes").hidden = !state.engine.startPractice;
+  // Off for now (2026-10-09): the switch shows only with ?mode=practise.
+  $("modes").hidden = !(state.engine.startPractice && params.get("mode") === "practise");
   $("mode-follow").onclick = () => setPractising(false);
   $("mode-practise").onclick = () => setPractising(true);
   setPractising(params.get("mode") === "practise" && !!state.engine.startPractice, false);
   setHideText(stored("practice-hide") === "1", false);
-  for (const id of ["opt-hide", "home-hide"]) $(id).onchange = (e) => setHideText(e.target.checked);
+  $("opt-hide").onchange = (e) => setHideText(e.target.checked);
+  $("home-hide").onclick = () => setHideText(!document.body.classList.contains("hide-text"));
   $("hint-btn").onclick = hintWord;
   $("review-again").onclick = practiseAgain;
   $("review-done").onclick = closeReview;
   $("picker").onclick = (e) => e.target === $("picker") && closePicker();
   $("search").oninput = () => fillPicker($("search").value);
-  addEventListener("keydown", (e) => e.key === "Escape" && closePicker());
+  addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    closePicker();
+    closeMenu();
+  });
   $("file").onchange = (e) => {
     const f = e.target.files[0];
     if (f) begin(fileSource(URL.createObjectURL(f), f.name));
   };
   $("stop").onclick = () => (state.review ? closeReview() : end("stop"));
-  $("menu-btn").onclick = () => ($("menu").hidden = !$("menu").hidden);
+  for (const id of ["menu-btn", "home-menu"]) $(id).onclick = () => ($("menu").hidden ? openMenu() : closeMenu());
+  $("menu").onclick = (e) => e.target === $("menu") && closeMenu();
   $("opt-en").onchange = (e) => {
     document.body.classList.toggle("no-en", !e.target.checked);
     log.event("option", { translation: e.target.checked });
@@ -552,15 +560,13 @@ async function init() {
     stored("focus", e.target.checked ? "1" : "0");
     log.event("option", { focus: e.target.checked });
   };
-  $("opt-font").onchange = (e) => setFont(e.target.value);
   setFont(stored("font") || "quran", false);
   showToday();
   watchForSharing();
   $("mode-page").onclick = () => setMajlis(false);
   $("mode-majlis").onclick = () => setMajlis(true);
   setMajlis(params.has("watch") || params.has("majlis") || stored("majlis") === "1", false);
-  $("size-down").onclick = () => setTextSize(state.textSize - 0.1);
-  $("size-up").onclick = () => setTextSize(state.textSize + 0.1);
+  $("opt-size").oninput = (e) => setTextSize(Number(e.target.value));
   setTextSize(Number(stored("text-size")) || 1, false);
   $("back").onclick = () => {
     $("back").hidden = true;
@@ -699,6 +705,7 @@ function setPerLine(on, remember = true) {
     stored("per-line", on ? "1" : "0");
     log.event("option", { perLine: on });
   }
+  if (!$("menu").hidden) buildPreview();
   const ln = state.lines?.get(state.segment);
   if (!ln) return;
   state.hl = null; // stops the glide loop; the next update restarts it
@@ -713,8 +720,8 @@ function setTextSize(size, remember = true) {
   size = Math.round(Math.min(hi, Math.max(lo, size)) * 10) / 10;
   state.textSize = size;
   document.body.style.setProperty("--text", size);
-  $("size-down").disabled = size <= lo;
-  $("size-up").disabled = size >= hi;
+  $("opt-size").value = size;
+  $("opt-size").style.setProperty("--fill", `${((size - lo) / (hi - lo)) * 100}%`); // the gold part of the track
   if (!remember) return;
   stored("text-size", String(size));
   log.event("option", { textSize: size });
@@ -761,7 +768,9 @@ function savedProgress() {
 function showResume() {
   const p = savedProgress();
   $("resume").hidden = !p;
-  if (p) $("resume").textContent = `continue ${state.duas[p.dua].name_en} from line ${p.line}`;
+  if (!p) return;
+  duaRow($("resume"), p.dua, ring(p.line / state.duas[p.dua].segments.length), `Continue from line ${p.line}`);
+  $("resume").querySelector(".row-ico").classList.add("prog");
 }
 
 // Follows only that du'a; the tracker finds the line itself within a few seconds.
@@ -794,7 +803,7 @@ function checkClock(n) {
   if (!c.warned && wall >= 8 && Math.abs(ratio - 1) > 0.15) {
     c.warned = true;
     log.event("clock_bad", { ratio: Number(ratio.toFixed(3)) });
-    const text = `This microphone's sound is arriving at ${ratio.toFixed(1)}× speed, so I can't follow it. Try another browser or microphone.`;
+    const text = `This microphone's sound is arriving at ${ratio.toFixed(1)}× speed and can't be followed. Try another browser or microphone.`;
     listenMsg(text);
     $("dua-also").textContent = text;
   }
@@ -974,7 +983,7 @@ async function startCapture(makeSource) {
   setState("loading");
   $("start").disabled = true;
   $("load").hidden = false;
-  $("hint").textContent = "Preparing… (only the first time)";
+  $("hint").textContent = state.engine.remote ? "Connecting to the server" : "Loading the speech model";
   try {
     await state.engine.prepare((p) => ($("load-bar").style.width = `${Math.round(p)}%`));
   } catch (e) {
@@ -996,7 +1005,7 @@ async function startCapture(makeSource) {
   try {
     source = await makeSource(state.ctx);
   } catch {
-    $("hint").textContent = "Microphone access is needed to follow along.";
+    $("hint").textContent = "Allow the microphone to follow along.";
     return setState("idle");
   }
   // ?practice=<du'a id>: practise that du'a; ?practice=1: practise whichever is recited (replays, a link).
@@ -1024,6 +1033,10 @@ async function startCapture(makeSource) {
   });
   const node = new AudioWorkletNode(state.ctx, "capture", { processorOptions: { chunk: CHUNK } });
   node.port.onmessage = (e) => {
+    // A chunk still in flight when the session stopped: dropped. Counted, it restarted the clock
+    // check after stop() had cleared it, and the next session opened with "arriving at 0.0x speed"
+    // (2026-10-10, g7l7: ratio 0.003 at 0.1 s, the time since the last session counted as silence).
+    if (state.node !== node) return;
     const x = e.data.x ?? e.data;
     log.audio(x);
     checkClock(x.length);
@@ -1049,6 +1062,7 @@ async function startCapture(makeSource) {
 function meter() {
   const girih = document.querySelector(".girih");
   const glow = document.querySelector(".voice-glow");
+  const mic = document.querySelector(".voice-mic");
   const seal = document.querySelector(".live svg");
   const { analyser } = state;
   const spectrum = new Float32Array(analyser.frequencyBinCount);
@@ -1056,12 +1070,13 @@ function meter() {
   const voice = new VoiceLevel();
   const debug = params.has("debug") && $("latency");
   let size = 0, sizeV = 0; // spring toward the level
-  let spin = 3, angle = 0; // deg/s and deg
+  let spin = 3, angle = state.sealAngle ?? 0; // deg/s and deg (from the seal's turn: showListening)
   let last = performance.now();
   const frame = (now) => {
     const listening = document.body.dataset.state === "listening";
     if ((!listening && document.body.dataset.state !== "following") || !state.source) {
       girih.style.transform = glow.style.opacity = seal.style.transform = seal.style.opacity = "";
+      mic.style.opacity = "";
       kids.voice(null);
       return;
     }
@@ -1083,6 +1098,7 @@ function meter() {
     else if (listening) {
       glow.style.opacity = Math.min(1, level * 1.15).toFixed(3);
       if (!still) girih.style.transform = `rotate(${angle.toFixed(2)}deg) scale(${(1 + 0.12 * size + breath).toFixed(4)})`;
+      mic.style.opacity = (0.6 + 0.4 * Math.min(1, level * 1.15)).toFixed(3); // as the top bar's seal does
     } else {
       seal.style.opacity = (0.45 + 0.55 * Math.min(1, level * 1.15)).toFixed(3);
       if (!still) seal.style.transform = `rotate(${angle.toFixed(2)}deg) scale(${(1 + 0.22 * size + breath).toFixed(4)})`;
@@ -1112,7 +1128,7 @@ function end(reason) {
   kids.reset();
   $("guesses").hidden = true;
   $("menu").hidden = true;
-  $("hint").textContent = "Tap to begin";
+  $("hint").textContent = "";
   $("back").hidden = true;
   showResume();
   showToday();
@@ -1120,7 +1136,15 @@ function end(reason) {
 }
 
 // -- rendering ------------------------------------------------------------------
+// The seal's turn as it becomes the listening star (a hover, or practise, leaves it turned): the star
+// carries on from there instead of snapping round.
+function sealAngle() {
+  const m = new DOMMatrix(getComputedStyle(document.querySelector(".seal-star")).transform);
+  return (Math.atan2(m.b, m.a) * 180) / Math.PI;
+}
+
 function showListening() {
+  state.sealAngle = sealAngle();
   setState("listening");
   $("dua-ar").textContent = "";
   $("dua-en").textContent = state.practice ? "Practice" : "Listening";
@@ -1128,7 +1152,7 @@ function showListening() {
   $("progress").style.width = "0";
   $("text").replaceChildren();
   $("folio-head").hidden = true;
-  $("listen-msg").textContent = state.practice ? "Begin reciting the du'a you're practising" : "Begin reciting";
+  $("listen-msg").textContent = state.practice ? "Recite the du'a you're practising" : "Begin reciting";
 }
 
 // The word follower: its messages place the line and word directly (no glide) while they
@@ -1190,8 +1214,8 @@ function render(u) {
   if (!u.dua) {
     if (state.dua) return; // hold the last place through a brief lapse in confidence
     const waited = Date.now() - state.listeningSince;
-    if (waited > 10000 && u.unknown > 0.9) listenMsg("I don't know this du'a yet");
-    else if (waited > 15000) listenMsg("Keep reciting, I'm finding your place");
+    if (waited > 10000 && u.unknown > 0.9) listenMsg("No matching du'a yet");
+    else if (waited > 15000) listenMsg("Still listening…");
     showGuesses(waited > 5000 ? u.candidates : []);
     return;
   }
@@ -1260,10 +1284,9 @@ function setPractising(on, remember = true) {
   document.body.classList.toggle("practising", on);
   $("mode-follow").setAttribute("aria-checked", String(!on));
   $("mode-practise").setAttribute("aria-checked", String(on));
-  $("tagline").textContent = on ? "Recite, and each line is checked." : "Recite, and the words follow you.";
   $("start").setAttribute("aria-label", on ? "Start practising" : "Start listening");
-  $("play").hidden = $("play-dot").hidden = on;
-  $("hide-opt").hidden = $("hide-dot").hidden = !on;
+  $("play").hidden = on;
+  $("home-hide").hidden = !on;
   showToday();
   if (remember) log.event("option", { practising: on });
 }
@@ -1271,7 +1294,8 @@ function setPractising(on, remember = true) {
 // "Hide the text until it's heard": on the home screen while practising, and in the menu (practice.css).
 function setHideText(on, remember = true) {
   document.body.classList.toggle("hide-text", on);
-  $("opt-hide").checked = $("home-hide").checked = on;
+  $("opt-hide").checked = on;
+  $("home-hide").setAttribute("aria-pressed", String(on));
   if (!remember) return;
   stored("practice-hide", on ? "1" : "0");
   log.event("option", { hideText: on });
@@ -1336,9 +1360,12 @@ function showWorkOn() {
   $("today-label").textContent = "To work on";
   $("today-chips").replaceChildren(...ids.map((id) => {
     const weak = weakLines(id);
-    const b = Object.assign(document.createElement("button"), { className: "chip", textContent: state.duas[id].name_en });
-    b.append(Object.assign(document.createElement("span"), { className: "note",
-      textContent: `${weak.length} line${weak.length === 1 ? "" : "s"} · from line ${Math.max(1, weak[0] - 1)}` }));
+    // The red rosette a line left out is marked with, carrying how many lines.
+    const mark = [svgEl('<svg viewBox="-50 -50 100 100"><use href="#rosette" x="-50" y="-50" width="100" height="100"/></svg>'),
+      Object.assign(document.createElement("b"), { textContent: arabicNumber.format(weak.length) })];
+    const b = duaRow(Object.assign(document.createElement("button"), { className: "chip" }), id, mark,
+      `${weak.length} line${weak.length === 1 ? "" : "s"} to work on · from line ${Math.max(1, weak[0] - 1)}`);
+    b.querySelector(".row-ico").classList.add("weak");
     b.onclick = () => {
       log.event("today", { dua: id, weak });
       Object.assign(state, { chosen: id, practiceFrom: Math.max(0, weak[0] - 2) });
@@ -1363,7 +1390,7 @@ function onVerdicts(list) {
     state.unsureRun = v.verdict === "not sure" ? state.unsureRun + 1 : 0;
     if (state.unsureRun >= 3 && !state.unclearShown) {
       state.unclearShown = true;
-      toast("I can't hear clearly enough to check every line", 5000);
+      toast("The sound isn't clear enough to check every line", 5000);
     }
   }
 }
@@ -1646,15 +1673,17 @@ function duasForNow(now = new Date()) {
   return [...new Set(ids)].filter((id) => state.duas[id]).slice(0, 3);
 }
 
+// Kids mode's three cards of what's recited now (a moon by night, a sun by day: kids.css hides the icon).
 function showToday() {
   if (state.practising && !kids.on && showWorkOn()) return;
-  const ids = duasForNow();
-  $("today").hidden = !ids.length;
+  // The grown-up home keeps the seal the thing to look at: under it only the continue row (showResume).
+  const ids = kids.on ? duasForNow() : [];
   const h = new Date().getHours();
-  $("today-label").textContent = h >= 18 || h < 5 ? "For tonight" : "For today";
+  const night = h >= 18 || h < 5;
+  $("today").hidden = !ids.length;
+  $("today-label").textContent = night ? "For tonight" : "For today";
   $("today-chips").replaceChildren(...ids.map((id) => {
-    const d = state.duas[id];
-    const b = Object.assign(document.createElement("button"), { className: "chip", textContent: d.name_en });
+    const b = duaRow(Object.assign(document.createElement("button"), { className: "chip" }), id, night ? "moon" : "sun", noteFor(id));
     b.onclick = () => {
       log.event("today", { dua: id });
       state.chosen = id;
@@ -1663,6 +1692,34 @@ function showToday() {
     kids.chip(b, id);
     return b;
   }));
+}
+
+const svgEl = (html) => Object.assign(document.createElement("template"), { innerHTML: html }).content.firstElementChild;
+const ROW_ICONS = {
+  moon: '<path d="M15.5 3.5a8.5 8.5 0 1 0 5 13.6 7 7 0 0 1-5-13.6Z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>',
+};
+
+// How far into a du'a the last sitting reached, as a ring round a play mark.
+const ring = (f) => svgEl(`<svg viewBox="0 0 24 24"><circle class="track" cx="12" cy="12" r="10"/>
+  <circle cx="12" cy="12" r="10" pathLength="1" stroke-dasharray="${f.toFixed(3)} 1" transform="rotate(-90 12 12)"/>
+  <path d="M10 8.2v7.6l6-3.8Z" fill="currentColor" stroke="none"/></svg>`);
+
+// A row into a du'a on the home screen (style.css .row): an icon for why it's there (a ROW_ICONS name,
+// or elements), its names and a note. The English name is the row-name's first text, for kids.chip.
+function duaRow(button, id, icon, note) {
+  const d = state.duas[id];
+  const ico = Object.assign(document.createElement("span"), { className: "row-ico" });
+  ico.setAttribute("aria-hidden", "true");
+  if (typeof icon === "string") ico.append(svgEl(`<svg viewBox="0 0 24 24">${ROW_ICONS[icon]}</svg>`));
+  else ico.append(...[icon].flat());
+  const name = Object.assign(document.createElement("span"), { className: "row-name" });
+  name.append(d.name_en);
+  if (note) name.append(Object.assign(document.createElement("span"), { className: "note", textContent: note }));
+  button.classList.add("row");
+  button.replaceChildren(ico, name);
+  if (d.name_ar) button.append(Object.assign(document.createElement("span"), { className: "ar", lang: "ar", textContent: d.name_ar }));
+  return button;
 }
 
 // -- sharing a line: press and hold it -----------------------------------------------
@@ -1713,15 +1770,65 @@ function toast(text, ms = 2000) {
   state.toastTimer = setTimeout(() => ($("toast").hidden = true), ms);
 }
 
+// -- display options (Aa) ------------------------------------------------------------------
+function openMenu() {
+  buildPreview();
+  fontSwatches();
+  $("menu").hidden = false;
+}
+
+function closeMenu() {
+  $("menu").hidden = true;
+}
+
+// The sheet's example, drawn as the page draws the line being recited (two words said, the third being
+// said) so the script, the size, the highlight and the glosses all show on it. Always the same line, the
+// bismillah that opens Du'a Kumayl: short, known, and steady while the choices change.
+function buildPreview() {
+  const dua = state.duas["dua-kumayl"] ?? Object.values(state.duas)[0];
+  const i = 0;
+  const s = dua.segments[i];
+  const ln = lineEl(s, i);
+  ln.classList.add("now");
+  if (!state.perLine) {
+    const words = s.ar.split(/\s+/).filter(Boolean).map((w, k) =>
+      Object.assign(document.createElement("span"), { className: k < 2 ? "wd said" : k === 2 ? "wd w" : "wd", textContent: w }));
+    ln.querySelector(".ar").replaceChildren(...arabicLine(s.ar, marker(i + 1), words));
+  }
+  $("preview").replaceChildren(ln);
+}
+
 // -- Arabic font -----------------------------------------------------------------------
 // Amiri Quran loads with the page; the others only once chosen.
+// Amiri itself was offered too until 2026-10-09: beside Amiri Quran it only sat higher or lower.
 const FONTS = {
-  quran: { family: '"Amiri Quran", Amiri, serif' },
-  amiri: { family: "Amiri, serif" },
-  scheherazade: { family: '"Scheherazade New", Amiri, serif', css: "Scheherazade+New:wght@400;700" },
-  noto: { family: '"Noto Naskh Arabic", Amiri, serif', css: "Noto+Naskh+Arabic:wght@400;600" },
-  nastaliq: { family: '"Noto Nastaliq Urdu", Amiri, serif', css: "Noto+Nastaliq+Urdu:wght@400;600" },
+  quran: { name: "Amiri", family: '"Amiri Quran", Amiri, serif' },
+  scheherazade: { name: "Scheherazade", family: '"Scheherazade New", Amiri, serif', css: "Scheherazade+New:wght@400;700" },
+  noto: { name: "Noto Naskh", family: '"Noto Naskh Arabic", Amiri, serif', css: "Noto+Naskh+Arabic:wght@400;600" },
+  nastaliq: { name: "Nastaliq", family: '"Noto Nastaliq Urdu", Amiri, serif', css: "Noto+Nastaliq+Urdu:wght@400;600" },
 };
+const SWATCH = "بِسْمِ ٱللَّه";
+
+// One button per script, its name written in it. A script not loaded yet loads only the swatch's letters
+// (Google Fonts' text=); choosing it loads the whole face (setFont).
+function fontSwatches() {
+  if ($("fonts").childElementCount) return;
+  $("fonts").replaceChildren(...Object.entries(FONTS).map(([key, f]) => {
+    if (f.css && !document.querySelector(`link[data-font="${key}"]`)) {
+      document.head.append(Object.assign(document.createElement("link"), { rel: "stylesheet",
+        href: `https://fonts.googleapis.com/css2?family=${f.css.split(":")[0]}&text=${encodeURIComponent(SWATCH)}&display=swap` }));
+    }
+    const b = Object.assign(document.createElement("button"), { className: "font" });
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(key === state.font));
+    b.dataset.font = key;
+    const glyph = Object.assign(document.createElement("span"), { className: "glyph", lang: "ar", textContent: SWATCH });
+    glyph.style.fontFamily = f.family;
+    b.append(glyph, f.name);
+    b.onclick = () => setFont(key);
+    return b;
+  }));
+}
 
 function setFont(key, remember = true) {
   const font = FONTS[key] || FONTS.quran;
@@ -1734,7 +1841,8 @@ function setFont(key, remember = true) {
   }
   document.documentElement.style.setProperty("--naskh", font.family);
   document.body.classList.toggle("nastaliq", key === "nastaliq");
-  $("opt-font").value = key;
+  state.font = key;
+  for (const b of $("fonts").children) b.setAttribute("aria-checked", String(b.dataset.font === key));
   if (!remember) return;
   stored("font", key);
   log.event("option", { font: key });
@@ -1784,6 +1892,21 @@ function showGuesses(candidates) {
 
 const arabicNumber = new Intl.NumberFormat("ar-EG");
 
+// A line's Arabic as nodes: its words (the given spans, for the line being recited, or plain text) with the
+// last word and the rosette held together, so a rosette never starts a line alone (a no-break space isn't
+// enough: Chrome breaks before an inline box whatever comes before it).
+function arabicLine(text, mark, words = null) {
+  let parts;
+  if (words) parts = words.flatMap((w) => [w, " "]).slice(0, -1);
+  else {
+    const t = text.trim(), cut = t.lastIndexOf(" ");
+    parts = cut < 0 ? [t] : [t.slice(0, cut + 1), t.slice(cut + 1)];
+  }
+  const tail = Object.assign(document.createElement("span"), { className: "tail" });
+  tail.append(parts.pop(), "\u00a0", mark);
+  return [...parts, tail];
+}
+
 // A verse-end rosette carrying the line number, as in a mushaf.
 function marker(n) {
   const mark = document.createElement("span");
@@ -1803,25 +1926,32 @@ function buildText(dua) {
   state.lines = new Map();
   $("text").replaceChildren(
     ...dua.segments.map((s, i) => {
-      const ln = document.createElement("div");
-      ln.className = "ln";
-      ln.dataset.i = i;
-      const ar = Object.assign(document.createElement("p"), { className: "ar", lang: "ar" });
-      ar.append(s.ar, " ", marker(i + 1));
-      const inner = document.createElement("div");
-      inner.append(
-        Object.assign(document.createElement("p"), { className: "tl", textContent: tidyTl(s.tl) }),
-        Object.assign(document.createElement("p"), { className: "en", textContent: tidyEn(s.en) }),
-      );
-      const gloss = Object.assign(document.createElement("div"), { className: "gloss" });
-      gloss.append(inner);
-      ln.append(ar, gloss);
+      const ln = lineEl(s, i);
       state.lines.set(s.id, ln);
       return ln;
     }),
     closing(),
   );
   kids.hang(dua);
+}
+
+// One line: the Arabic with its rosette, and under it the transliteration and translation (shown for
+// the line being recited).
+function lineEl(s, i) {
+  const ln = document.createElement("div");
+  ln.className = "ln";
+  ln.dataset.i = i;
+  const ar = Object.assign(document.createElement("p"), { className: "ar", lang: "ar" });
+  ar.append(...arabicLine(s.ar, marker(i + 1)));
+  const inner = document.createElement("div");
+  inner.append(
+    Object.assign(document.createElement("p"), { className: "tl", textContent: tidyTl(s.tl) }),
+    Object.assign(document.createElement("p"), { className: "en", textContent: tidyEn(s.en) }),
+  );
+  const gloss = Object.assign(document.createElement("div"), { className: "gloss" });
+  gloss.append(inner);
+  ln.append(ar, gloss);
+  return ln;
 }
 
 // Under the last line, the seal the recitation began with; it draws itself
@@ -1864,13 +1994,13 @@ function setWords(ln, split) {
   const seg = state.duas[state.dua].segments[ln.dataset.i];
   const hinted = (split && state.practice && state.hints?.get(seg.id)) || new Set();
   const words = split
-    ? seg.ar.split(/\s+/).filter(Boolean).flatMap((w, i) => {
+    ? seg.ar.split(/\s+/).filter(Boolean).map((w, i) => {
       const span = Object.assign(document.createElement("span"), { className: hinted.has(i) ? "wd hinted" : "wd", textContent: w });
       span.dataset.i = i;
-      return [span, " "];
+      return span;
     })
-    : [seg.ar, " "];
-  ar.replaceChildren(...words, ar.querySelector(".mark"));
+    : null;
+  ar.replaceChildren(...arabicLine(seg.ar, ar.querySelector(".mark"), words));
 }
 
 function moveTo(dua, segment) {

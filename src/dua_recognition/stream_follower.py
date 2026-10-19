@@ -91,6 +91,13 @@ class StreamConfig:
     # Nats off the blank column (0 = none): ordinary voices make faint letters, and a path resting in
     # the blank after the last word soaks up the belief until several are heard (line changes late).
     blank_bias: float = 1.0
+    # Letters an ordinary reader says alike (0 = off): each letter's column also takes this share of the
+    # probability of the others in its group, so ʿayn said as a glottal stop or ṭāʾ as tāʾ costs less than
+    # another letter. On since 2026-10-19 (0.5): Hasan's sessions right word 48.3% -> 52.4%, the bench's
+    # reciters +0.2 (dev) / +0.0 (test), holding still -0.5 on test (docs/results/ordinary_readers.md).
+    # ذزضظ, ثسص and قك (each under +0.5 on his sessions) cost holding still on the bench.
+    accent_fold: float = 0.5
+    accent_groups: tuple = ("اعء", "تط", "حه")
     tracker_weight: float = 0.3  # exponent on the tracker's line masses at each of its updates
     tracker_floor: float = 0.02
     show_p: float = 0.35  # a word is shown once it holds this much of the belief...
@@ -191,6 +198,20 @@ class StreamConfig:
     # made "start the refrain again" look likelier and held the next line back (Mujeer).
     copies: bool = True
     copy_split: float = 0.5  # ...the nearest copy only while no copy holds this share of their summed belief
+    # Catch up at a stop (stop_p 0 = off): once the stop detector has heard no voice for `stop_s`, a word
+    # ahead of the shown one in its line that holds `stop_p` of the belief is shown (the likeliest such
+    # word), and the display doesn't step back from it until the voice returns. Words the frames heard
+    # badly (Hasan's "wa ʿalā ẓāhirikum wa ʿalā bāṭinikum", session aq31) leave the belief split between
+    # "still at the last clear word" and "at the line's end"; the argmax held the earlier word through a
+    # 5 s stop. With `stop_tracker`, the tracker's word counts too when it is ahead in the same line
+    # by at most `stop_tracker_words` (follower.py's quiet catch-up, quiet_after): more often ahead of the
+    # reader, not used. On since 2026-10-09 (0.15, the line's last word): at stops, behind the reader's word
+    # 2.22% -> 2.06% of the time on test, ahead unchanged (docs/results/stop_catchup.md).
+    stop_p: float = 0.15
+    stop_s: float = 0.5
+    stop_last: bool = True  # ...only the line's last word: any word ahead took a one-letter "wa" for the line's end
+    stop_tracker: bool = False
+    stop_tracker_words: int = 3
 
 
 @dataclass
@@ -578,6 +599,7 @@ class StreamFollower:
         ix = index
         self._word_letter = np.r_[0, np.flatnonzero(np.diff(ix.letter_word) != 0) + 1, ix.letters.size]
         self._duas: dict[int, _Dua] = {}
+        self._fold = None  # the accent_fold matrix, built at the first step
         self.reset()
 
     def reset(self) -> None:
@@ -603,6 +625,7 @@ class StreamFollower:
         self._dua_t = None  # when the decoder started on its du'a
         self._switch_to = None  # a du'a the tracker moved to, and since when
         self._switch_since = None
+        self._caught = None  # the word a stop caught up to (StreamConfig.stop_p), while the stop lasts
 
     def _dua(self, d: int) -> _Dua:
         if d not in self._duas:
@@ -919,8 +942,26 @@ class StreamFollower:
         out[:, 1:] -= self.cfg.quiet_pen
         return out
 
+    def _accent(self, lp: np.ndarray) -> np.ndarray:
+        """StreamConfig.accent_fold: each letter column plus that share of its group's other letters."""
+        if self._fold is None:
+            from .align import _ALPHABET
+
+            m = np.eye(lp.shape[1])
+            for g in self.cfg.accent_groups:
+                cols = [_ALPHABET[c] for c in g]
+                for a in cols:
+                    for b in cols:
+                        if a != b:
+                            m[a, b] = self.cfg.accent_fold  # a's probability lent to b
+            self._fold = m
+        p = np.exp(np.asarray(lp, dtype=np.float64)) @ self._fold
+        return np.log(np.maximum(p, 1e-30)).astype(np.float32)  # float32, as the page's frames
+
     def step(self, lp: np.ndarray, t: float, hmm_word: int | None, quiet_now: float | None = None,
              line_mass=None, anchor_t: float | None = None, quiet_then: float | None = None) -> int | None:
+        if self.cfg.accent_fold > 0:
+            lp = self._accent(lp)
         w = self._step(lp, t, hmm_word, quiet_now, line_mass, anchor_t, quiet_then)
         self._note_shown(t)
         return w
@@ -1039,6 +1080,45 @@ class StreamFollower:
         if cur is None or ix.word_dua[cur] != self.dua:
             self.word = w
             return w
+        stop = cfg.stop_p > 0 and quiet_now is not None and quiet_now >= cfg.stop_s
+        if not stop:
+            self._caught = None
+        elif (self._caught == cur and dd.line_of_word[best] == dd.line_of_word[cur - dd.lo]
+              and best < cur - dd.lo):
+            self._cand, self._cand_n, self._gate_s = None, 0, 0.0
+            return cur  # caught up at this stop: no step back until the voice returns
+        out = self._move(dd, cur, best, w, pw, pw_raw, (L, B, F, IL, IB), dt)
+        if stop and out == cur:
+            out = self._catch_up(dd, pw, cur, hmm_word)
+        return out
+
+    def _catch_up(self, dd: _Dua, pw: np.ndarray, cur: int, hmm_word: int | None) -> int:
+        """StreamConfig.stop_p: at a stop, the likeliest word ahead of `cur` in its line if it holds stop_p
+        (and with stop_tracker, the tracker's word if it is further, in the line, within stop_tracker_words)."""
+        cfg = self.cfg
+        c = cur - dd.lo
+        k = int(dd.line_of_word[c])
+        last = int(dd.line_last_word[k])
+        to = None
+        if c < last:
+            j = last if cfg.stop_last else c + 1 + int(np.argmax(pw[c + 1 : last + 1]))
+            if pw[j] >= cfg.stop_p:
+                to = j
+        if cfg.stop_tracker and hmm_word is not None and dd.lo <= hmm_word < dd.lo + dd.word_first.size:
+            h = hmm_word - dd.lo
+            if c < h <= last and h - c <= cfg.stop_tracker_words and (to is None or h > to):
+                to = h
+        if to is None:
+            return cur
+        self.word, self._caught = dd.lo + to, dd.lo + to
+        self._cand, self._cand_n, self._gate_s = None, 0, 0.0
+        return self.word
+
+    def _move(self, dd: _Dua, cur: int, best: int, w: int, pw: np.ndarray, pw_raw: np.ndarray, tent, dt: float) -> int:
+        """The display's move from `cur` toward the belief's word `best` (w in the corpus): shown once it holds
+        enough of the belief for enough steps, and into the next line only past the next-line gate."""
+        cfg = self.cfg
+        L, B, F, IL, IB = tent
         if w == cur:
             self._cand, self._cand_n, self._gate_s = None, 0, 0.0
             return cur

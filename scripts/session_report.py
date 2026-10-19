@@ -97,6 +97,15 @@ class Lines:
 
 
 # -- summary --------------------------------------------------------------------
+def clock_ratio(log: dict) -> float | None:
+    """Audio seconds per real second (web/app.js checkClock): 1.00, or the microphone is broken (2.00: the
+    microphone captured twice, fixed 2026-10-04). None if the log can't tell."""
+    vis = [e for e in log["events"] if e["type"] == "visible" and e.get("shown_ms")]
+    if len(vis) > 3 and vis[-1]["shown_ms"] > vis[0]["shown_ms"]:
+        return (vis[-1]["end"] - vis[0]["end"]) / ((vis[-1]["shown_ms"] - vis[0]["shown_ms"]) / 1000)
+    return None
+
+
 def summary(path: Path, audio: np.ndarray, log: dict, lines: Lines) -> list[str]:
     ev = log["events"]
     hops = [e for e in ev if e["type"] == "hop"]
@@ -112,10 +121,8 @@ def summary(path: Path, audio: np.ndarray, log: dict, lines: Lines) -> list[str]
         f"echo={mic.get('echo')}  noise={mic.get('noise')}  ·  audio context {log.get('audio_rate')} Hz"
         + (f"  ·  model loaded in {log['load_ms'] / 1000:.1f} s" if log.get("load_ms") else ""),
     ]
-    vis = [e for e in ev if e["type"] == "visible" and e.get("shown_ms")]
-    if len(vis) > 3 and vis[-1]["shown_ms"] > vis[0]["shown_ms"]:
-        # Audio seconds per real second (web/app.js checkClock): 1.00, or the microphone is broken.
-        ratio = (vis[-1]["end"] - vis[0]["end"]) / ((vis[-1]["shown_ms"] - vis[0]["shown_ms"]) / 1000)
+    ratio = clock_ratio(log)
+    if ratio is not None:
         out.append(f"  audio clock {ratio:.2f} s per real second"
                    + ("" if abs(ratio - 1) < 0.1 else "  <-- AUDIO ARRIVES AT THE WRONG SPEED: nothing after this is trustworthy"))
     if hops:

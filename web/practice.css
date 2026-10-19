@@ -3,27 +3,14 @@
    say it"). Its outline broken: not sure (the sound, not the reader). Nothing is gilded just for
    being passed, and the words of the line being read aren't painted as said. */
 
-/* ---------- home: follow or practise, chosen beneath the seal as on a camera (setPractising) ---------- */
-.modes { display: flex; gap: 26px; margin-top: 16px; }
-.modes button {
-  position: relative; padding: 6px 0 14px .24em; font-size: 14px; letter-spacing: .24em; text-transform: uppercase;
-  color: var(--muted); transition: color .3s;
-}
-.modes button:hover { color: var(--ink); }
-.modes button[aria-checked="true"] { color: var(--gold); }
-/* The chosen one carries the diamond the progress rule ends in. */
-.modes button::after {
-  content: ""; position: absolute; left: 50%; bottom: 2px; width: 6px; height: 6px; margin-left: -3px;
-  background: var(--gold); transform: rotate(45deg) scale(0); transition: transform .35s cubic-bezier(.2, .7, .2, 1);
-}
-.modes button[aria-checked="true"]::after { transform: rotate(45deg) scale(1); }
+/* ---------- home: follow or practise, chosen beneath the seal (setPractising; the switch is in style.css) ---------- */
 body.kids .modes { display: none; }
 /* Practising, the seal turns an eighth, as a dial clicks over, and a book open on a rehal takes the
    mic's place in its dark core: the stand du'as are learnt from. */
 body.practising .seal-star { transform: rotate(45deg); }
 .seal-mic, .seal-rehal { transition: opacity .45s ease, transform .9s cubic-bezier(.2, .7, .2, 1); }
 .seal-rehal {
-  position: relative; /* above the star, as the mic is */ width: 38px; height: 38px;
+  position: relative; /* above the star, as the mic is */ width: 48px; height: 48px;
   fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
   opacity: 0; transform: translateY(5px) scale(.85);
 }
@@ -31,8 +18,6 @@ body.practising .seal-rehal { opacity: 1; transform: none; }
 body.practising .seal-mic { opacity: 0; transform: scale(.8); }
 body.kids .seal-rehal { display: none; }
 /* (In the top bar's 30px seal it was a knot: the line under the title says "Practice" instead.) */
-.links .check { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; text-decoration: none; }
-.links .check input { margin: 0; accent-color: var(--gold); }
 
 /* ---------- the rosettes ---------- */
 /* Reading mode gilds a rosette as the highlight moves past its line: not here. */
@@ -74,14 +59,17 @@ body.practice.hide-text .ln .ar .mark, body.practice.hide-text .ln .ar .wd:is(.s
 body.practice.hide-text .ln .ar .wd.hinted { color: var(--gold); }
 body.practice.hide-text:not([data-state="review"]) .ln:not(.v-heard):not(.v-left):not(.passed) .gloss { visibility: hidden; }
 
-body:not(.practice) .opt-hide { display: none; }
+/* In the display options while practising, or with practise chosen on the home screen. */
+body:not(.practice):not(.practising) .opt-hide,
+body.practising:not(.practice):not([data-state="idle"]):not([data-state="loading"]) .opt-hide { display: none; }
 
 /* Stuck: the next word, one per tap (bottom right; "Back to reciter" moves to the left). */
 .hint-btn {
-  position: fixed; right: 22px; bottom: max(28px, env(safe-area-inset-bottom)); z-index: 11; display: none;
+  position: fixed; right: 22px; bottom: max(28px, env(safe-area-inset-bottom)); z-index: 11;
   background: var(--paper-2); box-shadow: 0 6px 24px rgba(0, 0, 0, .35);
 }
-body.practice.hide-text[data-state="following"] .hint-btn { display: block; }
+/* Important: kids.css makes every .chip display: flex, which showed this on the kids home screen. */
+body:not(.practice.hide-text[data-state="following"]) .hint-btn { display: none !important; }
 body.practice.hide-text .back { left: 22px; transform: none; }
 
 /* ---------- stopped: the whole text with its verdicts (showReview) ---------- */

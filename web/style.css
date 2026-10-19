@@ -37,6 +37,7 @@ body.majlis {
 /* followLine() in app.js does the scrolling: the browser's scroll anchoring would fight it. */
 html { overflow-x: clip; overflow-anchor: none; }
 body {
+  --seal: clamp(176px, 52vw, 216px); --top: max(24px, env(safe-area-inset-top));
   margin: 0; min-height: 100svh;
   background: var(--pattern), radial-gradient(120% 90% at 50% 40%, var(--paper), var(--paper-2)) fixed;
   background-attachment: fixed;
@@ -64,7 +65,7 @@ body.majlis .folio { display: none; }
 /* ---------- top bar (visible while following) ---------- */
 .top {
   position: fixed; inset: 0 0 auto 0; z-index: 10;
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
   padding: max(20px, env(safe-area-inset-top)) 26px 14px;
   background: linear-gradient(var(--paper) 55%, transparent);
   opacity: 0; pointer-events: none; transition: opacity .5s;
@@ -72,19 +73,21 @@ body.majlis .folio { display: none; }
 body:not([data-state="idle"]) .top { opacity: 1; pointer-events: auto; }
 /* In majlis the chrome gets out of the way until someone reaches for it. */
 body.majlis:not(.chrome) .top { opacity: 0; }
-.title { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* Two lines tall (Arabic and English names) with the seal and buttons centred on them; a third line
+   ("Also in ...") goes below rather than lifting the two. */
+.title { flex: 1; display: flex; flex-direction: column; justify-content: center; min-width: 0; min-height: 51px; }
 /* The start button's seal, small, answering the voice while following (meter() in app.js). */
-.live { flex: none; width: 30px; height: 30px; color: var(--gold); }
+.live { flex: none; width: 30px; height: 30px; margin-top: 10px; color: var(--gold); }
 body:not([data-state="following"]) .live, body.watching .live { display: none; }
 .live svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 5; overflow: visible; opacity: .45; will-change: transform, opacity; }
 /* Holding the place through a lapse (render()): it redraws itself, like the listening star. */
 body.holding .live svg { stroke-dasharray: 1; }
 body.holding .live use { animation: draw 2.5s ease-in-out infinite; }
 .title-ar { font-family: var(--ruqaa); font-size: 22px; line-height: 1.3; color: var(--gold); }
-.title-en { font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
-.title-also { font-size: 13px; font-style: italic; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title-en { font-size: 15px; color: var(--muted); }
+.title-also { font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .title-also:empty { display: none; }
-.actions { display: flex; gap: 6px; }
+.actions { display: flex; gap: 6px; margin-top: 3px; }
 .icon {
   width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
   color: var(--muted); font-weight: 600; font-size: 15px; transition: background .2s, color .2s;
@@ -98,52 +101,160 @@ body.holding .live use { animation: draw 2.5s ease-in-out infinite; }
   transform: rotate(45deg);
 }
 
-/* ---------- home ---------- */
+/* ---------- home: the name, the seal, and a tap into a du'a ---------- */
 .home {
-  min-height: 100svh; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  text-align: center; padding: 48px 24px; gap: 4px;
+  min-height: 100svh; display: flex; flex-direction: column; align-items: center; text-align: center;
+  padding: var(--top) 26px max(26px, env(safe-area-inset-bottom));
 }
 body:not([data-state="idle"]):not([data-state="loading"]) .home { display: none; }
-.bismillah { margin: 0 0 6px; font-family: var(--naskh); font-size: 22px; color: var(--muted); }
-.brand-ar { font-family: var(--ruqaa); font-weight: 700; font-size: clamp(52px, 13vw, 88px); line-height: 1.35; margin: 0; color: var(--gold); }
-.brand-en { margin: 0; font-size: 14px; letter-spacing: .3em; text-transform: uppercase; color: var(--muted); }
-.tagline { margin: 16px 0 34px; color: var(--muted); font-size: 20px; font-style: italic; }
+.home-bar, .shelf, .find, .samples, .sessions { width: 100%; max-width: 440px; }
+.home-bar { height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { display: grid; justify-items: start; text-align: left; }
+.wordmark { margin: 0; font-family: var(--ruqaa); font-weight: 700; font-size: 32px; line-height: 1.35; color: var(--gold); }
+.brand-en { margin: -2px 0 0; font-size: 21px; line-height: 1.2; color: var(--ink); opacity: .85; }
+.home-actions { display: flex; align-items: center; gap: 8px; }
+.home-actions .icon { width: 40px; height: 40px; border: 1px solid var(--line); }
+.kids-on {
+  display: flex; align-items: center; gap: 7px; height: 40px; padding: 0 15px 0 11px; border-radius: 99px;
+  border: 1px solid var(--line); color: var(--muted); font-size: 15px; transition: border-color .2s, color .2s;
+}
+.kids-on:hover { border-color: var(--gold); color: var(--ink); }
+.kids-on svg { width: 14px; height: 20px; fill: none; stroke: var(--gold); stroke-width: 1.8; stroke-linejoin: round; }
+/* The seal's centre just above the middle of the screen (48%), measured from the top, so whatever comes
+   below it (the loading line, the continue row) never moves it. */
+.home-main {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  padding: max(16px, calc(48svh - var(--seal) / 2 - 72px - var(--top))) 0 24px;
+}
 
-/* The start button is a khatam: an eight-pointed star with a mic at its heart. */
-.seal { position: relative; width: 132px; height: 132px; display: grid; place-items: center; color: var(--gold); }
+/* The start button is a khatam: an eight-pointed star with a mic at its heart. It is the one solid gold
+   thing on the home screen and the largest. The button holds still; the lamplight behind it swells and
+   fades at the pace the listening star breathes while the reciter pauses (4.5 s, meter() in app.js). */
+.seal {
+  position: relative; isolation: isolate; width: var(--seal); aspect-ratio: 1; padding: 0;
+  display: grid; place-items: center; color: var(--gold);
+}
 .seal > svg { grid-area: 1 / 1; }
+.seal::before {
+  content: ""; position: absolute; z-index: -1; inset: -40%; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--gold) 18%, transparent), transparent);
+  animation: seal-glow 4.5s ease-in-out infinite;
+}
+@keyframes seal-glow { 0%, 100% { opacity: .4; transform: scale(.88); } 50% { opacity: 1; transform: scale(1.08); } }
 .seal-star {
   width: 100%; height: 100%; --core: var(--paper);
   fill: var(--gold); stroke: var(--gold-hi); stroke-width: 1.2;
-  filter: drop-shadow(0 8px 24px var(--wash));
-  transition: transform 1.2s cubic-bezier(.2, .7, .2, 1);
+  filter: drop-shadow(0 10px 32px var(--wash));
+  transition: transform 1.2s cubic-bezier(.2, .7, .2, 1), fill-opacity .7s ease, stroke .7s ease, stroke-width .7s ease, filter .7s ease;
 }
-.seal:hover .seal-star { transform: rotate(45deg); }
-.seal-mic { position: relative; /* above the star, whose filter lifts it a paint layer */ width: 30px; height: 30px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; }
+@media (hover: hover) { .seal:hover .seal-star { transform: rotate(45deg); } } /* a phone's tap leaves :hover on */
+.seal-mic { position: relative; /* above the star, whose filter lifts it a paint layer */ width: 40px; height: 40px; stroke: currentColor; stroke-width: 1.7; fill: none; stroke-linecap: round; }
 .seal:disabled { cursor: progress; }
-body[data-state="loading"] .seal-star { animation: turn 8s linear infinite; }
 @keyframes turn { to { transform: rotate(360deg); } }
-.hint { margin: 18px 0 0; color: var(--muted); min-height: 1.5em; }
-.load { width: 160px; height: 2px; background: var(--line); overflow: hidden; margin-top: 10px; }
+
+/* Tapped: the seal empties to its outline, which is the star the listening screen draws, in the same place
+   and at the same size (.voice, .listen); the rest of the home screen fades. Listening, the outline is
+   there already and carries on (its drawing starts fully drawn; meter() starts its turn at the seal's). */
+body:not(.kids) :is(.home-bar, .shelf, .find, .sessions, .samples) { transition: opacity .45s ease; }
+body:not(.kids)[data-state="loading"] :is(.home-bar, .shelf, .find, .sessions, .samples) { opacity: 0; pointer-events: none; }
+body:not(.kids)[data-state="loading"] .seal-star {
+  fill-opacity: 0; stroke: var(--gold); stroke-width: 1; filter: drop-shadow(0 10px 32px transparent);
+}
+body:not(.kids)[data-state="loading"] .seal-rehal { opacity: 0; transform: scale(.6); }
+body:not(.kids)[data-state="loading"] .seal-mic { opacity: .6; }
+body:not(.kids)[data-state="loading"] .seal::before { animation: glow-out .7s ease forwards; }
+@keyframes glow-out { to { opacity: 0; transform: scale(.9); } }
+.hint { margin: 16px 0 0; color: var(--muted); min-height: 1.5em; font-size: 16px; }
+.load { width: 160px; height: 2px; background: var(--line); overflow: hidden; margin-top: 6px; }
+body:not(.kids) .load[hidden] { display: block !important; visibility: hidden; } /* its room kept: nothing moves while loading */
 .load i { display: block; height: 100%; width: 0; background: var(--gold); transition: width .3s; }
-.links { margin-top: 14px; display: flex; gap: 4px; align-items: center; color: var(--faint); }
+
+/* Follow or practise: a thumb slides under the chosen one (setPractising). */
+.modes {
+  position: relative; display: grid; grid-template-columns: 1fr 1fr; margin-top: 10px; padding: 3px;
+  border-radius: 99px; border: 1px solid var(--line); background: color-mix(in srgb, var(--paper-2) 75%, transparent);
+}
+.modes::before {
+  content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); border-radius: 99px;
+  background: var(--wash); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 50%, transparent);
+  transition: transform .4s cubic-bezier(.2, .7, .2, 1);
+}
+body.practising .modes::before { transform: translateX(100%); }
+.modes button {
+  position: relative; display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 120px;
+  padding: 7px 16px; border-radius: 99px; font-size: 16px; color: var(--muted); transition: color .3s;
+}
+.modes button:hover { color: var(--ink); }
+.modes button[aria-checked="true"] { color: var(--gold); }
+.modes svg, .toggle svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.toggle {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 6px 15px; border-radius: 99px;
+  border: 1px solid var(--line); color: var(--muted); font-size: 15px; transition: border-color .2s, color .2s, background .2s;
+}
+.toggle:hover { color: var(--ink); }
+.toggle .slash { opacity: 0; transition: opacity .2s; }
+.toggle[aria-pressed="true"] { border-color: var(--gold); color: var(--gold); background: var(--wash); }
+.toggle[aria-pressed="true"] .slash { opacity: 1; }
+
+/* Rows into a du'a: an icon for why it's here (resume, today, starred, to work on), its names, a note. */
+/* One panel, a hairline above each row (the first one's is clipped by the panel's edge). */
+.shelf {
+  display: grid; grid-template-columns: minmax(0, 1fr); overflow: hidden;
+  border: 1px solid var(--line); border-radius: 18px; background: color-mix(in srgb, var(--paper-2) 50%, transparent);
+}
+.shelf:has(> #resume[hidden]):has(> #today[hidden]) { display: none; }
+body:not(.kids) .today { margin: 0; align-items: stretch; }
+body:not(.kids) #today-label { display: none; }
+body:not(.kids) .today .chips { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
+body:not(.kids) .row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 58px; margin: 0; padding: 8px 16px 8px 12px;
+  border: 0; border-radius: 0; background: none; box-shadow: 0 -1px 0 var(--line);
+  text-align: left; font-size: 16px; line-height: 1.3; color: var(--ink); text-decoration: none; transition: background .2s;
+}
+body:not(.kids) .row:hover { background: var(--wash); }
+.row-ico { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; color: var(--gold); }
+.row-ico > * { grid-area: 1 / 1; }
+.row-ico svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
+/* Resume: the ring fills the round. */
+.row-ico.prog svg { width: 32px; height: 32px; stroke-width: 1.5; }
+.row-ico .track { stroke: color-mix(in srgb, var(--gold) 22%, transparent); }
+/* To work on: the red rosette practice marks a line left out with, carrying how many lines. */
+.row-ico.weak { color: var(--rubric); }
+.row-ico.weak svg { width: 32px; height: 32px; stroke-width: 3; }
+.row-ico.weak b { font: 700 12px/1 Amiri, serif; color: var(--ink); }
+.row-name { flex: 1; min-width: 0; }
+body:not(.kids) .row .note { display: block; margin-top: 1px; font-size: 13px; font-style: normal; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body:not(.kids) .row .ar { flex: none; max-width: 42%; margin: 0; font-size: 18px; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.resume { display: block; margin: 14px auto 0; color: var(--gold); }
+
+.find { display: flex; gap: 8px; margin-top: 12px; }
+.search-btn {
+  flex: 1; display: flex; align-items: center; gap: 12px; min-height: 50px; padding: 0 20px; border-radius: 99px;
+  border: 1px solid var(--line); background: color-mix(in srgb, var(--paper-2) 50%, transparent); color: var(--muted);
+  font-size: 16px; text-align: left; transition: border-color .2s, color .2s;
+}
+.search-btn:hover { border-color: var(--gold); color: var(--ink); }
+.search-btn svg, .search-field svg, .icon.square svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.icon.square { flex: none; width: 50px; height: 50px; border: 1px solid var(--line); }
 .link { padding: 12px 6px; color: var(--muted); font-size: 16px; text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 4px; }
 .link:hover { color: var(--ink); text-decoration-color: var(--gold); }
 .samples { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; max-height: 40vh; overflow: auto; }
 .samples button { color: var(--muted); font-size: 16px; padding: 4px 10px; border-radius: 6px; }
 .samples button:hover { background: var(--line); color: var(--ink); }
-.sessions { margin: 18px 0 0; max-width: 34em; font-size: 14px; color: var(--muted); }
+.sessions { margin: 14px 0 0; font-size: 14px; color: var(--muted); }
 .sessions .link { font-size: 14px; margin-inline-start: 6px; padding: 0; }
 .sessions .dot { margin-inline-start: 6px; color: var(--faint); }
-.footnote { position: fixed; bottom: max(24px, env(safe-area-inset-bottom)); left: 0; right: 0; margin: 0; font-size: 14px; font-style: italic; color: var(--muted); }
 
 /* ---------- listening: a star draws itself while the du'a is found ---------- */
 .stage { display: none; }
 body[data-state="listening"] .stage, body[data-state="following"] .stage { display: block; }
+/* Placed from the top, not centred: as the guesses come and wrap onto more lines, the star stays put
+   (where centring put it with one row of guesses) and they grow downward. */
 .listen {
-  min-height: 100svh; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 20px; padding: 96px 24px 80px; text-align: center;
+  min-height: 100svh; display: flex; flex-direction: column; align-items: center;
+  gap: 20px; padding: max(calc(var(--top) + 88px), calc(48svh - var(--seal) / 2)) 24px 80px; text-align: center;
 }
+body:not(.kids)[data-state="listening"] .listen-msg { animation: rise-in .8s .3s cubic-bezier(.2, .7, .2, 1) backwards; }
 body[data-state="following"] .listen { display: none; }
 /* Found: the listening star opens out and fades while the text rises in behind it (reveal() in app.js). */
 body.revealing.from-listen .listen {
@@ -158,7 +269,7 @@ body.revealing .text { animation: rise-in 1.1s .5s cubic-bezier(.2, .7, .2, 1) b
 @keyframes rise-in { from { opacity: 0; transform: translateY(18px); } }
 /* meter() sets only the star's transform and the glow's opacity each frame:
    both are composited, so the voice never forces a repaint. */
-.voice { position: relative; width: 150px; height: 150px; }
+.voice { position: relative; width: var(--seal); height: var(--seal); }
 .voice-glow {
   position: absolute; inset: -30%; border-radius: 50%; opacity: 0;
   background: radial-gradient(closest-side, color-mix(in srgb, var(--gold) 38%, transparent), transparent);
@@ -168,18 +279,25 @@ body.revealing .text { animation: rise-in 1.1s .5s cubic-bezier(.2, .7, .2, 1) b
   position: relative; width: 100%; height: 100%; fill: none; stroke: var(--gold); stroke-width: 1;
   stroke-dasharray: 1; overflow: visible; will-change: transform;
 }
-.girih use { animation: draw 5s ease-in-out infinite; }
-.girih circle { animation: draw 5s ease-in-out infinite; animation-delay: -1.2s; opacity: .6; }
-.girih circle + circle { animation-delay: -2.4s; }
+/* The star begins fully drawn (the seal's outline, 45% into its cycle); the two circles draw in after. */
+.girih use { animation: draw 5s -2.25s ease-in-out infinite; }
+.girih circle { animation: draw 5s .4s ease-in-out infinite backwards; opacity: .6; }
+.girih circle + circle { animation-delay: 1.2s; }
 @keyframes draw { 0% { stroke-dashoffset: 1; } 45%, 55% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: -1; } }
-.listen-msg { margin: 0; font-size: 20px; font-style: italic; color: var(--muted); }
+.listen-msg { margin: 0; font-size: 19px; color: var(--muted); }
+/* In the star's core, where it was on the button: the mic, dim in silence and bright with the voice. */
+.voice-mic {
+  position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; translate: -50% -50%;
+  fill: none; stroke: var(--gold); stroke-width: 1.7; stroke-linecap: round; opacity: .6; will-change: opacity;
+}
+body.kids .voice-mic { display: none; }
 
 /* "Is it…?" guesses surface as the tracker grows surer. Their room (the label and a row of chips)
    is kept while they're hidden, so the star doesn't jump up when they appear. */
 .guesses { display: flex; flex-direction: column; align-items: center; gap: 10px; min-height: 71px; }
 .guesses[hidden] { display: flex !important; visibility: hidden; }
 .guesses:not([hidden]) { animation: rise-in .7s cubic-bezier(.2, .7, .2, 1) backwards; }
-.guess-label { font-size: 14px; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
+.guess-label { font-size: 16px; color: var(--muted); }
 .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .chip {
   padding: 7px 16px; border-radius: 99px; border: 1px solid var(--line); background: var(--paper-2);
@@ -192,8 +310,8 @@ body.revealing .text { animation: rise-in 1.1s .5s cubic-bezier(.2, .7, .2, 1) b
 body[data-state="listening"] .folio-head, body[data-state="listening"] .text { display: none; }
 .folio-head { padding: 26vh 24px 0; text-align: center; }
 .head-ar { margin: 0; font-family: var(--ruqaa); font-weight: 700; font-size: clamp(38px, 7vw, 60px); line-height: 1.4; color: var(--gold); }
-.head-en { margin: 0; font-size: 15px; letter-spacing: .24em; text-transform: uppercase; color: var(--muted); }
-.head-note { margin: 8px 0 0; font-style: italic; color: var(--muted); }
+.head-en { margin: 0; font-size: 19px; color: var(--muted); }
+.head-note { margin: 6px 0 0; font-size: 15px; color: var(--muted); }
 .head-note:empty { display: none; }
 .folio-head::after {
   content: ""; display: block; width: 160px; height: 14px; margin: 26px auto 0; background: var(--gold); opacity: .7;
@@ -216,6 +334,7 @@ body[data-state="listening"] .folio-head, body[data-state="listening"] .text { d
 .ln.now .ar .wd.said { color: var(--ink); }
 /* An ink wash behind the word being recited, not a glow. */
 .ln.now .ar .wd.w { color: var(--ink); background-size: calc(100% + .3em) 100%; }
+.ar .tail { white-space: nowrap; } /* the last word and its rosette (arabicLine) */
 
 /* Verse-end rosette carrying the line number, in rubric red. */
 .mark {
@@ -276,12 +395,17 @@ body.focus .folio-head { opacity: 0; transition: opacity .6s; }
   box-shadow: 0 -12px 40px rgba(0, 0, 0, .3); animation: rise .25s ease-out;
 }
 @keyframes rise { from { transform: translateY(30px); opacity: 0; } }
-@media (min-width: 700px) { .picker { place-items: center; } .picker-card { border-radius: 18px; } }
-#search {
-  font: inherit; color: var(--ink); background: var(--paper-2); border: 1px solid var(--line);
-  border-radius: 10px; padding: 11px 14px; outline: none;
+#picker .picker-card { height: 80svh; } /* a fixed height: the search field stays put as results narrow */
+@media (min-width: 700px) { .picker { place-items: center; } .picker-card { border-radius: 18px; } #picker .picker-card { height: min(80svh, 760px); } }
+/* A sheet's handle, on a phone only. */
+.grabber { flex: none; display: block; align-self: center; justify-self: center; width: 40px; height: 4px; margin: -4px 0 10px; border-radius: 2px; background: var(--faint); }
+@media (min-width: 700px) { .grabber { display: none; } }
+.search-field {
+  flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--paper-2); color: var(--muted); cursor: text;
 }
-#search:focus { border-color: var(--gold); }
+.search-field:focus-within { border-color: var(--gold); }
+#search { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: none; border: 0; padding: 12px 0; outline: none; }
 #picker-list { list-style: none; margin: 10px 0 0; padding: 0; overflow: auto; }
 #picker-list li { display: flex; align-items: center; }
 #picker-list .pick {
@@ -291,29 +415,96 @@ body.focus .folio-head { opacity: 0; transition: opacity .6s; }
 #picker-list .pick:hover { background: var(--line); }
 #picker-list .fav { flex: none; width: 40px; height: 40px; font-size: 20px; color: var(--faint); }
 #picker-list .fav[aria-pressed="true"] { color: var(--gold); }
-#picker-list .section { margin: 12px 12px 4px; font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+#picker-list .section { margin: 14px 12px 4px; font-size: 15px; color: var(--gold); }
 #picker-list .section:first-child { margin-top: 0; }
-#picker-list .note { display: block; font-size: 14px; font-style: italic; color: var(--muted); }
+#picker-list .note { display: block; font-size: 14px; color: var(--muted); }
 #picker-list .ar { font-family: var(--ruqaa); font-size: 21px; color: var(--gold); flex: none; }
 
-/* ---------- menu ---------- */
-.menu {
-  position: fixed; top: 70px; right: 22px; z-index: 13; display: grid; gap: 12px;
-  padding: 14px 16px; border-radius: 12px; background: var(--paper); border: 1px solid var(--line);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, .25); font-size: 16px;
+/* ---------- display options: a sheet from below on a phone, a panel under Aa on a wide screen ---------- */
+.menu { position: fixed; inset: 0; z-index: 20; display: grid; place-items: end center; background: rgba(4, 6, 12, .5); }
+.menu-card {
+  width: min(560px, 100%); height: 88svh; overflow: auto; overscroll-behavior: contain; align-content: start; /* fixed: growth never moves its controls */
+  display: grid; gap: 12px; padding: 14px 18px max(20px, env(safe-area-inset-bottom));
+  background: var(--paper); border: 1px solid var(--line); border-bottom: 0; border-radius: 22px 22px 0 0;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, .35); animation: rise .3s cubic-bezier(.2, .7, .2, 1); font-size: 16px;
 }
-.menu label { display: flex; gap: 10px; align-items: center; cursor: pointer; }
-.menu input { accent-color: var(--gold); }
-.seg { display: flex; border: 1px solid var(--line); border-radius: 99px; padding: 3px; }
-.seg button { flex: 1; padding: 4px 14px; border-radius: 99px; color: var(--muted); white-space: nowrap; }
-.seg button[aria-checked="true"] { background: var(--gold); color: var(--paper); }
+@media (min-width: 700px) {
+  .menu { place-items: start end; padding: 72px 22px 0; background: none; }
+  .menu-card { width: 400px; height: auto; max-height: calc(100svh - 96px); border-bottom: 1px solid var(--line); border-radius: 18px; }
+}
+/* The line the choices show on: the page's own line markup and rules, at a fixed base size. */
+/* The example: the page's own line, across the sheet, under the script and size controls, so its height
+   changing with them never moves them. Sizes are its own (majlis only centres it): Page and Majlis don't
+   move the cards either. */
+.preview { margin: 2px -18px; padding: 10px 24px 4px; background: var(--paper-2); border-block: 1px solid var(--line); }
+.preview .ln { padding: 0; }
+.menu .preview .ln.now .ar { font-size: calc(30px * var(--text, 1)); line-height: 2; }
+body.nastaliq .menu .preview .ln.now .ar { line-height: 2.7; }
+.menu .preview .tl { font-size: calc(17px * var(--text, 1)); }
+.menu .preview .en { margin: 4px 0 10px; font-size: calc(18px * var(--text, 1)); }
 
-/* ---------- sharing to other screens ---------- */
-.share-btn { justify-self: start; padding: 0; }
-.size { display: flex; gap: 8px; align-items: center; }
-.size span { flex: 1; }
-.size .chip { padding: 2px 12px; }
-.size .chip:disabled { opacity: .35; cursor: default; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.card, .font {
+  display: grid; justify-items: center; align-content: center; gap: 6px; border-radius: 16px; border: 1px solid var(--line);
+  background: var(--paper-2); color: var(--muted); transition: border-color .2s, background .2s, color .2s;
+}
+.card { padding: 12px 8px 10px; font-size: 15px; }
+.card:hover, .font:hover { color: var(--ink); }
+.card[aria-checked="true"], .font[aria-checked="true"] {
+  border-color: var(--gold); color: var(--gold); background: color-mix(in srgb, var(--gold) 9%, var(--paper-2));
+}
+.card svg { width: 64px; height: 40px; fill: none; stroke-linecap: round; }
+.card .frame { stroke: var(--muted); stroke-width: 1.3; }
+.card .dim { stroke: var(--faint); stroke-width: 3; }
+.card .on { stroke: var(--gold); stroke-width: 4; }
+.card .on.big { stroke-width: 5.5; }
+.card .w-ink { fill: var(--ink); }
+.card .w-dim { fill: var(--faint); }
+.card .wash { fill: var(--wash); }
+
+/* Each script's swatch is drawn in it (fontSwatches in app.js loads just these letters). */
+.fonts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.font { padding: 4px 2px 9px; font-size: 13px; }
+.font .glyph { display: grid; place-items: center; height: 56px; font-size: 22px; line-height: 1; white-space: nowrap; color: var(--ink); }
+
+.size { display: flex; align-items: center; gap: 14px; padding: 2px 6px; cursor: pointer; }
+.size-a { font-family: Amiri, serif; font-size: 18px; line-height: 1; color: var(--muted); transform: translateY(-.3em); }
+.size-a.big { font-size: 34px; }
+#opt-size { flex: 1; height: 32px; margin: 0; background: none; -webkit-appearance: none; appearance: none; cursor: pointer; }
+#opt-size::-webkit-slider-runnable-track {
+  height: 2px; border-radius: 1px; background: linear-gradient(var(--gold), var(--gold)) 0 / var(--fill, 25%) 100% no-repeat, var(--line);
+}
+/* The thumb is the progress rule's diamond. */
+#opt-size::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 18px; height: 18px; margin-top: -8px; border-radius: 3px; background: var(--gold);
+  border: 3px solid var(--paper); box-shadow: 0 0 0 1px var(--gold); transform: rotate(45deg);
+}
+#opt-size::-moz-range-track { height: 2px; background: var(--line); }
+#opt-size::-moz-range-progress { height: 2px; background: var(--gold); }
+#opt-size::-moz-range-thumb { width: 14px; height: 14px; border-radius: 3px; background: var(--gold); border: 3px solid var(--paper); box-shadow: 0 0 0 1px var(--gold); transform: rotate(45deg); }
+#opt-size:focus-visible { outline: none; }
+#opt-size:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 1px var(--gold), 0 0 0 5px var(--wash); }
+
+.switches, .menu-row { border: 1px solid var(--line); border-radius: 16px; background: var(--paper-2); }
+.switches { display: grid; }
+.switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 0 14px 0 16px; cursor: pointer; }
+.switch + .switch { border-top: 1px solid var(--line); }
+.switch input {
+  flex: none; position: relative; width: 46px; height: 28px; margin: 0; border-radius: 99px; background: var(--faint);
+  -webkit-appearance: none; appearance: none; cursor: pointer; transition: background .25s;
+}
+.switch input::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--ink); transition: transform .25s cubic-bezier(.2, .7, .2, 1), background .25s;
+}
+.switch input:checked { background: var(--gold); }
+.switch input:checked::after { transform: translateX(18px); background: var(--paper); }
+.switch input:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 2px; }
+.menu-row { display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 14px 0 16px; text-align: left; }
+.menu-row svg { flex: none; width: 20px; height: 20px; fill: none; stroke: var(--gold); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.menu-row .chev { margin-inline-start: auto; stroke: var(--muted); }
+.about { margin: 0; font-size: 14px; color: var(--muted); text-align: center; }
+.about:empty { display: none; }
 
 /* Shown once the reciter's line is scrolled out of sight. */
 .back {
@@ -322,28 +513,18 @@ body.focus .folio-head { opacity: 0; transition: opacity .6s; }
 }
 body:not([data-state="following"]) .back { display: none; }
 .today { margin-top: 22px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.today .chip .note { display: block; font-size: 13px; font-style: italic; color: var(--muted); }
+.today .chip .note { display: block; font-size: 13px; color: var(--muted); }
 .toast {
   position: fixed; left: 50%; bottom: max(84px, env(safe-area-inset-bottom)); z-index: 21; transform: translateX(-50%);
   margin: 0; padding: 8px 16px; border-radius: 99px; background: var(--paper-2); border: 1px solid var(--line);
   box-shadow: 0 6px 24px rgba(0, 0, 0, .35);
 }
-.menu select { font: inherit; color: var(--ink); background: var(--paper-2); border: 1px solid var(--line); border-radius: 8px; padding: 3px 6px; }
-.menu .font { justify-content: space-between; cursor: default; }
 /* Long-press shares a line (app.js): keep the phone's own text selection out of the way. */
 .text { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-.resume { display: block; margin: 14px auto 0; color: var(--gold); text-decoration-color: var(--gold); }
-/* Into kids mode (kids.js): a lantern in the home screen's corner. */
-.kids-on {
-  position: fixed; top: max(24px, env(safe-area-inset-top)); right: 24px; z-index: 13; display: flex; align-items: center; gap: 8px;
-  min-height: 44px; padding: 0 16px 0 12px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); font-size: 16px;
-  transition: border-color .2s, color .2s;
-}
-.kids-on:hover { border-color: var(--gold); color: var(--ink); }
-.kids-on svg { width: 16px; height: 22px; fill: none; stroke: var(--gold); stroke-width: 1.8; stroke-linejoin: round; }
 .share-card { align-items: center; text-align: center; gap: 6px; }
 .share-title { margin: 4px 0 0; font-weight: 600; font-size: 20px; }
 .share-sub { margin: 0; font-size: 15px; color: var(--muted); }
+.share-card .chip { padding: 9px 20px; }
 .qr { width: min(240px, 70vw); aspect-ratio: 1; margin: 10px auto; padding: 10px; border-radius: 12px; background: #fff; }
 .qr svg { width: 100%; height: 100%; display: block; }
 .share-code { margin: 0; font-size: 30px; letter-spacing: .3em; color: var(--gold); font-weight: 600; }

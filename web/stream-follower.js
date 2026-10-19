@@ -41,6 +41,10 @@ export const STREAM_DEFAULTS = {
   quietS: 0.3,
   quietPen: 4.0,
   blankBias: 1.0, // nats off the blank column: faint letters (ordinary voices) count for more
+  // Letters an ordinary reader says alike (0 = off): each letter's column also takes this share of the
+  // probability of the others in its group (StreamConfig.accent_fold; on since 2026-10-19).
+  accentFold: 0.5,
+  accentGroups: ["اعء", "تط", "حه"],
   trackerWeight: 0.3,
   trackerFloor: 0.02,
   showP: 0.35,
@@ -109,6 +113,17 @@ export const STREAM_DEFAULTS = {
   // next-line gate still weighs each line by its own belief).
   copies: true,
   copySplit: 0.5, // ...the nearest copy only while no copy holds this share of their summed belief
+  // Catch up at a stop (stream_follower.py): once the stop detector has heard no voice for stopS, the
+  // likeliest word ahead of the shown one in its line is shown if it holds stopP of the belief (0 = off),
+  // and the display doesn't step back from it until the voice returns. Words the frames heard badly leave
+  // the belief split between "still at the last clear word" and "at the line's end". With stopTracker the
+  // tracker's word counts too, when it is ahead in the same line by at most stopTrackerWords (more often
+  // ahead of the reader: not used). On since 2026-10-09 (docs/results/stop_catchup.md).
+  stopP: 0.15,
+  stopS: 0.5,
+  stopLast: true, // ...only the line's last word: any word ahead took a one-letter "wa" for the line's end
+  stopTracker: false,
+  stopTrackerWords: 3,
 };
 
 const dd0 = (f) => f._dua(f.dua);
@@ -168,6 +183,7 @@ export class StreamFollower {
     this.duaT = null; // when the decoder started on its du'a
     this.switchTo = null;
     this.switchSince = null;
+    this.caught = null; // the word a stop caught up to (cfg.stopP), while the stop lasts
     this.active = null;
     this.proposed = null;
     this.ctcProp = null;
@@ -704,12 +720,38 @@ export class StreamFollower {
   // lineMass(word): the tracker's belief in that word's line; anchorT: when the tracker's latest
   // result arrived. Returns the word to show (null: nothing).
   step(frames, T, C, t, hmmWord, quietNow = null, lineMass = null, anchorT = null, quietThen = null) {
+    if (this.cfg.accentFold > 0) frames = this._accent(frames, T, C);
     const w = this._step(frames, T, C, t, hmmWord, quietNow, lineMass, anchorT, quietThen);
     if (this.word !== this.shownW) {
       this.shownW = this.word;
       this.shownSince = t;
     }
     return w;
+  }
+
+  // cfg.accentFold: each letter column plus that share of its group's other letters (stream_follower.py _accent).
+  _accent(frames, T, C) {
+    if (!this.fold) {
+      this.fold = Array.from({ length: C }, () => []); // per column, the columns that lend to it
+      const groups = this.cfg.accentGroups;
+      for (const g of typeof groups === "string" ? [groups] : groups) { // (?sc=accentGroups:اعء is one group)
+        const cols = Array.from(g, (ch) => ch.codePointAt(0) - 0x0620);
+        for (const a of cols) for (const b of cols) if (a !== b) this.fold[b].push(a);
+      }
+    }
+    const k = this.cfg.accentFold;
+    const out = new Float32Array(T * C);
+    const p = new Float64Array(C);
+    for (let t = 0; t < T; t++) {
+      const o = t * C;
+      for (let c = 0; c < C; c++) p[c] = Math.exp(frames[o + c]);
+      for (let c = 0; c < C; c++) {
+        let s = p[c];
+        for (const a of this.fold[c]) s += k * p[a];
+        out[o + c] = Math.log(Math.max(s, 1e-30));
+      }
+    }
+    return out;
   }
 
   _step(frames, T, C, t, hmmWord, quietNow = null, lineMass = null, anchorT = null, quietThen = null) {
@@ -845,6 +887,48 @@ export class StreamFollower {
       this.word = w;
       return w;
     }
+    const stop = cfg.stopP > 0 && quietNow != null && quietNow >= cfg.stopS;
+    if (!stop) this.caught = null;
+    else if (this.caught === cur && dd.lineOfWord[best] === dd.lineOfWord[cur - dd.lo] && best < cur - dd.lo) {
+      this.cand = null;
+      this.candN = 0;
+      this.gateS = 0;
+      return cur; // caught up at this stop: no step back until the voice returns
+    }
+    let out = this._move(dd, cur, best, w, pw, pwd, tent, dt);
+    if (stop && out === cur) out = this._catchUp(dd, pwd, cur, hmmWord);
+    return out;
+  }
+
+  // cfg.stopP: at a stop, the likeliest word ahead of cur in its line if it holds stopP (and with stopTracker,
+  // the tracker's word if it is further, in the line, within stopTrackerWords).
+  _catchUp(dd, pwd, cur, hmmWord) {
+    const cfg = this.cfg;
+    const c = cur - dd.lo;
+    const last = dd.lineLastWord[dd.lineOfWord[c]];
+    let to = null;
+    if (c < last) {
+      let j = cfg.stopLast ? last : c + 1;
+      if (!cfg.stopLast) for (let x = c + 2; x <= last; x++) if (pwd[x] > pwd[j]) j = x;
+      if (pwd[j] >= cfg.stopP) to = j;
+    }
+    if (cfg.stopTracker && hmmWord != null && hmmWord >= dd.lo && hmmWord < dd.lo + dd.nw) {
+      const h = hmmWord - dd.lo;
+      if (c < h && h <= last && h - c <= cfg.stopTrackerWords && (to == null || h > to)) to = h;
+    }
+    if (to == null) return cur;
+    this.word = dd.lo + to;
+    this.caught = this.word;
+    this.cand = null;
+    this.candN = 0;
+    this.gateS = 0;
+    return this.word;
+  }
+
+  // The display's move from cur toward the belief's word best (w in the corpus): shown once it holds enough
+  // of the belief for enough steps, and into the next line only past the next-line gate.
+  _move(dd, cur, best, w, pw, pwd, tent, dt) {
+    const cfg = this.cfg;
     if (w === cur) {
       this.cand = null;
       this.candN = 0;

@@ -54,8 +54,14 @@ body.kids-night .kids-hang .glow { left: -80px; top: 30px; width: 310px; height:
 
 /* ---------- home ---------- */
 body.kids .home { position: relative; z-index: 1; justify-content: flex-start; padding-top: 256px; padding-bottom: 210px; gap: 0; }
-body.kids .bismillah, body.kids .brand-en, body.kids .tagline, body.kids .links, body.kids .footnote,
+/* The grown-up home's bar, middle and shelf step aside (style.css): their contents keep the order kids lays out. */
+body.kids .home-bar, body.kids .home-main, body.kids .shelf { display: contents; }
+body.kids .brand { display: contents; }
+body.kids .home-actions, body.kids .find, body.kids .toggle, body.kids .brand-en,
 body.kids .sessions, body.kids .samples, body.kids .kids-on { display: none !important; }
+/* Rows on the grown-up home are cards here: the friendly name only (kids.chip), a resume pill as before. */
+body.kids .row-ico, body.kids .today .chip .ar, body.kids .today .chip .note, body.kids .resume .ar { display: none; }
+body.kids .resume .note::before { content: " · "; }
 body.kids .brand-ar { font-family: var(--latin); font-weight: 800; font-size: 50px; line-height: 1.25; color: var(--k-on); margin-bottom: 12px; }
 body.kids .hint { margin-top: 10px; font-weight: 700; font-size: 21px; color: var(--k-on); }
 body.kids .load { width: 180px; height: 12px; border-radius: 6px; background: #fff; border: 3px solid var(--navy); }
@@ -64,7 +70,8 @@ body.kids .resume { color: var(--navy); background: #fff; border: 3px solid var(
 
 /* The start button: the seal, as a squishy pink toy. */
 body.kids .seal { width: 176px; height: 176px; animation: kid-breathe 2.6s ease-in-out infinite; }
-body.kids .seal-star, body.kids .seal-mic { display: none; }
+body.kids .seal-star, body.kids .seal-mic, body.kids .seal::before { display: none; }
+body.kids .seal { margin: 0; }
 body.kids .kid-seal { display: block; grid-area: 1 / 1; width: 100%; height: 100%; overflow: visible; }
 .kid-seal-star { animation: turn 40s linear infinite; }
 body.kids[data-state="loading"] .kid-seal-star { animation-duration: 4s; }
@@ -117,10 +124,9 @@ body.kids .kid-ico {
 body.kids .kid-ico svg { width: 28px; height: 28px; }
 body.kids .chip .grown { display: none; } /* the grown-up name steps aside for the friendly one (kids.chip) */
 body.kids .kid-name { display: inline; }
-body.kids .size .chip { padding: 2px 12px; box-shadow: 0 3px 0 var(--navy); border-width: 3px; }
 
 /* ---------- listening: Noor answers the voice (kids.voice, from meter()) ---------- */
-body.kids .listen { padding-top: 110px; position: relative; z-index: 1; }
+body.kids .listen { padding-top: max(110px, calc(50svh - 206px)); position: relative; z-index: 1; } /* Noor where centring put it */
 body.kids[data-state="listening"] .title, body.kids[data-state="listening"] .progress { visibility: hidden; }
 body.kids .voice { width: 200px; height: 260px; }
 body.kids .girih, body.kids .voice-glow { display: none; }
@@ -234,17 +240,19 @@ body.kids.holding .noor-mini .ring { animation-duration: 4s; opacity: .4; }
 .noor-mini .lantern { position: absolute; left: 10px; top: 0; width: 76px; height: 108px; overflow: visible; transform-origin: 50% 20%; }
 
 /* ---------- menus, picker and the sticker book ---------- */
-body.kids .menu, body.kids .picker-card { background: #fff; color: var(--navy); border: 4px solid var(--navy); box-shadow: 0 8px 0 var(--navy); }
-body.kids .menu { font-weight: 600; }
-body.kids .seg { border: 3px solid var(--navy); }
-body.kids .seg button { color: var(--navy); font-weight: 700; }
-body.kids .seg button[aria-checked="true"] { background: var(--sun); color: var(--navy); }
+body.kids .menu-card, body.kids .picker-card { background: #fff; color: var(--navy); border: 4px solid var(--navy); box-shadow: 0 8px 0 var(--navy); }
+body.kids .menu { background: rgba(31, 42, 90, .45); }
+body.kids .menu-card { font-weight: 600; }
+body.kids .card, body.kids .font, body.kids .switches, body.kids .menu-row, body.kids .preview { background: #fff; border: 3px solid var(--navy); color: var(--navy); }
+body.kids .card[aria-checked="true"], body.kids .font[aria-checked="true"] { background: var(--sun); color: var(--navy); }
+body.kids .switch + .switch { border-top: 3px solid var(--navy); }
 body.kids .picker { background: rgba(31, 42, 90, .45); }
 body.kids .picker-card { max-height: 88svh; overflow: auto; }
 body.kids #picker-list { overflow: visible; }
 body.kids #picker-list .ar { font-family: var(--latin); color: #4A5690; }
 body.kids #picker-list .section, body.kids #picker-list .note, body.kids #picker-list .pick { color: var(--navy); }
-body.kids #search { color: var(--navy); background: #fff; border: 3px solid var(--navy); border-radius: 16px; }
+body.kids .search-field { color: var(--navy); background: #fff; border: 3px solid var(--navy); border-radius: 16px; }
+body.kids #search { color: var(--navy); }
 body.kids .share-card, body.kids .toast { color: var(--navy); }
 body.kids .toast { background: #fff; border: 3px solid var(--navy); }
 

@@ -35,6 +35,8 @@
         <path d="M12 7.5C9.5 5.8 6.5 5.5 3.5 6.5V13c3-1 6-.7 8.5 1 2.5-1.7 5.5-2 8.5-1V6.5c-3-1-6-.7-8.5 1ZM12 7.5V14"/>
         <path d="M8.2 13.6 16.6 20.6M15.8 13.6 7.4 20.6"/>
       </symbol>
+      <symbol id="mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+      <symbol id="lantern" viewBox="0 0 24 34"><circle cx="12" cy="3" r="2"/><path d="M5.5 10Q12 3.5 18.5 10Z"/><rect x="4" y="9.5" width="16" height="4" rx="2"/><rect x="6" y="13.5" width="12" height="12" rx="4"/><rect x="4" y="25" width="16" height="4" rx="2"/><path d="M9 29H15L12 32.5Z"/></symbol>
     </defs>
   </svg>
 
@@ -58,46 +60,61 @@
     <div class="progress"><i id="progress"></i></div>
   </header>
 
+  <!-- Kids mode (kids.css) unwraps .home-bar, .home-main and .shelf (display: contents) and lays the home out its own way. -->
   <section id="home" class="home">
-    <!-- Kids mode (kids.js, kids.css): the same app, dressed for children. -->
-    <button id="kids-on" class="kids-on" aria-label="Kids mode">
-      <svg viewBox="0 0 24 34" aria-hidden="true"><circle cx="12" cy="3" r="2"/><path d="M5.5 10Q12 3.5 18.5 10Z"/><rect x="4" y="9.5" width="16" height="4" rx="2"/><rect x="6" y="13.5" width="12" height="12" rx="4"/><rect x="4" y="25" width="16" height="4" rx="2"/><path d="M9 29H15L12 32.5Z"/></svg>
-      Kids
-    </button>
-    <p class="bismillah" lang="ar">بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ</p>
-    <h1 class="brand-ar" lang="ar">رفيق الدعاء</h1>
-    <p class="brand-en">Du'a Companion</p>
-    <p id="tagline" class="tagline">Recite, and the words follow you.</p>
+    <header class="home-bar">
+      <div class="brand">
+        <h1 class="brand-ar wordmark" lang="ar">رفيق الدعاء</h1>
+        <p class="brand-en">Du'a Companion</p>
+      </div>
+      <div class="home-actions">
+        <!-- Kids mode (kids.js, kids.css): the same app, dressed for children. -->
+        <button id="kids-on" class="kids-on" aria-label="Kids mode" title="Kids mode">
+          <svg viewBox="0 0 24 34" aria-hidden="true"><use href="#lantern"/></svg>Kids
+        </button>
+        <button id="home-menu" class="icon" aria-label="Display options" title="Display options">Aa</button>
+      </div>
+    </header>
 
-    <button id="start" class="seal" aria-label="Start listening">
-      <svg class="seal-star" viewBox="-50 -50 100 100" aria-hidden="true"><use href="#khatam" x="-50" y="-50" width="100" height="100"/></svg>
-      <!-- Practising: a book open on a rehal, the stand du'as are learnt from, in place of the mic (practice.css). -->
-      <svg class="seal-rehal" viewBox="0 0 24 24" aria-hidden="true"><use href="#rehal"/></svg>
-      <svg class="seal-mic" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
-      </svg>
-    </button>
-    <p id="hint" class="hint">Tap to begin</p>
-    <div id="load" class="load" hidden><i id="load-bar"></i></div>
-    <!-- What the seal does, chosen beneath it as on a camera (setPractising in app.js): follow along,
-         or practise, where each line is checked (practice.js). -->
-    <div id="modes" class="modes" role="radiogroup" aria-label="Mode">
-      <button id="mode-follow" role="radio" aria-checked="true">follow</button>
-      <button id="mode-practise" role="radio" aria-checked="false">practise</button>
+    <div class="home-main">
+      <button id="start" class="seal" aria-label="Start listening">
+        <svg class="seal-star" viewBox="-50 -50 100 100" aria-hidden="true"><use href="#khatam" x="-50" y="-50" width="100" height="100"/></svg>
+        <!-- Practising: a book open on a rehal, the stand du'as are learnt from, in place of the mic (practice.css). -->
+        <svg class="seal-rehal" viewBox="0 0 24 24" aria-hidden="true"><use href="#rehal"/></svg>
+        <svg class="seal-mic" viewBox="0 0 24 24" aria-hidden="true"><use href="#mic"/></svg>
+      </button>
+      <p id="hint" class="hint"></p>
+      <div id="load" class="load" hidden><i id="load-bar"></i></div>
+      <!-- What the seal does (setPractising in app.js): follow along, or practise, where each line is checked
+           (practice.js). A thumb slides under the chosen one. -->
+      <div id="modes" class="modes" role="radiogroup" aria-label="Mode">
+        <button id="mode-follow" role="radio" aria-checked="true"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#mic"/></svg>Follow</button>
+        <button id="mode-practise" role="radio" aria-checked="false"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#rehal"/></svg>Practise</button>
+      </div>
+      <button id="home-hide" class="toggle" aria-pressed="false" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/><path class="slash" d="M4 4l16 16"/></svg>
+        Hide the text
+      </button>
     </div>
 
-    <div class="links">
-      <button id="choose" class="link">choose a du'a</button>
-      <span id="play-dot" class="dot">·</span>
-      <button id="play" class="link">play a recording</button>
-      <span id="hide-dot" class="dot" hidden>·</span>
-      <label id="hide-opt" class="link check" hidden><input type="checkbox" id="home-hide"> hide the text</label>
+    <!-- One tap into a du'a: where the last one stopped, what's recited now, the starred ones (showToday). -->
+    <div class="shelf">
+      <button id="resume" class="row resume" hidden></button>
+      <div id="today" class="today" hidden>
+        <span id="today-label" class="guess-label"></span>
+        <div id="today-chips" class="chips"></div>
+      </div>
     </div>
-    <div id="today" class="today" hidden>
-      <span id="today-label" class="guess-label"></span>
-      <div id="today-chips" class="chips"></div>
+
+    <div class="find">
+      <button id="choose" class="search-btn">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+        <span>Search du'as and ziyarat</span>
+      </button>
+      <button id="play" class="icon square" aria-label="Play a recording" title="Play a recording">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
+      </button>
     </div>
-    <button id="resume" class="link resume" hidden></button>
     <input id="file" type="file" accept="audio/*" hidden>
     <ul id="samples" class="samples" hidden></ul>
     <!-- Debug sessions (session-log.js): what was heard and shown, for replaying offline. -->
@@ -105,7 +122,6 @@
       <span id="sessions-info"></span>
       <button id="sessions-send" class="link"></button><span class="dot">·</span><button id="sessions-clear" class="link">delete</button>
     </p>
-    <p id="footnote" class="footnote"></p>
   </section>
 
   <main id="stage" class="stage">
@@ -118,6 +134,8 @@
           <use href="#khatam" x="-50" y="-50" width="100" height="100"/>
           <circle r="44" pathLength="1"/><circle r="12" pathLength="1"/>
         </svg>
+        <!-- The seal's mic, carried over from the button; it brightens as it hears the voice (meter()). -->
+        <svg class="voice-mic" viewBox="0 0 24 24"><use href="#mic"/></svg>
       </div>
       <p id="listen-msg" class="listen-msg" aria-live="polite">Begin reciting</p>
       <div id="guesses" class="guesses" hidden>
@@ -136,45 +154,69 @@
 
   <div id="picker" class="picker" hidden>
     <div class="picker-card">
-      <input id="search" type="search" placeholder="Search du'as and ziyarat" autocomplete="off">
+      <i class="grabber" aria-hidden="true"></i>
+      <label class="search-field">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+        <input id="search" type="search" placeholder="Search du'as and ziyarat" autocomplete="off">
+      </label>
       <ul id="picker-list"></ul>
     </div>
   </div>
 
+  <!-- Display options (the Aa button, on the home screen and while following). The line at the top is
+       a real line of the page (buildPreview in app.js), so every choice shows on it at once. -->
   <div id="menu" class="menu" hidden>
-    <div class="seg" role="radiogroup" aria-label="Display">
-      <button id="mode-page" role="radio" aria-checked="true">Page</button>
-      <button id="mode-majlis" role="radio" aria-checked="false">Majlis</button>
+    <div class="menu-card" role="dialog" aria-label="Display options">
+      <i class="grabber" aria-hidden="true"></i>
+      <div id="fonts" class="fonts" role="radiogroup" aria-label="Arabic script"></div>
+
+      <label class="size">
+        <span class="size-a" lang="ar" aria-hidden="true">ع</span>
+        <input id="opt-size" type="range" min="0.8" max="1.6" step="0.1" value="1" aria-label="Text size">
+        <span class="size-a big" lang="ar" aria-hidden="true">ع</span>
+      </label>
+
+      <div id="preview" class="preview" aria-hidden="true"></div>
+
+      <div class="cards" role="radiogroup" aria-label="Display">
+        <button id="mode-page" class="card" role="radio" aria-checked="true">
+          <svg viewBox="0 0 64 40" aria-hidden="true"><rect class="frame" x="14" y="1" width="36" height="38" rx="5"/><path class="dim" d="M44 9H22M44 15H26"/><path class="on" d="M44 22H19"/><path class="dim" d="M44 29H24"/></svg>
+          Page
+        </button>
+        <button id="mode-majlis" class="card" role="radio" aria-checked="false">
+          <svg viewBox="0 0 64 40" aria-hidden="true"><rect class="frame" x="2" y="4" width="60" height="32" rx="3"/><path class="dim" d="M24 12H40"/><path class="on big" d="M14 20H50"/><path class="dim" d="M22 28H42"/></svg>
+          Majlis
+        </button>
+      </div>
+      <div class="cards" role="radiogroup" aria-label="Highlight">
+        <button id="unit-phrase" class="card" role="radio" aria-checked="true">
+          <svg viewBox="0 0 64 40" aria-hidden="true"><rect class="w-dim" x="14" y="6" width="44" height="4" rx="2"/><rect class="w-ink" x="46" y="18" width="12" height="5" rx="2.5"/><rect class="w-ink" x="34" y="18" width="9" height="5" rx="2.5"/><rect class="wash" x="18" y="13" width="14" height="15" rx="3"/><rect class="w-ink" x="20" y="18" width="10" height="5" rx="2.5"/><rect class="w-dim" x="6" y="18" width="10" height="5" rx="2.5"/><rect class="w-dim" x="20" y="31" width="38" height="4" rx="2"/></svg>
+          Word by word
+        </button>
+        <button id="unit-line" class="card" role="radio" aria-checked="false">
+          <svg viewBox="0 0 64 40" aria-hidden="true"><rect class="w-dim" x="14" y="6" width="44" height="4" rx="2"/><rect class="w-ink" x="46" y="18" width="12" height="5" rx="2.5"/><rect class="w-ink" x="34" y="18" width="9" height="5" rx="2.5"/><rect class="w-ink" x="20" y="18" width="11" height="5" rx="2.5"/><rect class="w-ink" x="6" y="18" width="11" height="5" rx="2.5"/><rect class="w-dim" x="20" y="31" width="38" height="4" rx="2"/></svg>
+          Line by line
+        </button>
+      </div>
+
+      <div class="switches">
+        <label class="switch">Transliteration<input type="checkbox" role="switch" id="opt-tl" checked></label>
+        <label class="switch">Translation<input type="checkbox" role="switch" id="opt-en" checked></label>
+        <label class="switch">Only the line being recited<input type="checkbox" role="switch" id="opt-focus"></label>
+        <label class="switch opt-hide">Hide the text until it's heard<input type="checkbox" role="switch" id="opt-hide"></label>
+      </div>
+      <button id="share" class="menu-row" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        Show on other screens
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <p id="footnote" class="about"></p>
     </div>
-    <div class="seg" role="radiogroup" aria-label="Highlight">
-      <button id="unit-phrase" role="radio" aria-checked="true">Word by word</button>
-      <button id="unit-line" role="radio" aria-checked="false">Line by line</button>
-    </div>
-    <div class="size" role="group" aria-label="Text size">
-      <span>Text size</span>
-      <button id="size-down" class="chip" aria-label="Smaller text">A−</button>
-      <button id="size-up" class="chip" aria-label="Larger text">A+</button>
-    </div>
-    <label class="font">Arabic font
-      <select id="opt-font">
-        <option value="quran">Amiri Quran</option>
-        <option value="amiri">Amiri</option>
-        <option value="scheherazade">Scheherazade</option>
-        <option value="noto">Noto Naskh</option>
-        <option value="nastaliq">Nastaliq (Urdu style)</option>
-      </select>
-    </label>
-    <label><input type="checkbox" id="opt-en" checked> Translation</label>
-    <label><input type="checkbox" id="opt-tl" checked> Transliteration</label>
-    <label><input type="checkbox" id="opt-focus"> Hide other lines</label>
-    <label class="opt-hide"><input type="checkbox" id="opt-hide"> Hide the text until it's heard</label>
-    <button id="share" class="link share-btn" hidden>Show on other screens</button>
   </div>
 
   <div id="share-card" class="picker" hidden>
     <div class="picker-card share-card">
       <p class="share-title">Follow along on another screen</p>
-      <p class="share-sub">Scan, or open the link, on any phone, tablet or projector in the room.</p>
       <div id="qr" class="qr" aria-hidden="true"></div>
       <p class="share-code" id="share-code"></p>
       <button id="share-copy" class="chip"></button>
@@ -191,8 +233,8 @@
     <div id="review-left" class="review-left"></div>
     <p id="review-note" class="review-note"></p>
     <div class="review-actions">
+      <button id="review-done" class="chip">Done</button>
       <button id="review-again" class="chip review-again">Practise again</button>
-      <button id="review-done" class="link">Done</button>
     </div>
   </div>
   <p id="toast" class="toast" role="status" hidden></p>

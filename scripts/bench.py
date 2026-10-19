@@ -1517,6 +1517,28 @@ def metrics(it: dict, shown: list, ix) -> dict:
                                          and D[i].split("#")[0] != TL[i].split("#")[0]))
     m["word_ticks"] = int(rd.sum())
     m["word_exact_ticks"] = int(sum(1 for i in range(T) if rd[i] and shown[i] is not None and shown[i][2] == TW[i]))
+    # ...and on the reader's line but ahead of / behind their word (a catch-up at a stop, a stall)
+    side = [0 if not rd[i] or shown[i] is None or shown[i][2] is None or TW[i] is None or shown[i][2] == TW[i]
+            or ix.word_dua[shown[i][2]] != ix.word_dua[TW[i]] or ix.word_segment[shown[i][2]] != ix.word_segment[TW[i]]
+            else (1 if shown[i][2] > TW[i] else -1) for i in range(T)]
+    m["word_ahead_ticks"], m["word_behind_ticks"] = side.count(1), side.count(-1)
+    # At a stop (1 s or more before the reader's next word, or the end; from 0.5 s in, up to 5 s): is the
+    # highlight on the word they stopped after, ahead of it or behind it on its line (StreamConfig.stop_p)
+    stop = [0, 0, 0, 0]  # ticks, on the word, ahead, behind
+    for k, (w, a, b) in enumerate(gw):
+        nxt = gw[k + 1][1] if k + 1 < len(gw) else b + 5.0
+        if nxt - b < 1.0:
+            continue
+        for i in range(int((b + 0.5) * 10), min(T, int(min(nxt, b + 5.0) * 10))):
+            s = shown[i]
+            stop[0] += 1
+            if s is None or s[2] is None:
+                continue
+            if s[2] == w:
+                stop[1] += 1
+            elif ix.word_dua[s[2]] == ix.word_dua[w] and ix.word_segment[s[2]] == ix.word_segment[w]:
+                stop[2 if s[2] > w else 3] += 1
+    m["stop_ticks"], m["stop_word_ticks"], m["stop_ahead_ticks"], m["stop_behind_ticks"] = stop
     # Moves away from the reader. A jump: from where the reader is (or just was) to a line 2+ away,
     # or another du'a, that the reader isn't on within 3 s before / 1 s after. Early: to the
     # neighbouring line before the reader gets there. Moves while already lost (stepping along on
@@ -2036,6 +2058,8 @@ def cmd_score(args) -> None:
         k, v = a.split("=")
         if v.lower() in ("true", "false"):
             sc_kw[k] = v.lower() == "true"
+        elif k == "accent_groups":  # letters, groups apart by ";"
+            sc_kw[k] = tuple(x for x in v.split(";") if x)
         elif ";" in v:
             sc_kw[k] = tuple(float(x) for x in v.split(";"))
         else:
