@@ -1,0 +1,10 @@
+directories:
+  output: "../../data/cache/media/explainer10/render"
+camera:
+  background_color: "#101114"
+  fps: 60
+tex:
+  template: "basic"
+text:
+  font: "Latin Modern Roman 10"
+  alignment: "LEFT"

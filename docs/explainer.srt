@@ -1,459 +1,563 @@
 1
-00:00:03,500 --> 00:00:06,896
-This is Abu Thar Al-Halawaji
-reciting Du'a al-Iftitah,
+00:00:04,000 --> 00:00:07,245
+This phone was never
+told which du'a this is.
 
 2
-00:00:06,896 --> 00:00:09,585
-and an app following him word by word.
+00:00:07,245 --> 00:00:13,757
+It worked it out from the words, out of
+522 texts, and now it follows the recitation,
 
 3
-00:00:09,585 --> 00:00:12,512
-The models in it were never
-trained on his voice.
+00:00:13,757 --> 00:00:16,425
+line by line, word by word.
 
 4
-00:00:12,512 --> 00:00:16,556
-Here is what the app did with two and
-a half minutes of his recitation,
+00:00:19,767 --> 00:00:22,285
+You've probably used Shazam.
 
 5
-00:00:16,556 --> 00:00:18,295
-from his first word.
+00:00:22,285 --> 00:00:27,656
+Hold your phone up to a song in a cafe, and
+a few seconds later it tells you its name.
 
 6
-00:00:18,533 --> 00:00:22,263
-Along the way, he stops for six
-seconds, someone talks to him,
+00:00:27,656 --> 00:00:32,122
+It turns those seconds of sound into
+a picture of frequencies over time,
 
 7
-00:00:22,263 --> 00:00:24,547
-and later he goes back two lines.
+00:00:32,122 --> 00:00:34,855
+and keeps only the brightest points.
 
 8
-00:00:24,547 --> 00:00:27,107
-People reading along do all of these.
+00:00:34,855 --> 00:00:39,752
+Pairs of points become short codes,
+looked up among millions of songs.
 
 9
-00:00:35,167 --> 00:00:37,868
-First, how does a phone
-hear anything at all?
+00:00:39,752 --> 00:00:43,474
+The song whose codes all line
+up at the same moment wins.
 
 10
-00:00:37,868 --> 00:00:43,217
-Its microphone measures how the air
-pressure changes, 16,000 times a second.
+00:00:43,483 --> 00:00:46,331
+But those points belong to one recording.
 
 11
-00:00:43,217 --> 00:00:49,267
-So the basmala reaches the app as about
-75,000 numbers, and nothing else.
+00:00:46,331 --> 00:00:50,084
+Another reciter, another room,
+and they change completely.
 
 12
-00:00:49,267 --> 00:00:54,923
-A list of numbers is hard to read, so
-both models first turn it into a picture.
+00:00:50,084 --> 00:00:53,128
+What every recitation shares is the words.
 
 13
-00:00:54,923 --> 00:01:00,142
-Every hundredth of a second, the app
-measures how much energy the sound has,
+00:00:53,133 --> 00:00:57,749
+Tarteel is an app for reciting the
+Quran, and it listens for the words.
 
 14
-00:01:00,142 --> 00:01:04,399
-from low to high in 80 steps,
-and draws it as one thin column,
+00:00:57,749 --> 00:01:01,420
+You recite; speech recognition
+writes down what you said;
 
 15
-00:01:04,399 --> 00:01:06,922
-brighter where there's more.
+00:01:01,420 --> 00:01:07,088
+that text is searched across the Quran to find
+the surah and the ayah; and from then on,
 
 16
-00:01:06,922 --> 00:01:11,485
-Side by side, the columns show
-each sound as a shape of its own.
+00:01:07,088 --> 00:01:09,777
+each word lights up as you say it.
 
 17
-00:01:11,485 --> 00:01:14,192
-The s is a faint haze reaching to the top,
+00:01:09,777 --> 00:01:13,379
+Hide the page, and the words
+appear only as you recite them,
 
 18
-00:01:14,192 --> 00:01:18,273
-and a vowel he draws out is
-a stack of bright stripes.
+00:01:13,379 --> 00:01:16,019
+and it can mark a word you missed.
 
 19
-00:01:18,567 --> 00:01:24,351
-Reading those pictures is what the two
-models do, and both are neural networks.
+00:01:16,033 --> 00:01:21,885
+Its founders started with an earlier app
+that used a phone's own speech recognition.
 
 20
-00:01:24,351 --> 00:01:27,031
-A network is a long chain of simple sums,
+00:01:21,885 --> 00:01:24,036
+That was good enough to find an ayah,
 
 21
-00:01:27,031 --> 00:01:32,273
-with millions of adjustable numbers
-that set how much each part counts.
+00:01:24,036 --> 00:01:28,371
+but it made more mistakes than the
+reciters it was meant to check.
 
 22
-00:01:32,273 --> 00:01:37,033
-In training, it's shown recordings
-together with what was said in them,
+00:01:28,371 --> 00:01:34,192
+So they crowdsourced recordings, curated
+more than 75,000 minutes of recitation,
 
 23
-00:01:37,033 --> 00:01:42,700
-and those numbers are nudged, a little
-at a time, until what comes out matches.
+00:01:34,192 --> 00:01:37,020
+and trained models of their own.
 
 24
-00:01:42,700 --> 00:01:44,713
-The first model is Whisper,
+00:01:37,020 --> 00:01:42,109
+They published small ones too, and one
+of those is where our phone model began.
 
 25
-00:01:44,713 --> 00:01:50,382
-made by OpenAI and trained on
-680,000 hours of speech in many languages.
+00:01:42,117 --> 00:01:46,358
+From Shazam: search everything at
+once, from anywhere in a recording,
 
 26
-00:01:50,382 --> 00:01:52,828
-Its first half listens to the picture.
+00:01:46,358 --> 00:01:49,563
+and trust only matches that line up in time.
 
 27
-00:01:52,828 --> 00:01:56,800
-Its second half writes down what
-was said, a few letters at a time.
+00:01:49,563 --> 00:01:53,133
+From Tarteel: listen for
+the words, and follow them.
 
 28
-00:01:56,800 --> 00:02:02,567
-The app uses a small version, with 74 million
-numbers, so that it runs on a phone.
+00:01:53,133 --> 00:01:58,023
+Du'as add their own problems: many texts
+share the same phrases, and people pause,
 
 29
-00:02:02,567 --> 00:02:07,502
-Out of the box it barely understands
-recitation, so it was trained further,
+00:01:58,023 --> 00:02:00,472
+go back and talk between lines.
 
 30
-00:02:07,502 --> 00:02:13,100
-on over 100 hours of recited du'as, and
-on synthetic voices of ordinary people.
+00:02:00,483 --> 00:02:02,859
+The data comes in three kinds.
 
 31
-00:02:13,100 --> 00:02:16,859
-On the phone, Whisper gets the
-last six seconds, once a second,
+00:02:02,859 --> 00:02:10,716
+The texts: 522 du'as, ziyarat and
+munajat, about 140,000 words.
 
 32
-00:02:16,859 --> 00:02:20,262
-and that's how the app works
-out which du'a this is.
+00:02:10,716 --> 00:02:14,101
+Recitations: DuaPlayer's are
+timed line by line by hand,
 
 33
-00:02:20,262 --> 00:02:23,448
-The second model listens for
-letters, ten times a second,
+00:02:14,101 --> 00:02:17,904
+so they are the ruler
+everything is measured against.
 
 34
-00:02:23,448 --> 00:02:25,705
-and that's how it follows the word.
+00:02:17,917 --> 00:02:22,205
+For more voices, we searched
+YouTube, Shiavoice, Aparat,
 
 35
-00:02:25,705 --> 00:02:27,757
-More on that one later.
+00:02:22,205 --> 00:02:27,607
+SoundCloud and the Internet Archive
+for every text: 5,800 hours.
 
 36
-00:02:28,567 --> 00:02:33,834
-He opens with the basmala and the salawat,
-and Whisper gets the words right.
+00:02:27,607 --> 00:02:33,758
+A large letter model listened to every file,
+found which text and which line it was,
 
 37
-00:02:33,834 --> 00:02:40,210
-But 66 of the texts open with the basmala,
-and 41 of them go on with the salawat.
+00:02:33,758 --> 00:02:39,851
+and kept only the lines that fit: about
+1,400 hours, in about 3,500 voices.
 
 38
-00:02:40,210 --> 00:02:44,194
-The app looks for what Whisper
-wrote in all 522 texts,
+00:02:39,867 --> 00:02:45,226
+And ordinary voices, because reciters
+aren't the people holding the phone:
 
 39
-00:02:44,194 --> 00:02:48,995
-and each text where it fits takes
-a share of the probability.
+00:02:45,226 --> 00:02:48,558
+crowd-sourced recitations,
+and synthetic ones,
 
 40
-00:02:48,995 --> 00:02:54,175
-After seventeen seconds, the
-likeliest is Du'a Tawassul, at 7%.
+00:02:48,558 --> 00:02:53,549
+a voice-cloning model reading
+du'as in 312 volunteers' voices.
 
 41
-00:02:55,717 --> 00:02:57,533
-Allāhumma innī
+00:02:53,549 --> 00:02:56,299
+Test voices were removed
+by name and by sound,
 
 42
-00:02:57,533 --> 00:03:00,875
-Three texts carry on with
-these words, and between them,
+00:02:56,299 --> 00:03:00,008
+so the results are on voices
+the models never heard.
 
 43
-00:03:00,875 --> 00:03:03,743
-they now hold most of the probability.
+00:03:00,767 --> 00:03:03,796
+Two models listen at
+once, each with one job.
 
 44
-00:03:04,083 --> 00:03:06,700
-aftatiḥu th-thanā'a
+00:03:03,796 --> 00:03:06,321
+Both read the same picture of sound.
 
 45
-00:03:06,700 --> 00:03:08,742
-Only one text has these words.
+00:03:06,333 --> 00:03:09,838
+The first is Whisper,
+OpenAI's speech recogniser.
 
 46
-00:03:08,742 --> 00:03:15,490
-Iftitah goes to 94%, past the 70% the
-app waits for, and its name comes up.
+00:03:09,838 --> 00:03:12,250
+One half listens, the other writes.
 
 47
-00:03:21,767 --> 00:03:23,712
-Now it has to keep up with him.
+00:03:12,250 --> 00:03:15,827
+It reads the last 6 seconds
+and writes down the words.
 
 48
-00:03:23,712 --> 00:03:28,051
-Whisper's text arrives more than a
-second late, with no timing inside it,
+00:03:15,827 --> 00:03:22,857
+On the phone it's Whisper-base, 74 million
+parameters, grown from Tarteel's Quran model;
 
 49
-00:03:28,051 --> 00:03:30,432
-so it can't say which word he's on.
+00:03:22,857 --> 00:03:26,892
+on the server, large-v3-turbo, 809 million.
 
 50
-00:03:30,432 --> 00:03:33,033
-The highlight comes from the second model.
+00:03:26,900 --> 00:03:28,867
+The second is a letter model.
 
 51
-00:03:33,033 --> 00:03:35,004
-It's Whisper's listening half,
+00:03:28,867 --> 00:03:34,630
+Fifty times a second, it answers one question:
+which letter is being said now, or none.
 
 52
-00:03:35,004 --> 00:03:39,414
-with the writing half taken
-off and one small layer added.
+00:03:34,630 --> 00:03:39,911
+A drawn-out word is one letter held over
+many frames; a pause is all blanks.
 
 53
-00:03:39,414 --> 00:03:42,456
-For every fiftieth of a
-second of the picture,
+00:03:39,911 --> 00:03:44,310
+It's Whisper-base's listening half,
+with one layer onto the alphabet:
 
 54
-00:03:42,456 --> 00:03:48,346
-that layer gives a probability for each
-Arabic letter, and for no letter at all.
+00:03:44,310 --> 00:03:46,312
+20 million parameters.
 
 55
-00:03:48,346 --> 00:03:53,724
-It learned by copying a far bigger
-model, with about 300 million numbers,
+00:03:46,317 --> 00:03:50,965
+Whisper was fine-tuned on du'a windows
+labelled with the du'a's own text,
 
 56
-00:03:53,724 --> 00:03:57,433
-trained on recitation
-and on ordinary voices.
+00:03:50,965 --> 00:03:53,376
+never a machine's guess at it.
 
 57
-00:03:57,433 --> 00:03:59,824
-Because it never writes words, it's quick,
+00:03:53,376 --> 00:03:59,073
+Every window was altered on the way in: faster,
+slower, a deeper or higher voice, noise,
 
 58
-00:03:59,824 --> 00:04:03,084
-and every letter comes with
-the moment it was heard.
+00:03:59,073 --> 00:04:03,282
+an echoing room, a hall through
+loudspeakers with people talking,
 
 59
-00:04:03,084 --> 00:04:06,942
-Every tenth of a second, it hears
-the last two seconds again.
+00:04:03,282 --> 00:04:06,148
+stripes of the picture blanked out.
 
 60
-00:04:06,942 --> 00:04:11,533
-Here are the letters it found, newest
-on the left, the way Arabic is read.
+00:04:06,150 --> 00:04:11,873
+Then each small model learnt from a big
+one: the phone's Whisper from the server's,
 
 61
-00:04:11,533 --> 00:04:15,362
-The app lines those letters up
-against the text of Iftitah,
+00:04:11,873 --> 00:04:15,528
+hearing a noisy copy of what
+the big one hears clean;
 
 62
-00:04:15,362 --> 00:04:18,193
-and keeps a probability for every line.
+00:04:15,528 --> 00:04:19,920
+the letter model from a
+300-million-parameter wav2vec2.
 
 63
-00:04:18,193 --> 00:04:19,868
-Carrying on costs nothing.
+00:04:20,567 --> 00:04:22,412
+Now, recognition.
 
 64
-00:04:19,868 --> 00:04:24,433
-Saying the line again, going back a few
-lines, or skipping ahead are allowed,
+00:04:22,412 --> 00:04:26,504
+Every second or two, Whisper
+writes down the last 6 seconds.
 
 65
-00:04:24,433 --> 00:04:28,943
-but each costs a little, so it takes
-clear letters to make them happen.
+00:04:26,504 --> 00:04:28,192
+Here, it hears this.
 
 66
-00:04:28,943 --> 00:04:30,104
-In this recitation,
+00:04:35,667 --> 00:04:40,534
+The vowel marks and the spaces are
+dropped, leaving a string of letters.
 
 67
-00:04:30,104 --> 00:04:35,898
-the highlight typically reached a word about
-a third of a second after he started it.
+00:04:40,550 --> 00:04:44,450
+That string is slid along
+every word of all 522 texts:
 
 68
-00:04:39,033 --> 00:04:41,127
-Here he stops for six seconds.
+00:04:44,450 --> 00:04:49,501
+how many letters would have to
+change for it to end right here?
 
 69
-00:04:41,127 --> 00:04:46,848
-Silence brings no letters, so nothing moves
-the highlight: it stays on his last word.
+00:04:49,501 --> 00:04:52,886
+A trick by Gene Myers works
+on 64 letters at once,
 
 70
-00:04:48,933 --> 00:04:53,843
-When he starts the next line, it follows
-him a little over half a second later.
+00:04:52,886 --> 00:04:56,736
+so the whole library takes
+about 3 milliseconds.
 
 71
-00:05:07,567 --> 00:05:09,636
-That was someone talking to him.
+00:04:57,383 --> 00:04:59,508
+One window isn't enough.
 
 72
-00:05:09,636 --> 00:05:13,919
-The app keeps a place for not reading,
-and talk is meant to end up there.
+00:04:59,508 --> 00:05:00,738
+Allāhumma
 
 73
-00:05:13,919 --> 00:05:15,835
-It didn't go there straight away:
+00:05:00,738 --> 00:05:03,635
+is in 412 of the texts,
 
 74
-00:05:15,835 --> 00:05:19,085
-part of the talk sounded like
-him starting line 9 again,
+00:05:03,635 --> 00:05:05,545
+Allāhumma innī asʾaluka
 
 75
-00:05:19,085 --> 00:05:22,578
-and the highlight jumped back
-to the start of the line.
+00:05:05,545 --> 00:05:07,265
+in 106.
 
 76
-00:05:22,578 --> 00:05:27,967
-Then more of it went to not reading, and the
-highlight waited there until he came back.
+00:05:07,265 --> 00:05:10,803
+And since the matching
+forgives a few wrong letters,
 
 77
-00:05:27,967 --> 00:05:31,506
-He comes back with line 10,
-and the highlight follows him.
+00:05:10,803 --> 00:05:13,389
+for a second Du'a Jawshan Kabir leads:
 
 78
-00:05:31,506 --> 00:05:34,946
-But Whisper's last six seconds
-were still mostly talk,
+00:05:13,389 --> 00:05:17,390
+its hundred sections open
+with almost these words.
 
 79
-00:05:34,946 --> 00:05:39,214
-so for a few seconds the app doubted
-it was hearing Iftitah at all:
+00:05:17,400 --> 00:05:21,298
+So a tracker keeps a probability
+on every word of every du'a,
 
 80
-00:05:39,214 --> 00:05:41,744
-it might be a du'a it doesn't have.
+00:05:21,298 --> 00:05:25,952
+the way a map keeps your GPS dot
+on roads you could have reached.
 
 81
-00:05:41,744 --> 00:05:44,283
-The letters kept the highlight on line 10,
+00:05:25,952 --> 00:05:31,177
+Each update moves them on at the reader's
+pace, then weighs them by the matches.
 
 82
-00:05:44,283 --> 00:05:48,934
-and once Whisper's window held his
-words again, the doubt was gone.
+00:05:31,177 --> 00:05:37,365
+With the next window only Kumayl fits, and
+once a du'a holds 70%, its name is shown.
 
 83
-00:05:58,767 --> 00:06:01,819
-At the end of line 12,
-he goes back to line 10.
+00:05:43,333 --> 00:05:48,617
+That's Shazam's idea, matches that line up
+in time, applied to words as Tarteel does:
 
 84
-00:06:01,819 --> 00:06:05,344
-For three tenths of a second,
-the likeliest line was 13,
+00:05:48,617 --> 00:05:52,262
+it needs no copy of the
+recording, only the text.
 
 85
-00:06:05,344 --> 00:06:07,658
-the one that usually comes next.
+00:05:52,267 --> 00:05:57,832
+On a test bench of voices held out of
+training, read every way people read,
 
 86
-00:06:07,658 --> 00:06:12,196
-But the highlight moves into a new line
-only once it hears that line's words,
+00:05:57,832 --> 00:06:03,249
+the phone is on the right line 91% of
+the time and on the right word 76%,
 
 87
-00:06:12,196 --> 00:06:14,028
-so it stayed where it was.
+00:06:03,249 --> 00:06:06,885
+and names the du'a within
+10 seconds of its first
 
 88
-00:06:14,028 --> 00:06:17,700
-Then the letters of line 10 came
-in, and it followed him back.
+00:06:06,885 --> 00:06:10,676
+words no other text shares 94% of the time.
 
 89
-00:06:17,700 --> 00:06:20,216
-From there, he reads on to line 16.
+00:06:13,950 --> 00:06:19,288
+It's weakest far from the phone, in a big
+hall, and with du'as it doesn't have.
 
 90
-00:06:20,216 --> 00:06:21,744
-Over the whole recitation,
+00:06:19,288 --> 00:06:24,112
+For halls, we built a masjid in software:
+a PA, loudspeakers in measured rooms,
 
 91
-00:06:21,744 --> 00:06:27,104
-the phone's highlight was on the word he
-was saying about two thirds of the time.
+00:06:24,112 --> 00:06:25,528
+people talking.
 
 92
-00:06:27,900 --> 00:06:29,636
-That's one reading.
+00:06:25,528 --> 00:06:29,291
+The phone went from 55%
+to 67% on the line there,
 
 93
-00:06:29,636 --> 00:06:34,244
-On 22 hours of recordings from
-55 voices the models never trained on,
+00:06:29,291 --> 00:06:35,114
+most of it from training in simulated
+halls; the server reaches 81%.
 
 94
-00:06:34,244 --> 00:06:38,184
-the du'a was named within
-10 seconds nine times out of ten,
+00:06:35,750 --> 00:06:38,940
+Whisper's text comes late
+and has no timing inside it,
 
 95
-00:06:38,184 --> 00:06:42,358
-and the highlight was on the
-reader's line about as often.
+00:06:38,940 --> 00:06:42,098
+so the highlight comes
+from the letter model.
 
 96
-00:06:42,358 --> 00:06:46,471
-It does worst in echoing halls,
-with the phone far from the reader,
+00:06:42,098 --> 00:06:47,363
+A decoder keeps a probability on every letter
+of the du'a: the tracker's idea again,
 
 97
-00:06:46,471 --> 00:06:49,165
-and when someone jumps around the du'a.
+00:06:47,363 --> 00:06:49,029
+at a finer scale.
 
 98
-00:06:49,165 --> 00:06:52,177
-And when someone recites a
-du'a the app doesn't have,
+00:06:49,133 --> 00:06:50,824
+Reading on is free.
 
 99
-00:06:52,177 --> 00:06:55,278
-it shows some other one about half the time.
+00:06:50,824 --> 00:06:55,051
+Starting the line again costs a
+little, going back a few lines more,
+
+100
+00:06:55,051 --> 00:06:59,590
+skipping ahead more still, so it
+takes clear letters to move far.
+
+101
+00:06:59,590 --> 00:07:02,125
+Here, the reader goes back two lines.
+
+102
+00:07:08,600 --> 00:07:13,407
+A pause makes no letters, and while no
+voice is heard, stray letters cost more,
+
+103
+00:07:13,407 --> 00:07:16,645
+so the highlight stays
+on the last word said.
+
+104
+00:07:16,645 --> 00:07:20,746
+Talk and a salawat between lines
+have places of their own to go,
+
+105
+00:07:20,746 --> 00:07:25,511
+and it enters the next line only
+once it hears that line's words.
+
+106
+00:07:25,517 --> 00:07:31,862
+When someone goes back or skips, it
+follows within 3 seconds 84% of the time;
+
+107
+00:07:31,862 --> 00:07:36,830
+through pauses, talk and
+salawat, it holds still 91%.
+
+108
+00:07:36,833 --> 00:07:41,253
+All of it runs in the phone's browser,
+so no audio leaves the phone.
+
+109
+00:07:41,253 --> 00:07:45,786
+A letter-model step takes about
+7 milliseconds in Chrome on a desktop,
+
+110
+00:07:45,786 --> 00:07:48,117
+because it reads only the new audio;
+
+111
+00:07:48,117 --> 00:07:53,508
+Whisper takes under two seconds a window
+on a phone, so it runs every two.
+
+112
+00:07:54,150 --> 00:07:56,005
+So, from the top.
+
+113
+00:07:56,005 --> 00:07:59,757
+Every two seconds, Whisper
+writes down the last six;
+
+114
+00:07:59,757 --> 00:08:04,087
+the words are matched against
+all 522 texts in milliseconds;
+
+115
+00:08:04,087 --> 00:08:08,916
+the tracker names the du'a once
+the matches agree over time.
+
+116
+00:08:08,916 --> 00:08:13,882
+Fifty times a second, the letter model
+hears letters, and the decoder places them:
+
+117
+00:08:13,882 --> 00:08:15,875
+the line, and the word.
+
+118
+00:08:21,683 --> 00:08:24,569
+It stands on other people's
+work: the reciters,
+
+119
+00:08:24,569 --> 00:08:28,929
+the sites that publish their recordings
+and texts, and the open models,
+
+120
+00:08:28,929 --> 00:08:31,064
+data and tools on screen.

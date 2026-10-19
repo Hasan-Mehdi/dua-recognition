@@ -45,3 +45,6 @@ data/harvest/
 data/testbed/
 # third-party research downloads (YouTube audio, transcripts, comments)
 data/research/
+
+# Manim render output
+media/

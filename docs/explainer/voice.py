@@ -1,23 +1,20 @@
-"""The explainer's voice-over: what is said in each beat, its audio, and its subtitles.
+"""The explainer's voice-over: each beat's audio and its subtitles (the words are in lines.py).
 
-The narrator speaks English with an Arabic accent: OmniVoice (k2-fsa, Apache-2.0) clones
-narrator-iraqi.flac, a voice it designed itself speaking Iraqi Arabic (no real person's voice), into
-English. Islamic words in the English are written in Arabic script (TTS_SPELLING), so the
-same voice says them natively, and the Arabic phrases, marked in a line as
-[[ar:ARABIC|transliteration]], are spoken in Arabic between sentences. Every sentence is voiced
-up to a few times and the take Whisper transcribes closest to the text is kept, cut cleanly
-after its last word, so a garbled take or a trailing hum never reaches the video.
+The narrator speaks English with an Arabic accent: OmniVoice (k2-fsa, Apache-2.0) clones narrator.flac, a voice
+it designed itself speaking Iraqi Arabic (no real person's voice), into English. Islamic words in the English
+are written in Arabic script (lines.TTS_SPELLING), so the same voice says them natively, and the Arabic phrases,
+marked in a line as [[ar:ARABIC|transliteration]], are spoken in Arabic between sentences. Every sentence is
+voiced up to a few times and the take Whisper transcribes closest to the text is kept, cut cleanly after its
+last word, so a garbled take or a trailing hum never reaches the video.
 
-Each line is cached by its text in data/cache/explainer_voice/ as a .wav and a .json listing
-its sentences with their start and end, which the subtitles use. Editing a line re-voices
-only that line.
+Each line is cached by its text in data/cache/explainer_voice/ as a .wav and a .json listing its sentences with
+their start and end, which the subtitles use. Editing a line re-voices only that line.
 
-    <venv with omnivoice>/python docs/anim/narration.py   # GPU
+    <venv with omnivoice>/python docs/explainer/voice.py [KEY ...]   # GPU
 
-The takes are voiced first (OmniVoice alone, in its own process), then chosen (Whisper alone): the two
-together pushed the machine's commit past its limit. With other jobs running, voicing from the saved
-voice prompt on the GPU still fits; choosing needed EXPLAINER_PICK_DEVICE=cpu
-EXPLAINER_PICK_MODEL=openai/whisper-small (2026-10-05, peak commit 39.8 GB).
+The takes are voiced first (OmniVoice alone, in its own process), then chosen (Whisper alone): the two together
+pushed the machine's commit past its limit. EXPLAINER_PICK_DEVICE=cpu EXPLAINER_PICK_MODEL=openai/whisper-small
+when memory is short; EXPLAINER_TAKES_LIMIT=N voices N takes per process (OmniVoice's commit grows as it goes).
 """
 from __future__ import annotations
 
@@ -25,116 +22,25 @@ import hashlib
 import json
 import os
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from lines import CAPTION_NUMBERS, LINES, SLOW, TTS_SPELLING  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 CACHE = Path(os.environ.get("EXPLAINER_VOICE_CACHE", ROOT / "data" / "cache" / "explainer_voice"))
 # The narrator: OmniVoice's own designed voice ("male, middle-aged, moderate pitch") reading NARRATOR_TEXT
 # in Iraqi Arabic.
-NARRATOR = Path(__file__).parent / "narrator-iraqi.flac"
+NARRATOR = Path(__file__).parent / "narrator.flac"
 NARRATOR_TEXT = "الناس يتعلمون الدعاء بالبيت وبالجامع، ويقرونه سوه بالليالي المباركة. وهذا التطبيق يسمع القارئ، ويتابعه كلمة كلمة."
-SPEED = 0.92
-ENGINE = f"omnivoice|{NARRATOR.stem}|speed{SPEED}"
-GAP, AR_GAP = 0.3, 0.4  # seconds between sentences, and around an Arabic phrase
-# The two models and the letter model bring the most new ideas per second: said slower, with longer
-# pauses between sentences.
-SLOW = {"sound2", "model1", "ctc1"}
-SLOW_SPEED, SLOW_GAP = 0.84, 0.6
+SPEED = 0.9  # unhurried (1.0, its natural pace, was too fast; the old explainer used 0.92)
+ENGINE = f"omnivoice|narrator-iraqi|speed{SPEED}"
+GAP, AR_GAP = 0.5, 0.55  # seconds between sentences, and around an Arabic phrase
+SLOW_SPEED, SLOW_GAP = 0.86, 0.5
 TAKES = {"en": 4, "ar": 8}  # tries per segment; Arabic phrases are short and less steady
 GOOD = {"en": 0.93, "ar": 0.92}  # a take this close to the text is kept at once
 
-# Round 8 (2026-10-05): one recitation, followed from start to end (explainer.py). Round 9 (2026-10-06): his
-# recitation is heard, so where he says something the narration no longer says it for him.
-LINES = {
-    # -- the reading
-    "open1": "This is Abu Thar Al-Halawaji reciting Du'a al-Iftitah, and an app following him word by word. The models "
-             "in it were never trained on his voice. Here is what the app did with two and a half minutes of his "
-             "recitation, from his first word.",
-    "ahead1": "Along the way, he stops for six seconds, someone talks to him, and later he goes back two lines. People "
-              "reading along do all of these.",
-    # -- how a phone hears, and what the two models are
-    "sound1": "First, how does a phone hear anything at all? Its microphone measures how the air pressure changes, "
-              "sixteen thousand times a second. So the basmala reaches the app as about seventy-five thousand numbers, "
-              "and nothing else.",
-    "sound2": "A list of numbers is hard to read, so both models first turn it into a picture. Every hundredth of a "
-              "second, the app measures how much energy the sound has, from low to high in eighty steps, and draws it "
-              "as one thin column, brighter where there's more. Side by side, the columns show each sound as a shape "
-              "of its own. The s is a faint haze reaching to the top, and a vowel he draws out is a stack of bright "
-              "stripes.",
-    "model1": "Reading those pictures is what the two models do, and both are neural networks. A network is a long chain "
-              "of simple sums, with millions of adjustable numbers that set how much each part counts. In training, "
-              "it's shown recordings together with what was said in them, and those numbers are nudged, a little at a "
-              "time, until what comes out matches.",
-    "whisper1": "The first model is Whisper, made by OpenAI and trained on six hundred and eighty thousand hours of "
-                "speech in many languages. Its first half listens to the picture. Its second half writes down what "
-                "was said, a few letters at a time.",
-    "whisper2": "The app uses a small version, with seventy-four million numbers, so that it runs on a phone. Out of the "
-                "box it barely understands recitation, so it was trained further, on over a hundred hours of recited "
-                "du'as, and on synthetic voices of ordinary people.",
-    "listen1": "On the phone, Whisper gets the last six seconds, once a second, and that's how the app works out which "
-               "du'a this is. The second model listens for letters, ten times a second, and that's how it follows the "
-               "word. More on that one later.",
-    # -- which du'a
-    "find1": "He opens with the basmala and the salawat, and Whisper gets the words right. But sixty-six of the texts "
-             "open with the basmala, and forty-one of them go on with the salawat. The app looks for what Whisper "
-             "wrote in all five hundred and twenty-two texts, and each text where it fits takes a share of the "
-             "probability. After seventeen seconds, the likeliest is Du'a Tawassul, at seven percent.",
-    # find2 and find3 follow his own "Allāhumma innī" and "aftatiḥu th-thanā'a" (explainer.py plays them).
-    "find2": "Three texts carry on with these words, and between them, they now hold most of the probability.",
-    "find3": "Only one text has these words. Iftitah goes to ninety-four percent, past the seventy the app waits for, "
-             "and its name comes up.",
-    # -- which word
-    "word1": "Now it has to keep up with him. Whisper's text arrives more than a second late, with no timing inside "
-             "it, so it can't say which word he's on. The highlight comes from the second model.",
-    "ctc1": "It's Whisper's listening half, with the writing half taken off and one small layer added. For every "
-            "fiftieth of a second of the picture, that layer gives a probability for each Arabic letter, and for no "
-            "letter at all. It learned by copying a far bigger model, with about three hundred million numbers, "
-            "trained on recitation and on ordinary voices.",
-    "ctc2": "Because it never writes words, it's quick, and every letter comes with the moment it was heard. Every "
-            "tenth of a second, it hears the last two seconds again. Here are the letters it found, newest on the "
-            "left, the way Arabic is read.",
-    "lines1": "The app lines those letters up against the text of Iftitah, and keeps a probability for every line. "
-              "Carrying on costs nothing. Saying the line again, going back a few lines, or skipping ahead are "
-              "allowed, but each costs a little, so it takes clear letters to make them happen. In this recitation, "
-              "the highlight typically reached a word about a third of a second after he started it.",
-    # -- what readers do
-    "pause1": "Here he stops for six seconds. Silence brings no letters, so nothing moves the highlight: it stays on "
-              "his last word.",
-    "pause2": "When he starts the next line, it follows him a little over half a second later.",
-    # talk1 comes after the talk has been heard once, at its own speed.
-    "talk1": "That was someone talking to him. The app keeps a place for not reading, and talk is meant to end up there. It "
-             "didn't go there straight away: part of the talk sounded like him starting line nine again, and the "
-             "highlight jumped back to the start of the line. Then more of it went to not reading, and the highlight "
-             "waited there until he came back.",
-    "drop1": "He comes back with line ten, and the highlight follows him. But Whisper's last six seconds were still "
-             "mostly talk, so for a few seconds the app doubted it was hearing Iftitah at all: it might be a du'a it "
-             "doesn't have. The letters kept the highlight on line ten, and once Whisper's window held his words "
-             "again, the doubt was gone.",
-    "back1": "At the end of line twelve, he goes back to line ten. For three tenths of a second, the likeliest line "
-             "was thirteen, the one that usually comes next. But the highlight moves into a new line only once it "
-             "hears that line's words, so it stayed where it was. Then the letters of line ten came in, and it "
-             "followed him back.",
-    "end1": "From there, he reads on to line sixteen. Over the whole recitation, the phone's highlight was on the "
-            "word he was saying about two thirds of the time.",
-    # -- beyond this reading
-    "held1": "That's one reading. On twenty-two hours of recordings from fifty-five voices the models never trained "
-             "on, the du'a was named within ten seconds nine times out of ten, and the highlight was on the reader's "
-             "line about as often. It does worst in echoing halls, with the phone far from the reader, and when "
-             "someone jumps around the du'a. And when someone recites a du'a the app doesn't have, it shows some "
-             "other one about half the time.",
-}
-
-# Islamic words and names, written for the voice in Arabic script so it says them as an Arabic speaker would.
-TTS_SPELLING = {
-    "Du'a al-Iftitah": "دعاء الافتتاح",
-    "Iftitah": "الافتتاح",
-    "Du'a Tawassul": "دعاء التوسل",
-    "Abu Thar Al-Halawaji": "أبو ذر الحلواجي",
-    "basmala": "البسملة",
-    "salawat": "الصلوات",
-    "du'as": "أدعية",
-    "du'a": "دعاء",
-}
 _SPELL = re.compile("|".join(re.escape(k) + r"(?![a-z])" for k in sorted(TTS_SPELLING, key=len, reverse=True)))
 _AR = re.compile(r"\[\[ar:([^|\]]+)\|([^\]]+)\]\]")
 
@@ -156,18 +62,6 @@ def segments(text: str, key: str = "") -> list[dict]:
     return out
 
 
-# Subtitles show numbers as digits; the voice says the words.
-CAPTION_NUMBERS = [
-    ("six hundred and eighty thousand", "680,000"), ("five hundred and twenty-two", "522"),
-    ("seventy-five thousand", "75,000"), ("sixteen thousand", "16,000"), ("three hundred million", "300 million"),
-    ("seventy-four million", "74 million"), ("a hundred hours", "100 hours"), ("eighty steps", "80 steps"),
-    ("sixty-six", "66"), ("forty-one", "41"), ("seven percent", "7%"), ("ninety-four percent", "94%"),
-    ("the seventy the app", "the 70% the app"), ("line nine", "line 9"),
-    ("line ten", "line 10"), ("line twelve", "line 12"), ("was thirteen", "was 13"), ("line sixteen", "line 16"),
-    ("twenty-two hours", "22 hours"), ("fifty-five voices", "55 voices"), ("ten seconds", "10 seconds"),
-]
-
-
 def caption(text: str) -> str:
     for words, digits in CAPTION_NUMBERS:
         text = text.replace(words, digits)
@@ -185,7 +79,7 @@ def clip(key: str) -> tuple[Path, float, list[dict]]:
     if not path.exists() and os.environ.get("EXPLAINER_STANDIN") == "1":
         return standin(key)
     if not path.exists():
-        raise FileNotFoundError(f"{path.name}: voice the narration first (python docs/anim/narration.py)")
+        raise FileNotFoundError(f"{path.name}: voice the narration first (python docs/explainer/voice.py)")
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     return path, meta["duration"], meta["segments"]
 
