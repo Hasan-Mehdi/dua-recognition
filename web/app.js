@@ -575,7 +575,11 @@ async function init() {
   addEventListener("scroll", showBack, { passive: true });
   $("resume").onclick = resume;
   showResume();
-  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && keepAwake());
+  // Leaving the tab ends a session from the microphone: it stops listening (resume picks it up again).
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") keepAwake();
+    else if (state.node && state.stream) end("hidden");
+  });
   $("unit-phrase").onclick = () => setPerLine(false);
   $("unit-line").onclick = () => setPerLine(true);
   setPerLine(stored("per-line") === "1", false);
@@ -1050,6 +1054,7 @@ async function startCapture(makeSource) {
   keepAwake();
   showListening();
   meter();
+  if (document.hidden && state.stream) return end("hidden"); // the tab was left while it started
   if (state.practice && state.chosen) practiceBegin(state.chosen); // else once the du'a is found (render)
 }
 

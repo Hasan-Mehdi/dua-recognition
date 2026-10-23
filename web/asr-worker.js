@@ -30,8 +30,16 @@ let model = null;
 self.onmessage = async ({ data }) => {
   if (data.type === "load") {
     try {
-      const progress_callback = (p) =>
-        p.status === "progress" && self.postMessage({ type: "progress", file: p.file, progress: p.progress });
+      // One bar over the model's weights: the encoder and decoder download side by side, each
+      // reporting its own 0-100, so their bytes are added up (the small config files are left out).
+      const weights = new Map();
+      const progress_callback = (p) => {
+        if (p.status !== "progress" || !p.file?.endsWith(".onnx") || !p.total) return;
+        weights.set(p.file, p);
+        let loaded = 0, total = 0;
+        for (const w of weights.values()) (loaded += w.loaded), (total += w.total);
+        self.postMessage({ type: "progress", progress: (100 * loaded) / total });
+      };
       // Sequentially: loading these concurrently stalled in Chrome.
       vad = await ort.InferenceSession.create(new URL("./vad/silero_vad_v6.onnx", self.location.href).href);
       self.postMessage({ type: "stage", text: "Loading the audio processor…" });
