@@ -8,14 +8,15 @@ that gap.
 
 The page's letter model (`ctc-stream-base-v1`) on the session items, greedy over the final frames of
 each item's timed span: 49% of letters wrong, 30 points of it letters left out. On 40 bench `flow`
-items: 16%. (`scratchpad cer_items.py`; the items' truth is the teacher's own forced alignment.)
+items: 16%. (The items' truth is the teacher's own forced alignment.)
 
 It is not the phone's microphone:
 
 - Changing the audio before the model changes nothing: a high-pass at 150 or 300 Hz, pre-emphasis,
-  +6 dB above 300 Hz, -10 dB: 49.1-50.1% on the sessions; on the bench items 16-17% (+10 dB clips:
-  54%).
-- 15 of the 35 items were recorded on a desktop with a headset, not the phone, and read the same.
+  a high-pass at 300 Hz with 6 dB more level, 10 dB less level: 49.1-50.1% on the sessions; on the
+  bench items 16-17% (10 dB more level clips: 54%).
+- 17 of the 35 items were recorded on a desktop, not the phone, and the model does no better there
+  (53% of letters wrong, against 41% on the phone's 18).
 
 What differs is the reading. The bench's voices are reciters drawing words out; Hasan reads at
 speaking pace, with real silences between phrases, and says some letters the way many non-Arab readers
@@ -27,7 +28,7 @@ do. Line by line, the teacher (wav2vec2) still writes most of what he says; the 
 | teacher | فيهارالسءوفيكلالس | لهمافيالسماواتومافيالعاد |
 | student | فيهذلسوفيكلسع | ومافيالسماواتومافيالعد |
 
-The letters he says alike are the ones a reader without Arabic as a first language usually merges: z
+The letters he says alike are the ones many readers without Arabic as a first language merge: z
 for ذ ض ظ, s for ث ص, t for ط, h for ح, a glottal stop or nothing for ع.
 
 Two of the 37 session items were recorded with the microphone captured twice (the start-up bug fixed
@@ -43,8 +44,8 @@ reads a step's letter frames, each letter's probability gains `accent_fold` time
 other letters in its group: ذ ز ض ظ, ث س ص, ت ط, ح ه, ا ع ء, ق ك. A "z" heard where the text has ض
 then costs what a "z" heard for ز would, not what an unrelated letter would. Whisper's own transcripts
 barely need it (they spell the text: window letter error 46.1% raw, 44.3% folded, `ph-kd2` on the
-sessions), so the tracker is unchanged. Python and JavaScript step for step: two new cases in
-`tests/test_stream_parity.py` (0.3, and 1.0 inside Tawassul's repeated block).
+sessions), so the tracker is unchanged. Python and JavaScript step for step: three new cases in
+`tests/test_stream_parity.py` (off, 0.3, and 1.0 inside Tawassul's repeated block).
 
 Hasan's sessions (35 items, phone cadence, against the defaults):
 
@@ -114,38 +115,6 @@ within 3 s 73.0% -> 70.8% (the fold makes the line already shown explain the aud
 median +0.1 s, 90% within +0.56 s; 5 cross the 3 s mark, 2 come back under it), and unknown du'a shown
 +0.1 point.
 
-## A letter model that has heard more voices
-
-Pre-registered before any candidate was scored (`data/cache/s2/prereg.md`): pass if, on Hasan's 35
-session items at phone cadence, right word rises by 3.0 points or more with a paired 95% interval above
-0, with no more than -0.5 on line and -1.0 right word on dev and no guard bar newly failing.
-
-`ctc-stream-base-s2`: `ctc-stream-base-v1` trained 3 more epochs (16,272 steps of 48 five-second crops)
-on its own sets plus the harvest's 138,614 six-second clips from 2,555 uploaders (the `train_h3c` clips the
-phone Whisper was distilled on, 231 h; teacher frames from `wav2vec2-quran-dua-voices`, newly made, 9
-minutes a third) and five sets of ordinary voices (`quranspeech` 3,627 clips, `recerrors` 944, `nahw`
-1,093, `fleurs` 2,311, `sawtarabi` 655): 260,354 items, 85 minutes on the GPU while the CPU was busy
-scoring. `train_ctc_student.py --add` (new) takes sets whole, `set*k` k times.
-
-| | held-out reciters (val_v4): crop / 6 s letter error | his sessions: letter error | his sessions: on line | right word |
-|---|---:|---:|---:|---:|
-| `ctc-stream-base-v1` (the page's) | 33.6% / 23.2% | 47.5% | 72.5% | 48.3% |
-| `ctc-stream-base-s2` | 33.0% / 22.7% | 45.6% | 72.6% | 49.3% |
-
-Right word +1.0 [+0.1, +2.3]: **it does not pass**, and the page keeps `ctc-stream-base-v1`. With the
-fold on both (0.5, three groups), s2 adds +0.6 [+0.0, +1.3] (52.4% -> 53.0%). A thousand more reciters
-barely move a letter model on an ordinary reader.
-
-On the bench it is a gain everywhere, though: dev, fold off on both (`s2_dev_s2` against `s2_dev_base`),
-on line 89.8% -> 90.0% (+0.2 [+0.1, +0.2]), right word 74.4% -> 75.1% (+0.7 [+0.7, +0.8]), every lane up
-(harvest +0.9, studio +0.7, majlis +0.8, mafatih +0.5, his lane +3.7), holds still 88.9% -> 89.1%, jumps
-1.26 -> 1.22 and lost 1.18 -> 1.15 /10 min. One guard bar fails: his dev lane holds still 98.6% -> 94.6%
-(on his 35 real sessions it holds still better, 83.7% -> 84.5%). With the fold on both (today's
-defaults; `s2_dev_s2_f05top3` against `s2_dev_f05top3`) the same: on line +0.2 [+0.1, +0.2], right word
-74.5% -> 75.2% (+0.7 [+0.6, +0.7]), lost 1.16 -> 1.12 /10 min; guard fails on holding still in his dev lane
-(96.7% -> 87.8%) and Mafatih (93.8% -> 92.8%). That is a question for Hasan rather than for tonight: the
-pre-registered bar was about his reading, and it missed.
-
 Gentler still, on test and his sessions (against the same baselines):
 
 | | his sessions: right word | test: holds still | test: studio holds still | test: majlis holds still | test: follows a jump ≤3 s | dev: his lane holds still |
@@ -167,8 +136,8 @@ holding still (five items), following a jump within 3 s (-2.2 points) and 17 tic
 (7,742 -> 7,759 of 20,708). Taken anyway, because the bench has almost no ordinary readers (his dev
 lane is 35 of 1,317 items, test none), and on the only ordinary reader we have the gain is large and
 consistent: right word +4.1 [+2.7, +5.5] and on line +0.9 [+0.3, +1.6] on his 35 sessions, 30 items
-better and none worse, and +6.0 on his dev lane; with the server engine's models +3.4 [+2.1, +4.6]. On the reciters
-it is a wash for words (+0.2 dev, +0.0 test) and costs holding still in a few items. `?sc=accentFold:0`
+better and none worse, and +6.0 on his dev lane; with the server engine's models +3.4 [+2.1, +4.6].
+On the reciters it is a wash for words (+0.2 dev, +0.0 test) and costs holding still in a few items. `?sc=accentFold:0`
 turns it off; `--sc accent_fold=0` on the bench.
 
 The server engine (its Whisper, the window student on 3 s windows every 0.05 s, `SERVER_PROFILE`), dev,
@@ -186,10 +155,50 @@ New baselines with the fold on, for whatever comes next: `s2_dev_f05top3` and `s
 (phone cadence), `s2_sess_f05top3` (the 35 session items), `s2_dev_sv_f05top3` and `s2_sv_f05top3`
 (server engine).
 
+## A letter model that has heard more voices
+
+Pre-registered before any candidate was scored (`data/cache/s2/prereg.md`): pass if, on Hasan's 35
+session items at phone cadence, right word rises by 3.0 points or more with a paired 95% interval above
+0, with no more than -0.5 on line and -1.0 right word on dev and no guard bar newly failing.
+
+`ctc-stream-base-s2`: `ctc-stream-base-v1` trained 3 more epochs (16,272 steps of 48 five-second crops)
+on its own sets plus the harvest's 138,614 six-second clips from 2,555 uploaders (the `train_h3c` clips the
+phone Whisper was distilled on, 231 h; teacher frames from `wav2vec2-quran-dua-voices`, newly made, 9
+to 13 minutes a third) and five sets of ordinary voices (`quranspeech` 3,627 clips, `recerrors` 944, `nahw`
+1,093, `fleurs` 2,311, `sawtarabi` 655): 260,354 items, 85 minutes on the GPU while the CPU was busy
+scoring. `train_ctc_student.py --add` (new) takes sets whole, `set*k` k times.
+
+| | held-out reciters (val_v4): crop / 6 s letter error | his sessions: letter error | his sessions: on line | right word |
+|---|---:|---:|---:|---:|
+| `ctc-stream-base-v1` (the page's) | 33.6% / 23.2% | 47.5% | 72.5% | 48.3% |
+| `ctc-stream-base-s2` | 33.0% / 22.7% | 45.6% | 72.6% | 49.3% |
+
+Right word +1.0 [+0.1, +2.3]: **it does not pass**, and the page keeps `ctc-stream-base-v1`. With the
+fold on both (0.5, three groups), s2 adds +0.6 [+0.0, +1.3] (52.4% -> 53.0%). A thousand more reciters
+barely move a letter model on an ordinary reader.
+
+On the bench it is a gain everywhere, though: dev, fold off on both (`s2_dev_s2` against `s2_dev_base`),
+on line 89.8% -> 90.0% (+0.2 [+0.1, +0.2]), right word 74.4% -> 75.1% (+0.7 [+0.7, +0.8]), every lane up
+(harvest +0.9, studio +0.7, majlis +0.8, mafatih +0.5, his lane +3.7), holds still 88.9% -> 89.1%, jumps
+1.26 -> 1.22 and lost 1.18 -> 1.15 /10 min. One guard bar fails: his dev lane holds still 98.6% -> 94.6%
+(on his 35 real sessions it holds still better, 83.7% -> 84.5%). With the fold on both (today's
+defaults; `s2_dev_s2_f05top3` against `s2_dev_f05top3`) the same: on line +0.2 [+0.1, +0.2], right word
+74.5% -> 75.2% (+0.7 [+0.6, +0.7]), lost 1.16 -> 1.12 /10 min; guard fails on holding still in his dev lane
+(96.7% -> 87.8%) and Mafatih (93.8% -> 92.8%). On test, fold on both (`s2_test_s2_f05top3` against
+`s2_test_f05top3`): on line 90.5% -> 90.7% (+0.2 [+0.1, +0.3]), right word 76.0% -> 76.7% (+0.7 [+0.6,
++0.9]), holds still 90.4% -> 91.4%, early 1.93 -> 1.80 and lost 1.03 -> 1.01 /10 min, jumps 1.49 -> 1.57;
+**every guard bar passes**. The int8 export picks the same best letter as PyTorch on 99.8% of final frames
+(`web/models/ctc-stream-base-s2`), and it runs in the real page with `?ctc=ctc-stream-base-s2`.
+
+So s2 is a better letter model for reciters and no worse for him, but it was pre-registered as a fix for
+his reading and missed that bar; as with h1 on 2026-10-02, it is not switched on after the fact. It is
+Hasan's call: one constant (`CTC_MODEL` in web/app.js, `PHONE_MODELS` in app/server.py, `CTC_TAG` in
+scripts/bench.py).
+
 ### His own sessions in training
 
 `ctc-stream-base-s3a`: s2's recipe plus 277 six-second windows (2 s apart) of his sessions from before
-2026-10-03 (19 items, `data/cache/s2/session_windows.py`; 9 minutes of distinct audio), each 20 times. Scored
+2026-10-03 (19 items, `scripts/session_windows.py`; 9 minutes of distinct audio), each 20 times. Scored
 on his 16 items from 2026-10-03 on, which it never heard:
 
 | his later 16 items | letter error | on line | right word |
@@ -203,4 +212,4 @@ s3a against s2: right word +0.9 [-0.2, +2.5], on line +1.0 [+0.0, +2.6]; with th
 model can learn his voice, but nine minutes of it don't carry over to new sessions. What would help is hours
 of ordinary reading, many readers. The debug sessions the page already uploads are that data, and the
 pipeline now exists end to end: `bench_sessions.py build` (the teacher times the reading against the text),
-`session_windows.py` (training windows), `ctc_teacher.py` (frames), `train_ctc_student.py --add`.
+`scripts/session_windows.py` (training windows), `ctc_teacher.py` (frames), `train_ctc_student.py --add`.

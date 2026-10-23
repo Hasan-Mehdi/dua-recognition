@@ -232,6 +232,18 @@ The `--score` reference agreed with the human line timings on 88% of seconds (10
 a line) on a held-out Tawassul clip, and replaying a session's own transcripts through the
 Python tracker reproduces the phone's display exactly.
 
+Sessions are also a bench and training data. `scripts/bench_sessions.py build` times every reading
+the teacher can follow for four lines or more into bench items (data/testbed/sessions; sessions
+whose audio clock is off, the old double capture, are skipped), and every `bench.py` command runs on
+them the same way. They are the only ordinary reader the bench has
+([ordinary_readers.md](results/ordinary_readers.md)). For the letter model:
+
+```bash
+python scripts/session_windows.py --before 20261003 --name sess_a      # 6 s windows of the timed readings
+python scripts/ctc_teacher.py sess_a --batch 16 --model models/wav2vec2-quran-dua-voices --out data/cache/ctc_student_voices
+python scripts/train_ctc_student.py ... --add h3c_hv_a,h3c_hv_b,h3c_hv_c,sess_a*20   # sets taken whole, set*k k times
+```
+
 ## Code map
 
 ```
@@ -275,7 +287,8 @@ scripts/
   sessions       session_report (the phone's debug sessions, data/sessions/), session_replay (tracker
                  changes replayed over many sessions), session_stops (the display after each stop),
                  session_eval (word-level scores against forced-aligned truth, with the word follower),
-                 page_replay.mjs (a recording through the real page in headless Chrome)
+                 page_replay.mjs (a recording through the real page in headless Chrome), bench_sessions
+                 (the sessions as bench items), session_windows (their timed readings as training windows)
   noha research  noha_lid, noha_match, noha_finetune, ...
 app/             server.py (FastAPI: the page, the server engine's models over /ws/ear, majlis-mode rooms,
                  debug sessions); demo.py (CLI)

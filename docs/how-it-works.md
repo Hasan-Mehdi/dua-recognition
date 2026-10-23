@@ -272,7 +272,8 @@ Since 2026-10-19 the decoder also forgives the letters ordinary readers say alik
 a step's frames, ا, ع and ء each take half the probability of the other two, and so do ت and ط, and
 ح and ه: a reader who says ʿayn as a glottal stop or not at all, ṭāʾ as tāʾ, or ḥāʾ as hāʾ is no
 longer charged as if they had said another word. The letter model hears Hasan's own reading with
-49% of its letters wrong (16% for the bench's reciters), mostly these and letters it misses. On his
+49% of its letters wrong (16% for the bench's reciters), most of them letters it doesn't hear at all,
+some of them these swaps. On his
 35 recorded sessions the highlight is on his word 52.4% of the time instead of 48.3%; on the bench's
 reciters it changes the words by 0.2 points or less and holding still by about half a point
 ([ordinary_readers.md](results/ordinary_readers.md)). `?sc=accentFold:0` turns it off.
