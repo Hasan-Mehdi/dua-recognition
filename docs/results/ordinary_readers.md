@@ -213,3 +213,7 @@ model can learn his voice, but nine minutes of it don't carry over to new sessio
 of ordinary reading, many readers. The debug sessions the page already uploads are that data, and the
 pipeline now exists end to end: `bench_sessions.py build` (the teacher times the reading against the text),
 `scripts/session_windows.py` (training windows), `ctc_teacher.py` (frames), `train_ctc_student.py --add`.
+
+2026-10-28: trusting the letter model less for an ordinary reader (`temp` 1.5 with the talk and salawat
+costs taken down with it) gave his sessions +3.3 points on the word in the Python replay but cost holding
+still in his pauses on the real page; not adopted ([letter_trust.md](letter_trust.md)).
