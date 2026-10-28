@@ -109,6 +109,50 @@ RECORDINGS = {r.audio_id: r for d in DUAS.values() for r in load_recordings(d)}
 app = FastAPI(title="dua-recognition")
 
 
+class LogVisits:
+    """One line per request and socket in SESSIONS/visits.jsonl: when, from where (the address
+    cloudflared forwards), which port (8443 the phone link, 8444 the server engine's), what, which
+    browser. scripts/visits.py sums it up: who opened the page, who listened, whose sessions came."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+        t0, status = time.time(), None
+
+        async def noted(msg):
+            nonlocal status
+            if msg["type"] == "http.response.start":
+                status = msg["status"]
+            elif msg["type"] == "websocket.accept":
+                status = 101
+            elif msg["type"] == "websocket.close" and status is None:
+                status = 403
+            await send(msg)
+
+        try:
+            await self.app(scope, receive, noted)
+        finally:
+            headers = dict(scope.get("headers") or [])
+            line = {"t": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t0)),
+                    "ip": (scope.get("client") or [None])[0], "port": (scope.get("server") or [None, None])[1],
+                    "method": scope.get("method", "WS"), "path": scope["path"], "status": status,
+                    "s": round(time.time() - t0, 1), "ua": headers.get(b"user-agent", b"").decode("latin-1")}
+            if scope.get("query_string"):
+                line["q"] = scope["query_string"].decode("latin-1")
+            try:
+                SESSIONS.mkdir(parents=True, exist_ok=True)
+                with (SESSIONS / "visits.jsonl").open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(line, ensure_ascii=False) + "\n")
+            except OSError as e:
+                print(f"visits.jsonl: {e}", file=sys.stderr)
+
+
+app.add_middleware(LogVisits)
+
+
 @app.on_event("startup")
 def _warm() -> None:
     if ENGINE == "server":
@@ -174,7 +218,112 @@ async def save_session(name: str, request: Request):
         part.replace(SESSIONS / name)
     finally:
         part.unlink(missing_ok=True)  # a dropped or refused upload leaves nothing behind
+    _drop_live(name.removesuffix(".wav"))  # the whole file replaces what came in pieces
     return {"saved": name}
+
+
+# The page also sends each piece of a session as it writes it (every 5 s, and when the page is
+# hidden), so a tab closed mid-recitation still leaves its audio here: SESSIONS/.live/<id>/ holds the
+# audio and events so far, and <id>.wav is built from them when the session ends, or once no piece
+# has come for LIVE_IDLE_S (a killed tab never says it ended). A piece: the length of its text as
+# 4 bytes little-endian, the text (JSON lines: the session's head as in the .wav, then one per
+# event, kept as the page wrote them), then its 16 kHz int16 audio.
+LIVE_IDLE_S = 60
+LIVE_FILES = ("state.json", "audio.pcm", "events.jsonl")
+
+
+def _live(sid: str) -> Path:
+    return SESSIONS / ".live" / sid
+
+
+def _drop_live(sid: str) -> None:
+    d = _live(sid)
+    for f in LIVE_FILES:
+        (d / f).unlink(missing_ok=True)
+    if d.is_dir():
+        d.rmdir()
+
+
+def _riff(tag: bytes, body: bytes) -> bytes:
+    return tag + len(body).to_bytes(4, "little") + body + b"\0" * (len(body) & 1)
+
+
+def _build_live(sid: str) -> None:
+    """<id>.wav from the pieces so far, as web/session-log.js sessionFile() writes it."""
+    d = _live(sid)
+    state = json.loads((d / "state.json").read_text(encoding="utf-8"))
+    pcm = (d / "audio.pcm").read_bytes()
+    events = ",\n".join((d / "events.jsonl").read_text(encoding="utf-8").splitlines())
+    log = state["head"][:-1] + ',"events":[\n' + events + "\n]}"
+    fmt = (1).to_bytes(2, "little") + (1).to_bytes(2, "little") + SAMPLE_RATE.to_bytes(4, "little") \
+        + (SAMPLE_RATE * 2).to_bytes(4, "little") + (2).to_bytes(2, "little") + (16).to_bytes(2, "little")
+    part = SESSIONS / f"{sid}.wav.part"
+    part.write_bytes(_riff(b"RIFF", b"WAVE" + _riff(b"fmt ", fmt) + _riff(b"data", pcm)
+                           + _riff(b"json", log.encode("utf-8"))))
+    part.replace(SESSIONS / f"{sid}.wav")
+    state["built"] = True
+    (d / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+
+@app.post("/api/sessions/{sid}/{seq}")
+async def save_session_piece(sid: str, seq: int, request: Request):
+    """One piece of a session being recorded (web/session-log.js SessionLog.stream)."""
+    if not re.fullmatch(r"[\w-]{1,80}", sid):
+        raise HTTPException(400)
+    body = await request.body()
+    if len(body) > MAX_SESSION_BYTES or len(body) < 4:
+        raise HTTPException(413 if body else 400)
+    n = int.from_bytes(body[:4], "little")
+    try:
+        lines = body[4 : 4 + n].decode("utf-8").split("\n")
+        head, events = json.loads(lines[0]), lines[1:]
+        if not isinstance(head, dict) or not all(isinstance(json.loads(e), dict) for e in events):
+            raise ValueError
+    except ValueError:
+        raise HTTPException(400)
+    d = _live(sid)
+    state = json.loads((d / "state.json").read_text(encoding="utf-8")) if d.is_dir() else {"next": 0}
+    if seq < state["next"]:
+        return {"next": state["next"]}  # sent again after a lost answer
+    if seq > state["next"]:
+        raise HTTPException(409)  # a piece is missing here: the page sends the whole file at the end
+    d.mkdir(parents=True, exist_ok=True)
+    with (d / "audio.pcm").open("ab") as f:
+        f.write(body[4 + n :])
+    with (d / "events.jsonl").open("a", encoding="utf-8") as f:
+        f.writelines(e + "\n" for e in events)
+    state = {"next": seq + 1, "head": lines[0], "built": False}
+    (d / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    if head.get("ended", "unknown") != "unknown":
+        _build_live(sid)
+        _drop_live(sid)
+    return {"next": seq + 1}
+
+
+def sweep_live(now: float | None = None) -> None:
+    """Build the sessions no piece has come for in LIVE_IDLE_S; forget them after a day."""
+    now = time.time() if now is None else now
+    for d in (SESSIONS / ".live").glob("*"):
+        try:
+            idle = now - (d / "state.json").stat().st_mtime
+            if idle < LIVE_IDLE_S:
+                continue
+            if not json.loads((d / "state.json").read_text(encoding="utf-8")).get("built"):
+                _build_live(d.name)
+            elif idle > 86400:
+                _drop_live(d.name)
+        except (OSError, ValueError, KeyError) as e:
+            print(f"session {d.name}: {e}", file=sys.stderr)
+
+
+@app.on_event("startup")
+async def _sweep_sessions() -> None:
+    async def loop():
+        while True:
+            sweep_live()
+            await asyncio.sleep(LIVE_IDLE_S / 2)
+
+    app.state.sweeper = asyncio.create_task(loop())
 
 
 @app.get("/corpus.json")

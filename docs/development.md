@@ -213,8 +213,13 @@ On for now (`?log=0` turns them off): every listening session keeps the 16 kHz a
 recognizer heard and a log of what it made of it (each window's transcript and tracker
 state, each line and word shown, taps, scrolls, the phone going to sleep) as one `.wav`,
 with the log in a RIFF chunk that players ignore. Served by `app/server.py`, the page
-uploads them to `data/sessions/` when a session ends, in either engine (with the phone models
-exported it serves the on-device app, with no speech model on the server).
+uploads them to `data/sessions/` in either engine (with the phone models exported it serves the
+on-device app, with no speech model on the server): each 5 s piece as it's recorded, so a tab
+closed mid-recitation still leaves its session (built a minute after the last piece, `ended:
+unknown`), and the whole file on the next visit if a piece went missing.
+The server also logs every request (time, address, port, browser) to `data/sessions/visits.jsonl`;
+`python scripts/visits.py [--since 2026-10-24] [--all]` sums it up per visitor: page loads, taps
+on start, sessions sent.
 From a static host they stay on the phone until *send* on the home screen (share sheet or
 download). While following, tapping the line actually being recited moves the display
 there and logs "I'm here".

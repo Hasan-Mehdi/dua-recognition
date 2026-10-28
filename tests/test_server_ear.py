@@ -16,10 +16,13 @@ MODELS = [ROOT / "models" / "whisper-base-syn-v5-ctx8ft-ct2", ROOT / "models" / 
 
 
 @pytest.fixture(scope="module")
-def server():
+def server(tmp_path_factory):
     os.environ.setdefault("DUA_ENGINE", "server")
     sys.path.insert(0, str(ROOT / "app"))
-    return importlib.import_module("server")
+    s = importlib.import_module("server")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(s, "SESSIONS", tmp_path_factory.mktemp("sessions"))  # visits.jsonl: not the real one
+        yield s
 
 
 def test_window_is_cut_by_sample_number(server):

@@ -9,6 +9,8 @@
 // Sessions live in this browser's IndexedDB, written every few seconds so a
 // killed tab loses little, until they're sent: automatically to the server the
 // page came from when it takes them (app/server.py), or from the home screen.
+// That server also gets each piece as it's written, so a tab closed mid-recitation
+// still leaves the session there.
 //
 // Every event carries t, seconds into the session's audio (so t = 73.2 is 73.2 s
 // into the .wav), and ms, wall-clock milliseconds since the start.
@@ -65,12 +67,15 @@ function riffChunk(tag, part, size) {
   return size % 2 ? [ascii(tag), n, part, new Uint8Array(1)] : [ascii(tag), n, part];
 }
 
+const sessionHead = (rec) =>
+  ({ id: rec.id, started: new Date(rec.started).toISOString(), ...rec.meta, ended: rec.ended ?? "unknown" });
+
 export async function sessionFile(id) {
   const rec = await run("sessions", "readonly", (s) => s.get(id));
   const chunks = await run("chunks", "readonly", (s) => s.getAll(chunkRange(id)));
   chunks.sort((a, b) => a.seq - b.seq);
   const pcm = new Blob(chunks.map((c) => c.pcm));
-  const head = { id, started: new Date(rec.started).toISOString(), ...rec.meta, ended: rec.ended ?? "unknown" };
+  const head = sessionHead(rec);
   // One event per line: still JSON, and readable with grep.
   const events = chunks.flatMap((c) => c.events).map((e) => JSON.stringify(e)).join(",\n");
   const json = ascii(`${JSON.stringify(head).slice(0, -1)},"events":[\n${events}\n]}`);
@@ -90,7 +95,7 @@ export async function sessionFile(id) {
 // -- recording -----------------------------------------------------------------
 export class SessionLog {
   constructor({ enabled = true, upload = false } = {}) {
-    Object.assign(this, { enabled, upload, live: null, writes: Promise.resolve() });
+    Object.assign(this, { enabled, upload, live: null, writes: Promise.resolve(), sends: Promise.resolve() });
     if (!enabled) return;
     // A session's last few seconds are written when the page is hidden or closed.
     addEventListener("visibilitychange", () => {
@@ -118,7 +123,7 @@ export class SessionLog {
     const now = new Date();
     const stamp = now.toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
     const id = `${stamp}-${Math.random().toString(36).slice(2, 6)}`;
-    this.live = { t0: performance.now(), samples: 0, seq: 0, pcm: [], events: [],
+    this.live = { t0: performance.now(), samples: 0, seq: 0, pcm: [], events: [], stream: this.upload, queue: [],
       rec: { id, started: now.getTime(), meta, seconds: 0, bytes: 0, sent: false } };
     this.write(() => putSession(this.live.rec));
     this.battery?.();
@@ -161,10 +166,31 @@ export class SessionLog {
     s.rec.seconds = s.samples / SR;
     s.rec.bytes += pcm.byteLength;
     const rec = { ...s.rec };
+    if (s.stream) this.stream(s, { ...chunk, head: sessionHead(rec) });
     return this.write(async () => {
       await run("chunks", "readwrite", (st) => st.put(chunk));
       await putSession(rec);
     });
+  }
+
+  // Each piece to the server as it's written (app/server.py builds the .wav). A piece that fails
+  // waits for the next flush; if the server has missed one (409), the whole file goes at the end.
+  stream(s, piece) {
+    s.queue.push(piece);
+    this.sends = this.sends.then(async () => {
+      while (s.queue.length && !s.broken) {
+        const { seq, pcm, events, head } = s.queue[0];
+        const text = ascii([head, ...events].map((e) => JSON.stringify(e)).join("\n"));
+        const n = new DataView(new ArrayBuffer(4));
+        n.setUint32(0, text.byteLength, true);
+        const body = new Blob([n, text, pcm]);
+        // keepalive outlives a closing page, for bodies under 64 kB
+        const r = await fetch(`api/sessions/${s.rec.id}/${seq}`, { method: "POST", body, keepalive: body.size < 60000 });
+        if (r.status === 409) s.broken = true;
+        else if (!r.ok) throw new Error(`piece ${seq}: ${r.status}`);
+        else s.queue.shift();
+      }
+    }).catch((e) => console.warn("session log:", e));
   }
 
   async end(reason) {
@@ -176,6 +202,8 @@ export class SessionLog {
     clearInterval(this.timer);
     this.live = null;
     await this.writes;
+    await this.sends;
+    if (s.stream && !s.broken && !s.queue.length) await this.write(() => putSession({ ...s.rec, sent: true }));
     await this.prune();
     if (this.upload) await this.sendPending();
   }
