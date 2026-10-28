@@ -200,6 +200,54 @@ margin (+2.3 pts of room-tone hops), and latency is still unmeasured on desktop 
 Artefacts: `data/cache/reliability/rel-20260927/` (`manifest.json`, `gate/results.json`,
 `gate_score.txt`).
 
+## The field sessions (2026-10-27): `energy_assisted` becomes the default
+
+The two conditions above were a phone measurement and real rooms. By 2026-10-27 the page had
+uploaded 103 sessions of 10 s or more from phones and desktops (`data/sessions/`, Hasan's and,
+since 2026-10-23, people he gave the link to).
+
+**What the gate drops in real rooms.** Every session replayed through `web/gate.js`
+(`scripts/gate_replay.mjs`, hops every 1 s as the device engine sends them; work in
+`data/cache/n27/gate/`), split by the stop detector in the replay (`quiet` under 0.3 s = a voice
+in the window's tail):
+
+| hops | legacy runs Whisper | energy_assisted runs Whisper |
+|---|---:|---:|
+| with a voice (4,083) | 94.5% (224 dropped) | 99.1% (188 of the 224 kept) |
+| quiet (7,734) | 7.7% | 13.4% |
+
+The phones' own logs agree: 183 hops dropped as `vad_reject` while the page's live stop detector
+heard a voice, against 2,489 that ran. They bunch in the sessions that went wrong. In `ykz4`
+(2026-10-23, a phone, someone reading Dua Faraj slowly with each word drawn out, in a room at
+-17 to -26 dBFS) Silero never found 7 frames in a row: 14 of the 18 hops with a voice were
+dropped, and the page never found the du'a. The phone's own Whisper (`whisper-base-ph-kd2`,
+offline) reads those dropped windows as "وقائدا وناصرا ودليلا وعينا حتى تسكنه أرضك طوعا", the
+du'a word after word.
+
+**The real page.** `scripts/page_replay.mjs` (Whisper held to 1.5 s a step, the CTC model to
+0.1 s): `ykz4` with `?gate=legacy` shows no du'a, as on the phone; with `?gate=energy_assisted`
+it shows Dua Faraj at 12 s and follows lines 6-8. On Hasan's 35 session items (the session
+bench, 34 min, `data/cache/n27/page_sessions.py` = `bench_page.py` on those items; both
+variants of an item played at the same time):
+
+| real page, 35 session items | legacy | energy_assisted | paired 95% interval |
+|---|---:|---:|---:|
+| on line | 74.8% | 76.0% | -0.1, +2.7 |
+| right word | 51.0% | 51.8% | -0.1, +2.0 |
+| stays put (his pauses) | 91.5% | 92.3% | -0.4, +2.4 |
+| found within 10 s | 80% | 80% | |
+| jumps / early / lost (counts) | 4 / 15 / 10 | 5 / 16 / 12 | |
+
+The counts differ by an item or two each way, inside what two plays of the same item vary by.
+More Whisper runs in quiet (7.7% -> 13.4% of quiet hops) didn't move the display in his pauses.
+On the phone the extra runs fall where the gate had been idle, so each update takes as long as
+before; the cost is battery and heat, about 14% more Whisper runs over a session.
+
+**Decision: `energy_assisted` is the default** (`web/app.js`, `web/asr-worker.js`; `?gate=legacy`
+brings the old one back). The literal nonspeech margin above still fails; it was set on
+studio room tone, and the real sessions show what it costs (nothing measurable) and what
+`legacy` costs (a reader whose du'a is never found).
+
 ## Reproduce
 
 ```

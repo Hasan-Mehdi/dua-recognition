@@ -3,12 +3,13 @@
 // supplied by the caller (asr-worker.js in the page, scripts/gate_replay.mjs in Node),
 // so the replay harness exercises this exact code rather than a Python copy.
 //
-// Policies (?gate=... on the page; the default stays "legacy"):
+// Policies (?gate=... on the page; the default is "energy_assisted" since 2026-10-27, after the field
+// sessions: legacy dropped 5.5% of the hops with a voice, docs/results/browser_gate.md):
 //   legacy           Silero speech run in the last 1.5 s (asr.speech_in_tail), as before
 //   energy_assisted  legacy, OR a run of >= 7 frames (32 ms) at >= floor + 6 dB in the last
 //                    1.5 s, floor = max(-70 dBFS, 10th-percentile frame energy of the window):
 //                    quietAtEnd's energy evidence with the speech rule's run length. For
-//                    melodic, drawn-out recitation that Silero scores as non-speech.
+//                    drawn-out recitation that Silero scores as non-speech.
 //   ungated          no Silero gate; only the -45 dBFS floor
 // The -45 dBFS tail floor applies to all three (a level threshold, not digital silence).
 

@@ -165,8 +165,8 @@ class DeviceEngine {
     if (remote) this.kind = "server";
     this.window = 6 * SR;
     this.buf = new Float32Array(this.window);
-    // Speech gate policy (web/gate.js; docs/results/browser_gate.md): legacy unless ?gate=...
-    this.gate = params.get("gate") || "legacy";
+    // Speech gate policy (web/gate.js; docs/results/browser_gate.md): energy_assisted unless ?gate=...
+    this.gate = params.get("gate") || "energy_assisted";
     this.filter = params.get("filter") === "1"; // the hallucination filter, a separate ablation
     // The word follower (follower.js) on the phone CTC model (ctc-worker.js): timed letter evidence
     // several times a second places the word; Whisper and the tracker find the du'a and anchor it

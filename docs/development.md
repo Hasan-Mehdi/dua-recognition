@@ -52,7 +52,7 @@ URL options for the web app:
 | `?chunk=N` | audio reaches the engine in chunks of N samples (800, 50 ms) |
 | `?ctcthreads=N` | on-device: WASM threads for the follower's model (default: onnxruntime-web's choice) |
 | `?kids=1` | kids mode (`?kids=0` leaves it) |
-| `?gate=energy_assisted` | on-device speech gate policy (default `legacy`; see [browser_gate.md](results/browser_gate.md)) |
+| `?gate=legacy` | on-device speech gate policy (default `energy_assisted` since 2026-10-27; see [browser_gate.md](results/browser_gate.md)) |
 | `?log=0` | don't record a debug session |
 | `?debug` | show the live transcript and latency |
 | `?lead=0`, `?pauses=0`, `?glide=0` | turn off display lead, pause handling or the word glide (for comparisons) |

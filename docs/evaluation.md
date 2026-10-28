@@ -288,7 +288,8 @@ rules written down before its results ([plan](research/claude-execution-plan-202
 [review](research/current-state-review-2026-09-26.md)):
 
 - [browser_gate.md](results/browser_gate.md): how much speech the phone's speech gate
-  discards. `legacy` stays the default; `?gate=energy_assisted` is opt-in.
+  discards. `legacy` stayed the default until the field sessions of 2026-10-23; `energy_assisted`
+  is the default since 2026-10-27 (`?gate=legacy` for the old one).
 - [follower_reliability.md](results/follower_reliability.md): where the word follower's
   line lag comes from.
 - [small_ctc.md](results/small_ctc.md): Tilawa's FastConformer as the follower's front end.

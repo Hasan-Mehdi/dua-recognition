@@ -31,6 +31,8 @@ caches; 50 ms chunks); the stream decoder with the phone profile as `StreamConfi
 (copies, salawat lapse, frame push, shared-passage hold with edits, salawat-aware next-line gate;
 since 2026-10-09 the catch-up to a line's last word at a stop, docs/results/stop_catchup.md;
 since 2026-10-19 letters said alike, `accent_fold` 0.5 on ا ع ء / ت ط / ح ه, docs/results/ordinary_readers.md).
+The speech gate before Whisper is `energy_assisted` since 2026-10-27 (`web/gate.js`; `?gate=legacy` the old one;
+docs/results/browser_gate.md: Silero alone dropped a slow reader's whole du'a in a real room).
 Hasan's session bench (`scripts/bench_sessions.py`, 35 items) is where ordinary reading shows; the
 scenario bench has almost none of it.
 `?follower=rules` brings back `follower.js`, `?ctc=ctc-student-base-v6-w2` the window student,

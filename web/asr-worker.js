@@ -67,7 +67,7 @@ self.onmessage = async ({ data }) => {
     const clock = () => performance.timeOrigin + performance.now();
     const recv = clock();
     const t0 = performance.now();
-    const policy = data.gate || "legacy";
+    const policy = data.gate || "energy_assisted";
     let text = "";
     let quiet = 0;
     let stops = { paused: null, voiceDb: data.voiceDb ?? null };
